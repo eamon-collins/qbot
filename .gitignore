@@ -1,4 +1,5 @@
 
 
-
+*.o
 qbot
+gmon.out
