@@ -2,8 +2,25 @@
 #pragma once
 
 #include "Tree.h"
+#include "stlastar.h"
 #include <map>
 
+class SearchNode
+{
+public:
+    int row;
+    int col;
+
+    SearchNode();
+    SearchNode(int row, int col);
+
+    float GoalDistanceEstimate( SearchNode &nodeGoal );
+    bool IsGoal( SearchNode &nodeGoal );
+    bool GetSuccessors( AStarSearch<SearchNode> *astarsearch );
+    float GetCost( SearchNode *successor );
+    bool IsSameState( SearchNode &rhs );
+
+};
 
 struct Pos
 {

@@ -69,7 +69,71 @@ int pathfinding(StateNode* state, Move move){
 	return score;
 }
 
+int pathfinding2(StateNode* state, Move move){
+	
+	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
+	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
+	// if(fencesUsed < 3 || ((move.type == 'p') && fencesUsed < 4))
+	// 	return true;
 
+	AStarSearch<SearchNode> astarsearch;
+
+	SearchNode startNode1 = SearchNode(state->p1.row, state->p1.col);
+	SearchNode startNode2 = SearchNode(state->p2.row, state->p2.col);
+
+	//copy over the state in question's gamestate so we don't affect the state itself
+	memcpy(astarsearch.gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
+
+	//apply the proposed move
+	if(move.type == 'f'){
+		if (move.horizontal){
+			astarsearch.gamestate[move.row][move.col] = true;
+			astarsearch.gamestate[move.row][move.col+1] = true;
+		}else{
+			astarsearch.gamestate[move.row][move.col] = true;
+			//gamestate[move.row+1][move.col] = true;
+			astarsearch.gamestate[move.row+2][move.col] = true;
+		}
+	}
+	else{
+		if (state->turn){
+			startNode1.row = move.row;
+			startNode1.col = move.col;
+		}else{
+			startNode2.row = move.row;
+			startNode2.col = move.col;
+		}
+	}
+
+	SearchNode goalNode;
+	//search player1's path, can't exit early though
+	for(int i = 0; i < NUMCOLS; i++){
+	}
+}
+SearchNode::SearchNode(){}
+SearchNode::SearchNode(int row, int col){
+	this->row = row;
+	this->col = col;
+}
+
+float SearchNode::GoalDistanceEstimate( SearchNode &nodeGoal ){
+	return std::abs(nodeGoal.row - this->row) + std::abs(nodeGoal.col - this->col);
+}
+
+bool SearchNode::IsGoal( SearchNode &nodeGoal ){
+	return IsSameState( nodeGoal );
+}
+bool SearchNode::IsSameState(SearchNode &rhs){
+	if (rhs.row == this->row && rhs.col == this->col)
+		return true;
+	return false;
+}
+bool GetSuccessors( AStarSearch<SearchNode> *astarsearch ){
+
+}
+float GetCost( SearchNode *successor ){
+
+}
 
 const char FLOOR = '1' ;
 const char WALL  = '0' ;

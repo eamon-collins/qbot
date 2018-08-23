@@ -25,6 +25,7 @@ given where due.
 
 #ifndef STLASTAR_H
 #define STLASTAR_H
+#include "Global.h"
 // used for text debugging
 #include <iostream>
 #include <stdio.h>
@@ -113,6 +114,7 @@ public: // data
 			}
 	};
 
+	bool gamestate[2*NUMROWS - 1][NUMCOLS];
 
 public: // methods
 
