@@ -34,7 +34,9 @@ int main(int argc, char *argv[]){
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
 
+	//starts new game at gamestate specified by root
 	Game game = Game(root);
+	//uses generate_children and prune_children to generate state tree of moves from current root
 	game.run_game();
 
 	StateNode* arbitrary = &game.root->children[0];

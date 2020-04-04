@@ -93,6 +93,7 @@ int StateNode::generate_valid_children(){
 
 	
 	//FENCE MOVES
+	//need to check for intersecting fences, actually might already do that
 	if(currPlayer.numFences > 0){
 		for (int i = 0; i < 2*NUMROWS-2; i++){
 			for (int j=0; j < NUMCOLS-1; j++){
@@ -118,6 +119,23 @@ int StateNode::generate_valid_children(){
 	//pruning here?
 
 	return this->children.size();
+}
+
+
+//play the game out from the current state with random moves and backpropagate the result
+StateNode::play_out(){
+	int numChildren = this.generate_valid_children();
+	choice = rand() % numChildren;
+	currState = this->children[choice]
+
+	while (currState->p1.row != 8 && currState->p2.row != 0){
+		numChildren = currState.generate_valid_children();
+		choice = rand() % numChildren;
+		currState = currState->children[choice]
+	}
+
+	//now that we have an end state check who wins and backpropagate that info
+	
 }
 
 
@@ -193,6 +211,8 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->score = score;
 	this->ply = parent->ply + 1;
 } 
+
+
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
   return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
