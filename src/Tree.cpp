@@ -135,7 +135,11 @@ StateNode::play_out(){
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
-	
+	if (currState->p1.row == 8){
+		currState.score += 10;
+	}else{
+		currState.score -= 10;
+	}
 }
 
 
