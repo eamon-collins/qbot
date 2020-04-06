@@ -135,11 +135,18 @@ StateNode::play_out(){
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
+	int scoreModifier
 	if (currState->p1.row == 0){
-		currState.score += 10;
+		scoreModifier = 10;
 	}else{
-		currState.score -= 10;
+		scoreModifierc = -10;
 	}
+
+	while (currState->parent != nullptr){
+		currState.score += scoreModifier;
+		currState = currState->parent;
+	}
+	currState.score += scoreModifier; //propagate to root
 }
 
 
