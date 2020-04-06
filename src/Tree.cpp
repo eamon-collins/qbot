@@ -128,14 +128,14 @@ StateNode::play_out(){
 	choice = rand() % numChildren;
 	currState = this->children[choice]
 
-	while (currState->p1.row != 8 && currState->p2.row != 0){
+	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		numChildren = currState.generate_valid_children();
 		choice = rand() % numChildren;
 		currState = currState->children[choice]
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
-	if (currState->p1.row == 8){
+	if (currState->p1.row == 0){
 		currState.score += 10;
 	}else{
 		currState.score -= 10;
