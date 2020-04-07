@@ -135,11 +135,12 @@ StateNode::play_out(){
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
+	//value of terminal state is based on how far the opponent is from winning, so the further they are from the end the better the game
 	int scoreModifier
 	if (currState->p1.row == 0){
-		scoreModifier = 10;
+		scoreModifier = NUMROWS - currState->p2.row;
 	}else{
-		scoreModifierc = -10;
+		scoreModifier = -currState->p1.row - 1;
 	}
 
 	while (currState->parent != nullptr){
@@ -165,6 +166,7 @@ bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* sta
 StateNode::StateNode(bool turn){	
 	this->turn = turn;
 	this->ply = 0;
+	this->visits = 0;
 
 	this->p1.row = NUMROWS - 1;
 	this->p1.col = NUMCOLS/2;
@@ -220,6 +222,7 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->move = move;
 	this->parent = parent;
 	this->score = score;
+	this->visits = 0;
 	this->ply = parent->ply + 1;
 } 
 
