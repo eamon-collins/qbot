@@ -56,6 +56,8 @@ public:
 	bool is_valid_move(Move move); //checks whether the resulting gamestate from a certain move is legal or not
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
+	void play_out(); //simulates by random choice to determine a winner from this state
+	
 };
 
 

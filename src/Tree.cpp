@@ -123,7 +123,7 @@ int StateNode::generate_valid_children(){
 
 
 //play the game out from the current state with random moves and backpropagate the result
-StateNode::play_out(){
+void StateNode::play_out(){
 	int numChildren = this.generate_valid_children();
 	choice = rand() % numChildren;
 	currState = this->children[choice]
@@ -145,9 +145,15 @@ StateNode::play_out(){
 
 	while (currState->parent != nullptr){
 		currState.score += scoreModifier;
+		currState.visits += 1;
 		currState = currState->parent;
 	}
-	currState.score += scoreModifier; //propagate to root
+	currState.score += scoreModifier;
+	currState.visits += 1; //propagate to root
+}
+
+StateNode::calc_UCB(){
+
 }
 
 
