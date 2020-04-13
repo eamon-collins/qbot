@@ -42,6 +42,7 @@ public:
 	bool turn; //true for it is currently player 1's turn, false for p2
 	bool gamestate[2*NUMROWS - 1][NUMCOLS]; //stores every space in between squares where half a wall could be placed, even numbered rows have 8 0s with a -1 at the end
 	double score;
+	double vi; //average score of every node below this one
 	int visits; //number of times we've visited this node
 	int ply; //the total number of moves made up until this point.
 
@@ -57,7 +58,9 @@ public:
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	void play_out(); //simulates by random choice to determine a winner from this state
-	
+	double UCB(); //simple 
+	void update_vi(); //calculates average score for every node under this one.
+
 };
 
 

@@ -124,36 +124,40 @@ int StateNode::generate_valid_children(){
 
 //play the game out from the current state with random moves and backpropagate the result
 void StateNode::play_out(){
-	int numChildren = this.generate_valid_children();
-	choice = rand() % numChildren;
-	currState = this->children[choice]
+	int numChildren = this->generate_valid_children();
+	int choice = rand() % numChildren;
+	StateNode currState = this->children[choice];
 
-	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
+	while (currState.p1.row != 0 && currState.p2.row != NUMROWS-1){
 		numChildren = currState.generate_valid_children();
 		choice = rand() % numChildren;
-		currState = currState->children[choice]
+		currState = currState.children[choice];
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, so the further they are from the end the better the game
-	int scoreModifier
-	if (currState->p1.row == 0){
-		scoreModifier = NUMROWS - currState->p2.row;
+	int scoreModifier;
+	if (currState.p1.row == 0){
+		scoreModifier = NUMROWS - currState.p2.row;
 	}else{
-		scoreModifier = -currState->p1.row - 1;
+		scoreModifier = -currState.p1.row - 1;
 	}
 
-	while (currState->parent != nullptr){
+	while (currState.parent != nullptr){
 		currState.score += scoreModifier;
 		currState.visits += 1;
-		currState = currState->parent;
+		currState = currState.parent;
 	}
 	currState.score += scoreModifier;
 	currState.visits += 1; //propagate to root
 }
 
-StateNode::calc_UCB(){
+double StateNode::UCB(){
+	return this->vi + 2* sqrt(math.ln(this->visits) / this->parent->visits)
+}
 
+void StateNode::update_vi(){
+	
 }
 
 
