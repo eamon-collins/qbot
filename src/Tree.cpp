@@ -7,6 +7,7 @@ Functions for building/managing the state-tree
 #include <cstring>
 #include <cstdlib>
 #include <tuple>
+#include <stack>
 
 int fenceRows = 2*NUMROWS - 1;
 
@@ -157,7 +158,20 @@ double StateNode::UCB(){
 }
 
 void StateNode::update_vi(){
-	
+	std::stack<StateNode*> s;
+	root = *this;
+
+	while(root != nullptr || s.size() > 0){
+		if (root != nullptr){
+			s.push(root);
+
+			if (root->children.size() >= 1)
+				root = root->children[0];
+			else
+				root = nullptr;
+			
+		}
+	}
 }
 
 
