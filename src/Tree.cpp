@@ -160,7 +160,7 @@ double StateNode::UCB(){
 void StateNode::update_vi(){
 	std::stack<StateNode*> s;
 	root = *this;
-
+	int count=0;
 	while(root != nullptr || s.size() > 0){
 		if (root != nullptr){
 			s.push(root);
@@ -169,8 +169,22 @@ void StateNode::update_vi(){
 				root = root->children[0];
 			else
 				root = nullptr;
-			
+
 		}
+
+		StateNode* curr = s.top();
+		s.pop();
+		//traverse 
+		count += curr->vists;
+
+		while (s.size() > 0 && curr->childrenIndex ==  
+                st.top()->children.size() - 1) 
+        { 
+            curr = s.top(); 
+            s.pop(); 
+              
+            //traverse
+        } 
 	}
 }
 
