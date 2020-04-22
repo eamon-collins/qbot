@@ -50,7 +50,7 @@ struct SearchMapItem
 bool valid(Pos p);
 
 
-
+int save_tree(StateNode* root);
 
 int l1_norm(int i0, int j0, int i1, int j1);
 int l1_f_p(Move move1,  Player p1);

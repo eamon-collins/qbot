@@ -8,6 +8,26 @@
 #include <string>
 #include <cstring>
 
+//saves the tree to disk
+int save_tree(StateNode* root){
+
+}
+
+namespace boost {
+namespace serialization {
+
+template<class Archive>
+void serialize(Archive & ar, StateNode & s, const unsigned int version)
+{
+    ar & s.children;
+    ar & s.parent;
+    ar & s.move;
+    ar & s.p1;
+    ar & s.p2;
+}
+
+} // namespace serialization
+} // namespace boost
 
 // L_1 norm (manhattan distance)
 int l1_norm(int i0, int j0, int i1, int j1) {

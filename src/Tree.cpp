@@ -157,6 +157,7 @@ double StateNode::UCB(){
 	return this->vi + 2* sqrt(math.ln(this->visits) / this->parent->visits)
 }
 
+//deeply problematic
 void StateNode::update_vi(){
 	std::stack<StateNode*> s;
 	root = *this;
