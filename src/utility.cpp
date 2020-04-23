@@ -10,7 +10,9 @@
 
 //saves the tree to disk
 int save_tree(StateNode* root){
-
+	Archive<StateNode> ar = new Archive;
+	serialize(ar, *root, 1);
+	
 }
 
 namespace boost {

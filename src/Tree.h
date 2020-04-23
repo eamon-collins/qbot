@@ -61,7 +61,7 @@ public:
 	double UCB(); //simple 
 	void update_vi(); //calculates average score for every node under this one.
 
-};
+} StateNode;
 
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode
