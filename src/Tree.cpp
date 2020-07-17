@@ -4,10 +4,12 @@ Functions for building/managing the state-tree
 
 #include "Tree.h"
 #include "utility.h"
+#include "storage.h"
 #include <cstring>
 #include <cstdlib>
 #include <tuple>
 #include <stack>
+//#include <cmath>
 
 int fenceRows = 2*NUMROWS - 1;
 
@@ -154,20 +156,22 @@ void StateNode::play_out(){
 }
 
 double StateNode::UCB(){
-	return this->vi + 2* sqrt(math.ln(this->visits) / this->parent->visits)
+	return this->vi + 2* sqrt(log(this->visits) / this->parent->visits);
 }
 
 //deeply problematic
+//passes around references to objects in vector, but we are guaranteed that the vector is not resizing 
+//during an update_vi pass
 void StateNode::update_vi(){
 	std::stack<StateNode*> s;
-	root = *this;
+	StateNode* root = this;
 	int count=0;
 	while(root != nullptr || s.size() > 0){
 		if (root != nullptr){
 			s.push(root);
 
 			if (root->children.size() >= 1)
-				root = root->children[0];
+				root = &(root->children[0]);
 			else
 				root = nullptr;
 
@@ -176,16 +180,16 @@ void StateNode::update_vi(){
 		StateNode* curr = s.top();
 		s.pop();
 		//traverse 
-		count += curr->vists;
+		count += curr->visits;
 
-		while (s.size() > 0 && curr->childrenIndex ==  
-                st.top()->children.size() - 1) 
-        { 
-            curr = s.top(); 
-            s.pop(); 
+		// while (s.size() > 0 && curr->childrenIndex ==  
+  //               s.top()->children.size() - 1) 
+  //       { 
+  //           curr = s.top(); 
+  //           s.pop(); 
               
-            //traverse
-        } 
+  //           //traverse
+  //       } 
 	}
 }
 
