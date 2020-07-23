@@ -9,7 +9,7 @@
 
 
 #define MAXTIME 10000 //milliseconds it will take maximum building the state tree
-#define MAXDEPTH 4
+#define MAXDEPTH 3
 /* ex: if MAXDEPTH = 3 you have:
 	1		r
 			/\

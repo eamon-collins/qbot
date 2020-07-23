@@ -3,6 +3,7 @@
 #include "Global.h"
 #include "Tree.h"
 #include "Game.h"
+#include "storage.h"
 #include <unistd.h>
 #include <cstdlib>
 #include <cstddef>
@@ -10,8 +11,8 @@
 
 int main(int argc, char *argv[]){
 	int threadCount, player;
-
-
+	std::string save_file = "database.txt";
+	//
 	int c;
 	while ((c = getopt(argc, argv, "t:p:")) != -1) {
 		switch (c) {
@@ -21,6 +22,8 @@ int main(int argc, char *argv[]){
 			case 'p':
 				player = atoi(optarg);
 				break;
+			case 's':
+				save_file = optarg;
 			}	
 		break;
 	}
@@ -54,6 +57,10 @@ int main(int argc, char *argv[]){
 		// 	std::cout << arbitrary->children[i];
 	}
 	std::cout << arbitrary->children[0].children.size() << "\n";
+
+	int num_nodes = save_tree(root, save_file);
+
+	std::cout << "number of nodes saved: " << num_nodes << "\n";
 
 	//std::cout << root->children[5].children.size() << "\n";
 	
