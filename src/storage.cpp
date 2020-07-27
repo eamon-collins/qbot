@@ -10,19 +10,16 @@
 
 //DONT MODIFY UNLESS YOU CHANGE write_node
 int bytes_per_node = 56;
-
+int nodes_per_write = int(4096/bytes_per_node);
 
 //saves the tree to disk
 //~177 characters estimated for each statenode
 int save_tree(StateNode* root, std::string database_name){
-	//simple depth first iteration
-	int nodes_per_write = int(4096/bytes_per_node);
 	char file_buffer[nodes_per_write * bytes_per_node];
 
-	FILE* save_file;
-	save_file = fopen(database_name.c_str(), "w");
+	FILE* save_file = fopen(database_name.c_str(), "w");
 
-
+	//simple, iterative, preorder depth first iteration
 	std::stack<StateNode*> tree_stack;
 	tree_stack.push(root);
 	StateNode* curr;
@@ -47,8 +44,37 @@ int save_tree(StateNode* root, std::string database_name){
 	return nodes_written;
 }
 
+//loads tree from save file and returns pointer to root
+StateNode* load_tree(std::string database_name){
+	char file_buffer[nodes_per_write * bytes_per_node];
+	FILE* load_file = fopen(database_name.c_str(), "r");
+
+	char node_buffer[bytes_per_node];
+	fscanf(load_file, "%c", node_buffer);
+	StateNode* root = new StateNode(node_buffer);
+
+	recursive_read(root, load_file);
+}
+
+int recursive_read(StateNode* node, FILE* load_file){
+	char node_buffer[bytes_per_node];
+	fscanf(load_file, "%c", node_buffer);
+
+	StateNode newNode = StateNode(node_buffer);
+	node->children.push_back(newNode);
+
+	//if this node is marked as leaf or end of parent's children
+	if (node_buffer[55] == '1'){
+		return 1;
+	}
+	for(int i = 0; i < node->children.size(); i++){
+
+	}
+}
+
+
 bool write_node(StateNode* node, char file_buffer[], int buffer_index){
-	char ch[178];
+	char ch[bytes_per_node];
 
 	int offset = 0; 
 	offset = fill_move(ch, offset, node->move);
@@ -61,10 +87,10 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	//Also potentially stream.str.cstr is area for performance improvement
 	std::stringstream stream, stream2;
 	stream << std::fixed << std::setprecision(7) << node->score;
-	stream2 << std::fixed << std::setprecision(6) << node->vi;
+	stream2 << std::fixed << std::setprecision(7) << node->vi;
 	memcpy(&ch[offset], &stream.str().c_str()[2], 7);
-	memcpy(&ch[offset + 6], &stream2.str().c_str()[2], 6);
-	offset += 13;
+	memcpy(&ch[offset + 6], &stream2.str().c_str()[2], 7);
+	offset += 14;
 
 	int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
 	for(int i = 0; i < visitsMagnitude; i++){
@@ -77,17 +103,33 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	}
 	offset += 3;
 
-	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
-}
+	//space left for one character denoting an end
+	//of children marker, to help reconstruct tree
+	if (node->parent == nullptr){
+		//this is root node
+		ch[offset] = '0';
+	}
+	else if (*(node->parent->children.end()) == *node ||
+			node->children.empty())
+	{
+		ch[offset] = '1';
+	}else {
+		ch[offset] = '0';
+	}
 
+	offset++;
+
+	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
+
+	return true;
+}
 
 int fill_player(char ch[], int offset, Player p){
 	ch[offset] = char(p.row);
 	ch[offset+1] = char(p.col);
-	ch[offset+2] = char(p.row);
-	ch[offset+3] = char(p.numFences);
+	ch[offset+2] = char(p.numFences);
 
-	return offset+4;
+	return offset+3;
 }
 
 int fill_move(char ch[], int offset, Move m){
@@ -124,7 +166,6 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 		bitstring[index+1+i] = '0';
 	}
 
-	index = 0;
 	char temp[8];
 	for (int i = 0; i < 20; i++){
 		std::memcpy(temp, &bitstring[i*8], 8);

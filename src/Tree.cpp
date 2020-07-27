@@ -9,6 +9,8 @@ Functions for building/managing the state-tree
 #include <cstdlib>
 #include <tuple>
 #include <stack>
+#include <bitset>
+
 //#include <cmath>
 
 int fenceRows = 2*NUMROWS - 1;
@@ -269,9 +271,85 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->ply = parent->ply + 1;
 } 
 
+//used to create new nodes directly from the database character string representation
+StateNode::StateNode(char node_buffer[]){
+	//read move
+	Move move;
+	move.type = node_buffer[0];
+	char* row = &node_buffer[1];
+	sscanf(row, "%1d", &move.row);
+	char* col = &node_buffer[3];
+	sscanf(col, "%2d", &move.col);
+	move.horizontal = (node_buffer[4] == '1');
+	this->move = move;
+
+
+	//read players
+	Player p1, p2;
+	char* c = &node_buffer[5];
+	sscanf(c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
+	c += 0x003; //moves array pointer up 3 bytes
+	sscanf(c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
+	this->p1 = p1;
+	this->p2 = p2;
+
+	//read gamestate and turn
+	bool gamestate[2 * NUMROWS - 1][NUMCOLS];
+	char* game_chars = &node_buffer[11];
+	std::string gamestring = bitset<160>(game_chars).to_string();
+	int index = 0;	
+	for(int i = 0; i < (2*NUMROWS-1); i++){
+		for(int j = 0; j < NUMCOLS; j++){
+			gamestate[i][j] = gamestring[index] == '1';
+			index++;
+		}
+	}
+	memcpy(this->gamestate, gamestate, (2*NUMROWS-1) * NUMCOLS);
+	this->turn = (gamestring[index] == '1');
+
+	//score and vi normalized to 0-1, with 7 digits after the decimal stored
+	//add the 0. and null terminator and atof()
+	char score[10] = {'0','.','0','0','0','0','0','0','0','\0'};
+	char vi[10] = {'0','.','0','0','0','0','0','0','0','\0'};
+	memcpy(&score[2], &node_buffer[31], 7);
+	memcpy(&vi[2], &node_buffer[38], 7);
+
+	this->score = atof(score);
+	this->vi = atof(vi);
+
+	char visits[7], ply[3];
+	memcpy(visits, &node_buffer[45], 7);
+	memcpy(ply, &node_buffer[52], 3);
+	this->visits = atoi(visits);
+	this->ply = atoi(ply);
+
+
+
+
+}
+
 
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
   return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
   //print out opposite of what turn says, because we want the player who made the move resulting in this gamestate
+}
+
+bool StateNode::operator==(const StateNode& node) {
+	bool isEqual = false;
+	if (node.move.row == this->move.row &&
+		node.move.col == this->move.col &&
+		node.p1.col == this->p1.col &&
+		node.p1.row == this->p1.row &&
+		node.p1.numFences == this->p1.numFences &&
+		node.p2.row == this->p2.row &&
+		node.p2.col == this->p2.col &&
+		node.p2.numFences == this->p2.numFences &&
+		node.visits == this->visits &&
+		node.ply == this->ply)
+	{
+		isEqual = true;
+	}
+
+	return isEqual;
 }
