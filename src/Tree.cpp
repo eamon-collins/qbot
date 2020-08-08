@@ -322,10 +322,6 @@ StateNode::StateNode(char node_buffer[]){
 	memcpy(ply, &node_buffer[52], 3);
 	this->visits = atoi(visits);
 	this->ply = atoi(ply);
-
-
-
-
 }
 
 
