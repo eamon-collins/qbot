@@ -45,6 +45,7 @@ public:
 	double vi; //average score of every node below this one
 	int visits; //number of times we've visited this node
 	int ply; //the total number of moves made up until this point.
+	char serial_type; //bookkeeping for serialization/deserialization
 
 
 	StateNode(bool turn); //should only be used to start a new game, all positions will be starting positions, p1 starts turn=true p2 starts turn=false
