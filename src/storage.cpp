@@ -44,23 +44,6 @@ int save_tree(StateNode* root, std::string database_name){
 	return nodes_written;
 }
 
-StateNode* iterative_read(std::string database_name){
-	char file_buffer[nodes_per_write * bytes_per_node];
-	FILE* load_file = fopen(database_name.c_str(), "r");
-
-	char node_buffer[bytes_per_node];
-	fscanf(load_file, "%c", node_buffer);
-	StateNode* root = new StateNode(node_buffer);
-
-	std::stack<StateNode*> tree_stack;
-	tree_stack.push(root);
-	StateNode* curr;
-	int nodes_written = 0;
-	while (!tree_stack.empty()){
-		
-	}
-}
-
 //loads tree from save file and returns pointer to root
 StateNode* load_tree(std::string database_name){
 	char file_buffer[nodes_per_write * bytes_per_node];
@@ -85,7 +68,7 @@ int recursive_read(StateNode* node, FILE* load_file){
 		return 1;
 	}
 	for(int i = 0; i < node->children.size(); i++){
-		recursive_read(&(node->children[i]), load_file);
+
 	}
 }
 
@@ -126,24 +109,14 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 		//this is root node
 		ch[offset] = '0';
 	}
-	//leaf AND last child in parent's vector
-	else if (*(node->parent->children.end()) == *node &&
+	else if (*(node->parent->children.end()) == *node ||
 			node->children.empty())
 	{
-		ch[offset] = '3';
-	}
-	//last child in parent's vector but not leaf
-	else if (*(node->parent->children.end()) == *node){
 		ch[offset] = '1';
-	}
-	//leaf node but not last in parent's vector
-	else if(node->children.empty()){
-		ch[offset] = '2';
-	}
-	//neither leaf nor last in parent's vector
-	else{
+	}else {
 		ch[offset] = '0';
 	}
+
 	offset++;
 
 	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
