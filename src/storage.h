@@ -3,6 +3,7 @@
 
 int save_tree(StateNode* root, std::string database_name);
 int recursive_read(StateNode* node, FILE* load_file);
+StateNode* iterative_read(std::string database_name);
 
 bool write_node(StateNode* node, char file_buffer[], int buffer_index);
 int fill_player(char ch[], int offset, Player p);

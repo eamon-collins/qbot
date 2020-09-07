@@ -50,7 +50,7 @@ int main(int argc, char *argv[]){
 
 	int seclevel;
 	for(int i = 0; i < numChildren; i++){
-		seclevel = root->children[i].generate_valid_children();
+		//seclevel = root->children[i].generate_valid_children();
 		seclevel = arbitrary->children[i].score;
 		// std::cout << seclevel << "\t";
 		// if (seclevel >4)
@@ -59,6 +59,8 @@ int main(int argc, char *argv[]){
 	std::cout << arbitrary->children[0].children.size() << "\n";
 
 	int num_nodes = save_tree(root, save_file);
+
+	StateNode* root2 = iterative_read(save_file);
 
 	std::cout << "number of nodes saved: " << num_nodes << "\n";
 

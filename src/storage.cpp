@@ -9,7 +9,9 @@
 #include <stack>
 
 //DONT MODIFY UNLESS YOU CHANGE write_node
-#define BYTES_PER_NODE "56"
+#define BYTES_PER_READ "4088"  //56*73
+#define S_(x)
+#define S(x) S_(x) 
 int bytes_per_node = 56;
 int nodes_per_write = int(4096/bytes_per_node);
 
@@ -53,7 +55,7 @@ StateNode* iterative_read(std::string database_name){
 	//this is to try to get as close to a page as possible each file read
 	char node_buffer[bytes_per_node*73];
 	char curr_node_buffer[bytes_per_node];
-	fscanf(load_file, "%" BYTES_PER_NODE*73 "c", node_buffer);
+	fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 	memcpy (curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
 
@@ -75,7 +77,7 @@ StateNode* iterative_read(std::string database_name){
 			curr->parent->children.push_back(newNode);
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
-			while(curr->serial != '0'){
+			while(curr->serial_type != '0'){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
@@ -87,7 +89,7 @@ StateNode* iterative_read(std::string database_name){
 
 		//if we need to read more 
 		if(buffer_offset >= bytes_per_node*73){
-			int eof = fscanf(load_file, "%" BYTES_PER_NODE*73 "c", node_buffer);
+			int eof = fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 			buffer_offset = 0;
 			if (eof != bytes_per_node*73){
 				if (eof == EOF){
@@ -113,7 +115,7 @@ StateNode* iterative_read(std::string database_name){
 			curr->parent->children.push_back(newNode);
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
-			while(curr->serial != '0'){
+			while(curr->serial_type != '0'){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
@@ -123,6 +125,8 @@ StateNode* iterative_read(std::string database_name){
 		//the student becomes the master
 		curr = newNode;
 	}
+
+	return root;
 }
 
 //loads tree from save file and returns pointer to root
