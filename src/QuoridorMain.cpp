@@ -50,7 +50,7 @@ int main(int argc, char *argv[]){
 
 	int seclevel;
 	for(int i = 0; i < numChildren; i++){
-		//seclevel = root->children[i].generate_valid_children();
+		seclevel = root->children[i].generate_valid_children();
 		seclevel = arbitrary->children[i].score;
 		// std::cout << seclevel << "\t";
 		// if (seclevel >4)

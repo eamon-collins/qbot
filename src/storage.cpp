@@ -1,4 +1,4 @@
-
+	
 
 #include "storage.h"
 #include <bitset>
@@ -9,6 +9,7 @@
 #include <stack>
 
 //DONT MODIFY UNLESS YOU CHANGE write_node
+#define BYTES_PER_NODE "56"
 int bytes_per_node = 56;
 int nodes_per_write = int(4096/bytes_per_node);
 
@@ -42,6 +43,86 @@ int save_tree(StateNode* root, std::string database_name){
 	fclose(save_file);
 
 	return nodes_written;
+}
+
+StateNode* iterative_read(std::string database_name){
+	char file_buffer[nodes_per_write * bytes_per_node];
+	FILE* load_file = fopen(database_name.c_str(), "r");
+
+	//4096 / 56 = 73.1
+	//this is to try to get as close to a page as possible each file read
+	char node_buffer[bytes_per_node*73];
+	char curr_node_buffer[bytes_per_node];
+	fscanf(load_file, "%" BYTES_PER_NODE*73 "c", node_buffer);
+	memcpy (curr_node_buffer, node_buffer, bytes_per_node);
+	StateNode* root = new StateNode(curr_node_buffer);
+
+	StateNode* curr = root;
+	int nodes_read = 0;
+	int buffer_offset = bytes_per_node; //because we just read root
+	int nodes_left = 999; //placeholder, idk if we need tihs but if so this is arbitrarily high
+	bool done = false;
+	while (!done){
+
+		//read the next node in the buffer
+		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
+		StateNode* newNode = new StateNode(curr_node_buffer);
+		buffer_offset += bytes_per_node;
+
+		if(curr->serial_type == '0' || curr->serial_type == '1'){
+			curr->children.push_back(newNode);
+		} else if (curr->serial_type == '2') {
+			curr->parent->children.push_back(newNode);
+		} else if (curr->serial_type == '3'){
+			//start upward iteration til find a 0
+			while(curr->serial != '0'){
+				curr = curr->parent;
+			}
+			//once more to get sibling of 0
+			curr = curr->parent;
+			curr->children.push_back(newNode);
+		}
+		//the student becomes the master
+		curr = newNode;
+
+		//if we need to read more 
+		if(buffer_offset >= bytes_per_node*73){
+			int eof = fscanf(load_file, "%" BYTES_PER_NODE*73 "c", node_buffer);
+			buffer_offset = 0;
+			if (eof != bytes_per_node*73){
+				if (eof == EOF){
+					nodes_left = 0;
+					done = true;
+				}
+				else{
+					nodes_left = eof / bytes_per_node;
+					done = true;
+				}
+			}
+		}
+	}
+	//then with the nodes left, duplicate of above code
+	for (int i = 0; i < nodes_left; i++){
+		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
+		StateNode* newNode = new StateNode(curr_node_buffer);
+		buffer_offset += bytes_per_node;
+
+		if(curr->serial_type == '0' || curr->serial_type == '1'){
+			curr->children.push_back(newNode);
+		} else if (curr->serial_type == '2') {
+			curr->parent->children.push_back(newNode);
+		} else if (curr->serial_type == '3'){
+			//start upward iteration til find a 0
+			while(curr->serial != '0'){
+				curr = curr->parent;
+			}
+			//once more to get sibling of 0
+			curr = curr->parent;
+			curr->children.push_back(newNode);
+		}
+		//the student becomes the master
+		curr = newNode;
+	}
 }
 
 //loads tree from save file and returns pointer to root
@@ -109,9 +190,14 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 		//this is root node
 		ch[offset] = '0';
 	}
-	else if (*(node->parent->children.end()) == *node ||
+	//leaf AND last child in parent's vector
+	else if (*(node->parent->children.begin()) == *node &&
 			node->children.empty())
 	{
+		ch[offset] = '3';
+	}
+	//last child in parent's vector but not leaf
+	else if (*(node->parent->children.begin()) == *node){
 		ch[offset] = '1';
 	}else {
 		ch[offset] = '0';
