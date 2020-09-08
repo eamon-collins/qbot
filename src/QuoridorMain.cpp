@@ -34,11 +34,17 @@ int main(int argc, char *argv[]){
 	else
 		root = new StateNode(true);
 
+
+	int num_no = save_tree(root, save_file);
+	//StateNode root3 = iterative_read(save_file);
+	return 0;
+
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
 
 	//starts new game at gamestate specified by root
 	Game game = Game(root);
+
 	//uses generate_children and prune_children to generate state tree of moves from current root
 	game.run_game();
 
@@ -47,6 +53,7 @@ int main(int argc, char *argv[]){
 
 
 	std::cout << numChildren <<"\n";
+
 
 	int seclevel;
 	for(int i = 0; i < numChildren; i++){
@@ -60,9 +67,11 @@ int main(int argc, char *argv[]){
 
 	int num_nodes = save_tree(root, save_file);
 
+	std::cout << "number of nodes saved: " << num_nodes << "\n";
+
 	StateNode* root2 = iterative_read(save_file);
 
-	std::cout << "number of nodes saved: " << num_nodes << "\n";
+	
 
 	//std::cout << root->children[5].children.size() << "\n";
 	

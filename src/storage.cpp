@@ -129,33 +129,6 @@ StateNode* iterative_read(std::string database_name){
 	return root;
 }
 
-//loads tree from save file and returns pointer to root
-StateNode* load_tree(std::string database_name){
-	char file_buffer[nodes_per_write * bytes_per_node];
-	FILE* load_file = fopen(database_name.c_str(), "r");
-
-	char node_buffer[bytes_per_node];
-	fscanf(load_file, "%c", node_buffer);
-	StateNode* root = new StateNode(node_buffer);
-
-	recursive_read(root, load_file);
-}
-
-int recursive_read(StateNode* node, FILE* load_file){
-	char node_buffer[bytes_per_node];
-	fscanf(load_file, "%c", node_buffer);
-
-	StateNode newNode = StateNode(node_buffer);
-	node->children.push_back(newNode);
-
-	//if this node is marked as leaf or end of parent's children
-	if (node_buffer[55] == '1'){
-		return 1;
-	}
-	for(int i = 0; i < node->children.size(); i++){
-
-	}
-}
 
 
 bool write_node(StateNode* node, char file_buffer[], int buffer_index){
@@ -188,6 +161,9 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	}
 	offset += 3;
 
+	ch[offset] = '\0';
+	std::cout << ch << '\n';
+
 	//space left for one character denoting an end
 	//of children marker, to help reconstruct tree
 	if (node->parent == nullptr){
@@ -215,25 +191,35 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 }
 
 int fill_player(char ch[], int offset, Player p){
-	ch[offset] = char(p.row);
+	/*ch[offset] = char(p.row);
 	ch[offset+1] = char(p.col);
-	ch[offset+2] = char(p.numFences);
+	ch[offset+2] = char(p.numFences);*/
 
+	//TODO maybe try std::to_string(p.row).c_str() if speed is a problem
+	snprintf(&ch[offset], 2, "%d", p.row);
+	snprintf(&ch[offset+1], 2, "%d", p.col);
+	//forgot each player started with 10 fences, need to allocate another byte perhaps? if speeds are slow
+	if(p.numFences == 10){
+		ch[offset+2] = 't';
+	}else{
+		snprintf(&ch[offset+2], 2, "%d", p.numFences);
+	}
 	return offset+3;
 }
 
 int fill_move(char ch[], int offset, Move m){
 	ch[offset] = m.type;
 	if (m.row >= 10){
-		ch[offset+1] = char(1);
-		ch[offset+2] = char(m.row % 10);
+		ch[offset+1] = '1';
+		//ch[offset+2] = char(m.row % 10);
+		snprintf(&ch[offset+2], 2, "%d", m.row % 10);
 	}else{
-		ch[offset+1] = char(0);
-		ch[offset+2] = char(m.row);
+		ch[offset+1] = '0';
+		snprintf(&ch[offset+2], 2, "%d", m.row);
 	}
 
-	ch[offset+3] = char(m.col);
-	ch[offset+4] = char(m.horizontal ? '1' : '0');
+	snprintf(&ch[offset+3], 2, "%d", m.col);
+	ch[offset+4] = (m.horizontal ? '1' : '0');
 
 	return offset+5;
 
@@ -246,7 +232,7 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 	int index = 0;
 	for (int i = 0; i < 2*NUMROWS-1; i++){
 		for(int j = 0; j < NUMCOLS; j++){
-			bitstring[index] = gamestate[i][j] ? '1' : '0';
+			bitstring[index] = (gamestate[i][j] ? '1' : '0');
 			index++;
 		}
 	}
@@ -261,6 +247,8 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 		std::memcpy(temp, &bitstring[i*8], 8);
 		std::bitset<8> bin(temp);
 		ch[offset+i] = char(bin.to_ulong());
+		std::cout << temp << "\n";
+		std::cout << ch[offset+i];
 	}
 
 	return offset+20;

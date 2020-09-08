@@ -207,7 +207,7 @@ bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* sta
 	else return false;
 }
 
-
+//used to create the root node, starting gamestate.
 StateNode::StateNode(bool turn){	
 	this->turn = turn;
 	this->ply = 0;
@@ -227,6 +227,9 @@ StateNode::StateNode(bool turn){
 			this->gamestate[i][j] = false;
 		}
 	}
+	//starting pawn locations not notated, just fences
+	// gamestate[0][4] = true;
+	// gamestate[17][4] = true;
 }
 
 //do not use this method directly, use as part of generate_valid_children after the move has been verified as valid
@@ -296,7 +299,11 @@ StateNode::StateNode(char node_buffer[]){
 	//read gamestate and turn
 	bool gamestate[2 * NUMROWS - 1][NUMCOLS];
 	char* game_chars = &node_buffer[11];
-	std::string gamestring = bitset<160>(game_chars).to_string();
+	for (int i = 0; i < 20; i++){
+		std::cout << node_buffer[i+11];
+	}
+
+	std::string gamestring = bitset<20>(game_chars).to_string();
 	int index = 0;	
 	for(int i = 0; i < (2*NUMROWS-1); i++){
 		for(int j = 0; j < NUMCOLS; j++){
