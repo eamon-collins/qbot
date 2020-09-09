@@ -47,7 +47,7 @@ int save_tree(StateNode* root, std::string database_name){
 	return nodes_written;
 }
 
-StateNode* iterative_read(std::string database_name){
+StateNode* load_tree(std::string database_name){
 	char file_buffer[nodes_per_write * bytes_per_node];
 	FILE* load_file = fopen(database_name.c_str(), "r");
 
@@ -87,7 +87,10 @@ StateNode* iterative_read(std::string database_name){
 		//the student becomes the master
 		curr = newNode;
 
-		//if we need to read more 
+		//if we need to read more nodes
+		//this is currently optimized to read 4096/56=73.1 -> 73 nodes at a time to get pages of 4096.
+		//however, it may be best to align memory on each page, because after first it will be 2 pages per fscanf
+		//unless it is cleanly on memory barrier
 		if(buffer_offset >= bytes_per_node*73){
 			int eof = fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 			buffer_offset = 0;
@@ -146,23 +149,29 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	std::stringstream stream, stream2;
 	stream << std::fixed << std::setprecision(7) << node->score;
 	stream2 << std::fixed << std::setprecision(7) << node->vi;
-	memcpy(&ch[offset], &stream.str().c_str()[2], 7);
-	memcpy(&ch[offset + 6], &stream2.str().c_str()[2], 7);
+	memcpy(&ch[offset], &stream.str().c_str()[2], 8);
+	memcpy(&ch[offset + 7], &stream2.str().c_str()[2], 7);
+	
 	offset += 14;
 
 	int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
-	for(int i = 0; i < visitsMagnitude; i++){
-		ch[offset+i] = char(node->visits % (10^(visitsMagnitude - i))); 
-	}
+	snprintf(&ch[offset], visitsMagnitude, "%d", node->visits);
+	//int tempvisits = node->visits;
+	// for(int i = 0; i < visitsMagnitude; i++){
+	// 	snprintf(&ch[offset+i], 2, "%d" tempvisits % (10^(visitsMagnitude - i)); 
+	// 	tempvisits = tempvisits / 10;
+	// }
 	offset += visitsMagnitude;
 
-	for(int i = 0; i < 3; i++){
-		ch[offset + i] = char( node->ply % (10^(3-i)));
-	}
+	snprintf(&ch[offset], 3, "%d", node->ply);
+	// for(int i = 0; i < 3; i++){
+	// 	ch[offset + i] = char( node->ply % (10^(3-i)));
+	// }
 	offset += 3;
 
 	ch[offset] = '\0';
 	std::cout << ch << '\n';
+	std::cout << &ch[31] << '\n';
 
 	//space left for one character denoting an end
 	//of children marker, to help reconstruct tree

@@ -36,7 +36,7 @@ int main(int argc, char *argv[]){
 
 
 	int num_no = save_tree(root, save_file);
-	//StateNode root3 = iterative_read(save_file);
+	StateNode* root3 = load_tree(save_file);
 	return 0;
 
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
@@ -69,7 +69,7 @@ int main(int argc, char *argv[]){
 
 	std::cout << "number of nodes saved: " << num_nodes << "\n";
 
-	StateNode* root2 = iterative_read(save_file);
+	StateNode* root2 = load_tree(save_file);
 
 	
 

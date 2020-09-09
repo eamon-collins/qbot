@@ -213,6 +213,10 @@ StateNode::StateNode(bool turn){
 	this->ply = 0;
 	this->visits = 0;
 
+	//THIS IS FOR TESTING READ/WRITE, take out later
+	this->score = .54321;
+	this->vi = .987654321;
+
 	this->p1.row = NUMROWS - 1;
 	this->p1.col = NUMCOLS/2;
 	this->p1.numFences = NUMFENCES;
@@ -277,6 +281,7 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 //used to create new nodes directly from the database character string representation
 StateNode::StateNode(char node_buffer[]){
 	//read move
+	//std::cout << node_buffer;
 	Move move;
 	move.type = node_buffer[0];
 	char* row = &node_buffer[1];
@@ -300,7 +305,7 @@ StateNode::StateNode(char node_buffer[]){
 	bool gamestate[2 * NUMROWS - 1][NUMCOLS];
 	char* game_chars = &node_buffer[11];
 	for (int i = 0; i < 20; i++){
-		std::cout << node_buffer[i+11];
+		
 	}
 
 	std::string gamestring = bitset<20>(game_chars).to_string();
