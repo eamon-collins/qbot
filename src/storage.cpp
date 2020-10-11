@@ -33,7 +33,7 @@ int save_tree(StateNode* root, std::string database_name){
 		write_node(curr, file_buffer, (nodes_written % nodes_per_write) * bytes_per_node);
 		nodes_written++;
 		if ( (nodes_written % nodes_per_write) == 0){
-			fwrite(file_buffer, 1, nodes_per_write * bytes_per_node, save_file);
+			fwrite((const void*)file_buffer, bytes_per_node, (size_t)nodes_per_write, save_file);
 		}
 
 		std::vector<StateNode>::iterator it;
@@ -59,6 +59,16 @@ StateNode* load_tree(std::string database_name){
 	memcpy (curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
 
+	if(DEBUG){
+		std::cout << "Root node:\n";
+		std::cout << "turn " << root->turn << "\n";
+		std::cout << "score " << root->score << "\n";
+		std::cout << "vi " << root->vi << "\n";
+		std::cout << "serial_type " << root->serial_type << "\n";
+
+		std::cout << curr_node_buffer << "\n";
+	}
+
 	StateNode* curr = root;
 	int nodes_read = 0;
 	int buffer_offset = bytes_per_node; //because we just read root
@@ -70,7 +80,7 @@ StateNode* load_tree(std::string database_name){
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
 		StateNode* newNode = new StateNode(curr_node_buffer);
 		buffer_offset += bytes_per_node;
-
+		//std::cout << curr->serial_type;
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
 			curr->children.push_back(newNode);
 		} else if (curr->serial_type == '2') {
@@ -128,8 +138,9 @@ StateNode* load_tree(std::string database_name){
 		//the student becomes the master
 		curr = newNode;
 	}
-
+	std::cout << "root children: " << root->children.size() << "\n";
 	return root;
+
 }
 
 
@@ -169,9 +180,9 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	// }
 	offset += 3;
 
-	ch[offset] = '\0';
-	std::cout << ch << '\n';
-	std::cout << &ch[31] << '\n';
+	//ch[offset] = '\0';
+	//std::cout << ch << '\n';
+	//std::cout << &ch[31] << '\n';
 
 	//space left for one character denoting an end
 	//of children marker, to help reconstruct tree
@@ -196,6 +207,7 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 
 	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
 
+	//std::cout << ch << "\n";
 	return true;
 }
 
@@ -256,8 +268,8 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 		std::memcpy(temp, &bitstring[i*8], 8);
 		std::bitset<8> bin(temp);
 		ch[offset+i] = char(bin.to_ulong());
-		std::cout << temp << "\n";
-		std::cout << ch[offset+i];
+		// std::cout << temp << "\n";
+		// std::cout << ch[offset+i];
 	}
 
 	return offset+20;

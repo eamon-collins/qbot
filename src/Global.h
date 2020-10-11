@@ -1,5 +1,7 @@
 #pragma once
 
+#define DEBUG 1
+
 #define NUMROWS 9
 #define NUMCOLS 9
 

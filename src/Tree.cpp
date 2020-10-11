@@ -209,9 +209,11 @@ bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* sta
 
 //used to create the root node, starting gamestate.
 StateNode::StateNode(bool turn){	
+	this->parent = nullptr;
 	this->turn = turn;
 	this->ply = 0;
 	this->visits = 0;
+	this->serial_type = '0';
 
 	//THIS IS FOR TESTING READ/WRITE, take out later
 	this->score = .54321;
@@ -302,22 +304,25 @@ StateNode::StateNode(char node_buffer[]){
 	this->p2 = p2;
 
 	//read gamestate and turn
-	bool gamestate[2 * NUMROWS - 1][NUMCOLS];
-	char* game_chars = &node_buffer[11];
+	char bit_chars[160];
+	int index = 0;
+	string tempString;
 	for (int i = 0; i < 20; i++){
-		
-	}
-
-	std::string gamestring = bitset<20>(game_chars).to_string();
-	int index = 0;	
-	for(int i = 0; i < (2*NUMROWS-1); i++){
-		for(int j = 0; j < NUMCOLS; j++){
-			gamestate[i][j] = gamestring[index] == '1';
+		tempString = bitset<8>(node_buffer[11 + i]).to_string();
+		for(int j = 0; j<8; j++){
+			bit_chars[index] = tempString[j];
 			index++;
 		}
 	}
-	memcpy(this->gamestate, gamestate, (2*NUMROWS-1) * NUMCOLS);
-	this->turn = (gamestring[index] == '1');
+
+	index = 0;	
+	for(int i = 0; i < (2*NUMROWS-1); i++){
+		for(int j = 0; j < NUMCOLS; j++){
+			this->gamestate[i][j] = bit_chars[index] == '1';
+			index++;
+		}
+	}
+	this->turn = (bit_chars[index] == '1');
 
 	//score and vi normalized to 0-1, with 7 digits after the decimal stored
 	//add the 0. and null terminator and atof()
@@ -334,10 +339,10 @@ StateNode::StateNode(char node_buffer[]){
 	memcpy(ply, &node_buffer[52], 3);
 	this->visits = atoi(visits);
 	this->ply = atoi(ply);
-
-
-
-
+	
+	//std::cout << node_buffer[55] << "\n";
+	
+	this->serial_type = node_buffer[55];
 }
 
 

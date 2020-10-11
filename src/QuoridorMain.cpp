@@ -35,9 +35,10 @@ int main(int argc, char *argv[]){
 		root = new StateNode(true);
 
 
-	int num_no = save_tree(root, save_file);
-	StateNode* root3 = load_tree(save_file);
-	return 0;
+	//TESTING PURPOSES ONLY< REMOVE THIS SEGMENT LATER
+	// int num_no = save_tree(root, save_file);
+	// StateNode* root3 = load_tree(save_file);
+	// return 0;
 
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
@@ -70,6 +71,10 @@ int main(int argc, char *argv[]){
 	std::cout << "number of nodes saved: " << num_nodes << "\n";
 
 	StateNode* root2 = load_tree(save_file);
+
+	int second_time = save_tree(root2, "database2.txt");
+
+	std::cout << "number of nodes after recreation: " << second_time << "\n";
 
 	
 
