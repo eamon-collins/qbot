@@ -1,4 +1,4 @@
-	
+
 
 #include "storage.h"
 #include <bitset>
@@ -82,6 +82,7 @@ StateNode* load_tree(std::string database_name){
 		buffer_offset += bytes_per_node;
 		//std::cout << curr->serial_type;
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
+			std::cout << "WE IN HERE";
 			curr->children.push_back(newNode);
 		} else if (curr->serial_type == '2') {
 			curr->parent->children.push_back(newNode);

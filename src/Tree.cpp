@@ -7,6 +7,7 @@ Functions for building/managing the state-tree
 #include "storage.h"
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <tuple>
 #include <stack>
 #include <bitset>
@@ -39,13 +40,17 @@ void StateNode::evaluate(){
 
 int StateNode::prune_children(){
 	int dist_threshold = 1;
+	int count = 0;
 	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
 	for(std::vector<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
-	    if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold)
+	    if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
 	    	it = this->children.erase(it);
+	    	count++;
+	    }
 	    else
 	    	++it;
 	}
+	return count;
 }
 
 //generates all valid moves from this state, places them in this->children, and evaluates them.
@@ -319,9 +324,12 @@ StateNode::StateNode(char node_buffer[]){
 	for(int i = 0; i < (2*NUMROWS-1); i++){
 		for(int j = 0; j < NUMCOLS; j++){
 			this->gamestate[i][j] = bit_chars[index] == '1';
+			std::cout << this->gamestate[i][j];
 			index++;
 		}
+		std::cout << "\n";
 	}
+	std::cout << "\n\n";
 	this->turn = (bit_chars[index] == '1');
 
 	//score and vi normalized to 0-1, with 7 digits after the decimal stored
@@ -340,6 +348,7 @@ StateNode::StateNode(char node_buffer[]){
 	this->visits = atoi(visits);
 	this->ply = atoi(ply);
 	
+	//std::cout << "ply " << this->ply;
 	//std::cout << node_buffer[55] << "\n";
 	
 	this->serial_type = node_buffer[55];
