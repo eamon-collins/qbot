@@ -307,7 +307,7 @@ StateNode::StateNode(char node_buffer[]){
 	char bit_chars[160];
 	int index = 0;
 	string tempString;
-	for (int i = 0; i < 20; i++){
+	for (int i = 0; i < 20; i++){ 
 		tempString = bitset<8>(node_buffer[11 + i]).to_string();
 		for(int j = 0; j<8; j++){
 			bit_chars[index] = tempString[j];
