@@ -41,6 +41,8 @@ int save_tree(StateNode* root, std::string database_name){
 			tree_stack.push(&(*it));
 		}
 	}
+	fwrite((const void*)file_buffer, bytes_per_node, (size_t)(nodes_written % nodes_per_write), save_file);
+
 
 	fclose(save_file);
 
@@ -153,9 +155,20 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	offset = fill_move(ch, offset, node->move);
 	offset = fill_player(ch, offset, node->p1);
 	offset = fill_player(ch, offset, node->p2);
+	if (node->parent == nullptr) std::cout << offset << " ";
 	offset = fill_gamestate(ch, offset, node->gamestate, node->turn);
 
-	//score assumed to be normalized to 0-1 value
+	//this is root
+	if(node->parent == nullptr){
+		std::cout << offset << "OFFSET AT GAMESTATE\n";
+		for (int i = 0; i < 31; i++){
+			if(ch[i] == '\0') std::cout <<'0';
+			else std::cout << ch[i];
+		}
+		std::cout << "\n" << ch[1];
+	}
+
+	//score assumed to be normalized to 0-.99 value
 	//could afford one extra byte to get to 56, could switch which one is more valuable 
 	//Also potentially stream.str.cstr is area for performance improvement
 	std::stringstream stream, stream2;
@@ -167,7 +180,7 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	offset += 14;
 
 	int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
-	snprintf(&ch[offset], visitsMagnitude, "%d", node->visits);
+	snprintf(&ch[offset], visitsMagnitude+1, "%d", node->visits);
 	//int tempvisits = node->visits;
 	// for(int i = 0; i < visitsMagnitude; i++){
 	// 	snprintf(&ch[offset+i], 2, "%d" tempvisits % (10^(visitsMagnitude - i)); 
@@ -175,7 +188,8 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	// }
 	offset += visitsMagnitude;
 
-	snprintf(&ch[offset], 3, "%d", node->ply);
+	//the snprintf+1 is 3+1 here
+	snprintf(&ch[offset], 4, "%d", node->ply);
 	// for(int i = 0; i < 3; i++){
 	// 	ch[offset + i] = char( node->ply % (10^(3-i)));
 	// }
@@ -212,19 +226,22 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	return true;
 }
 
+//NOTE:::snprintf strings are maximum n-1 chars long because the last char is always \0
+// so the second arg will always be 1 more than the chars I actually want from that 
 int fill_player(char ch[], int offset, Player p){
 	/*ch[offset] = char(p.row);
 	ch[offset+1] = char(p.col);
 	ch[offset+2] = char(p.numFences);*/
 
 	//TODO maybe try std::to_string(p.row).c_str() if speed is a problem
-	snprintf(&ch[offset], 2, "%d", p.row);
-	snprintf(&ch[offset+1], 2, "%d", p.col);
+	//see note about snprintf above
+	snprintf(&ch[offset], 3, "%d", p.row);
+	snprintf(&ch[offset+1], 3, "%d", p.col);
 	//forgot each player started with 10 fences, need to allocate another byte perhaps? if speeds are slow
 	if(p.numFences == 10){
 		ch[offset+2] = 't';
 	}else{
-		snprintf(&ch[offset+2], 2, "%d", p.numFences);
+		snprintf(&ch[offset+2], 3, "%d", p.numFences);
 	}
 	return offset+3;
 }
@@ -234,13 +251,13 @@ int fill_move(char ch[], int offset, Move m){
 	if (m.row >= 10){
 		ch[offset+1] = '1';
 		//ch[offset+2] = char(m.row % 10);
-		snprintf(&ch[offset+2], 2, "%d", m.row % 10);
+		snprintf(&ch[offset+2], 3, "%d", m.row % 10);
 	}else{
 		ch[offset+1] = '0';
-		snprintf(&ch[offset+2], 2, "%d", m.row);
+		snprintf(&ch[offset+2], 3, "%d", m.row);
 	}
 
-	snprintf(&ch[offset+3], 2, "%d", m.col);
+	snprintf(&ch[offset+3], 3, "%d", m.col);
 	ch[offset+4] = (m.horizontal ? '1' : '0');
 
 	return offset+5;
@@ -261,14 +278,16 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 	bitstring[index] = turn ? '1' : '0';
 	//pad last 6 bits out as 0
 	for (int i = 0; i < 6; i++){
-		bitstring[index+1+i] = '0';
+		bitstring[index++] = '0';
 	}
+	
 
 	char temp[8];
 	for (int i = 0; i < 20; i++){
 		std::memcpy(temp, &bitstring[i*8], 8);
 		std::bitset<8> bin(temp);
-		ch[offset+i] = char(bin.to_ulong());
+		char binchar = char(bin.to_ulong());
+		ch[offset+i] = binchar == '\0' ? '0' : binchar;
 		// std::cout << temp << "\n";
 		// std::cout << ch[offset+i];
 	}

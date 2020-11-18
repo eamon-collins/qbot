@@ -12,6 +12,8 @@ Functions for building/managing the state-tree
 #include <stack>
 #include <bitset>
 
+bool debugs = true;
+
 //#include <cmath>
 
 int fenceRows = 2*NUMROWS - 1;
@@ -223,6 +225,8 @@ StateNode::StateNode(bool turn){
 	//THIS IS FOR TESTING READ/WRITE, take out later
 	this->score = .54321;
 	this->vi = .987654321;
+	this->visits = 1212121;
+	this->ply = 999;
 
 	this->p1.row = NUMROWS - 1;
 	this->p1.col = NUMCOLS/2;
@@ -302,9 +306,12 @@ StateNode::StateNode(char node_buffer[]){
 	//read players
 	Player p1, p2;
 	char* c = &node_buffer[5];
+	
 	sscanf(c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
 	c += 0x003; //moves array pointer up 3 bytes
 	sscanf(c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
+	if(node_buffer[7] == 't') p2.numFences = 10;
+	if(node_buffer[10] == 't') p2.numFences = 10;
 	this->p1 = p1;
 	this->p2 = p2;
 
@@ -324,12 +331,12 @@ StateNode::StateNode(char node_buffer[]){
 	for(int i = 0; i < (2*NUMROWS-1); i++){
 		for(int j = 0; j < NUMCOLS; j++){
 			this->gamestate[i][j] = bit_chars[index] == '1';
-			std::cout << this->gamestate[i][j];
+			//std::cout << this->gamestate[i][j];
 			index++;
 		}
-		std::cout << "\n";
+		//std::cout << "\n";
 	}
-	std::cout << "\n\n";
+	//std::cout << "\n\n";
 	this->turn = (bit_chars[index] == '1');
 
 	//score and vi normalized to 0-1, with 7 digits after the decimal stored

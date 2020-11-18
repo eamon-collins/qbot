@@ -109,6 +109,8 @@ int pathfinding2(StateNode* state, Move move){
 	//search player1's path, can't exit early though
 	for(int i = 0; i < NUMCOLS; i++){
 	}
+
+	return -1;
 }
 SearchNode::SearchNode(){}
 SearchNode::SearchNode(int row, int col){
@@ -129,10 +131,10 @@ bool SearchNode::IsSameState(SearchNode &rhs){
 	return false;
 }
 bool GetSuccessors( AStarSearch<SearchNode> *astarsearch ){
-
+	return false;
 }
 float GetCost( SearchNode *successor ){
-
+	return -1.0;
 }
 
 const char FLOOR = '1' ;

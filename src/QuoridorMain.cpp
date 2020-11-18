@@ -1,5 +1,3 @@
-
-
 #include "Global.h"
 #include "Tree.h"
 #include "Game.h"
@@ -8,6 +6,22 @@
 #include <cstdlib>
 #include <cstddef>
 #include <iostream>
+
+void print_node(StateNode* root){
+	std::cout << root->move.type << " " << root->score << " " << root->vi << "\n";
+	std::cout << "visits " << root->visits << " " << root->ply << " " << root->serial_type << "\n";
+	std::cout << root->turn << "\n";
+	int index = 0;	
+	for(int i = 0; i < (2*NUMROWS-1); i++){
+		for(int j = 0; j < NUMCOLS; j++){
+			std::cout << root->gamestate[i][j];
+			index++;
+		}
+		std::cout << "\n";
+	}
+	std::cout << "\n\n";
+	
+}
 
 int main(int argc, char *argv[]){
 	int threadCount, player;
@@ -66,11 +80,17 @@ int main(int argc, char *argv[]){
 	}
 	std::cout << arbitrary->children[0].children.size() << "\n";
 
+	std::cout << "ROOT before save\n";
+	print_node(root);
+
 	int num_nodes = save_tree(root, save_file);
 
 	std::cout << "number of nodes saved: " << num_nodes << "\n";
 
 	StateNode* root2 = load_tree(save_file);
+
+	std::cout << "ROOT after save\n";
+	print_node(root);
 
 	int second_time = save_tree(root2, "database2.txt");
 

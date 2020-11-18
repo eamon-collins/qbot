@@ -36,12 +36,12 @@ void build_tree(StateNode* currState, int depth, int starttime){
 
 //receives opposing move and sets the resulting gamestate as this->root
 bool Game::receive_opposing_move(){
-
+	return false;
 }
 
 //outputs move
 bool Game::play_move(){
-
+	return false;
 }
 
 Game::Game(StateNode* start){

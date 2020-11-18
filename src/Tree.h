@@ -25,7 +25,7 @@ typedef struct Move{
 		this->horizontal = horizontal;
 	}
 	Move(){
-		this->type = 'u';
+		this->type = 'u'; //default created, signifies unset, possibly root
 	}
 } Move;
 
