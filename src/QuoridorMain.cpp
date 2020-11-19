@@ -82,6 +82,8 @@ int main(int argc, char *argv[]){
 
 	std::cout << "ROOT before save\n";
 	print_node(root);
+	// std::cout << "First child of root before save\n";
+	// print_node(arbitrary);
 
 	int num_nodes = save_tree(root, save_file);
 
@@ -90,8 +92,9 @@ int main(int argc, char *argv[]){
 	StateNode* root2 = load_tree(save_file);
 
 	std::cout << "ROOT after save\n";
-	print_node(root);
-
+	print_node(root2);
+	// std::cout << "First child of root after save\n";
+	// print_node(&root2->children[0]);
 	int second_time = save_tree(root2, "database2.txt");
 
 	std::cout << "number of nodes after recreation: " << second_time << "\n";

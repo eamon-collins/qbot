@@ -296,9 +296,7 @@ StateNode::StateNode(char node_buffer[]){
 	Move move;
 	move.type = node_buffer[0];
 	char* row = &node_buffer[1];
-	sscanf(row, "%1d", &move.row);
-	char* col = &node_buffer[3];
-	sscanf(col, "%2d", &move.col);
+	sscanf(row, "%2d%1d", &move.row, &move.col);
 	move.horizontal = (node_buffer[4] == '1');
 	this->move = move;
 

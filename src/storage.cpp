@@ -55,21 +55,26 @@ StateNode* load_tree(std::string database_name){
 
 	//4096 / 56 = 73.1
 	//this is to try to get as close to a page as possible each file read
-	char node_buffer[bytes_per_node*73];
-	char curr_node_buffer[bytes_per_node];
-	fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
-	memcpy (curr_node_buffer, node_buffer, bytes_per_node);
+	//WILL NEED TO PAD THIS TO EXACT PAGE
+	// char node_buffer[bytes_per_node*nodes_per_write];
+	// char curr_node_buffer[bytes_per_node];
+	char* node_buffer = (char*)malloc((bytes_per_node+1)*nodes_per_write);
+	char* curr_node_buffer = (char*)malloc(bytes_per_node+1);
+	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
+	std::cout << fscanf(load_file, "%4088s", node_buffer) << "\n";
+	std::cout <<"LOAD:\n" << node_buffer << "\n";
+	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
+	std::cout << "WE IN HERE";
+	// if(DEBUG){
+	// 	std::cout << "Root node:\n";
+	// 	std::cout << "turn " << root->turn << "\n";
+	// 	std::cout << "score " << root->score << "\n";
+	// 	std::cout << "vi " << root->vi << "\n";
+	// 	std::cout << "serial_type " << root->serial_type << "\n";
 
-	if(DEBUG){
-		std::cout << "Root node:\n";
-		std::cout << "turn " << root->turn << "\n";
-		std::cout << "score " << root->score << "\n";
-		std::cout << "vi " << root->vi << "\n";
-		std::cout << "serial_type " << root->serial_type << "\n";
-
-		std::cout << curr_node_buffer << "\n";
-	}
+	// 	std::cout << curr_node_buffer << "\n";
+	// }
 
 	StateNode* curr = root;
 	int nodes_read = 0;
@@ -79,12 +84,14 @@ StateNode* load_tree(std::string database_name){
 	while (!done){
 
 		//read the next node in the buffer
-		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
+		memcpy(curr_node_buffer, &node_buffer[buffer_offset], (size_t)bytes_per_node);
+		
 		StateNode* newNode = new StateNode(curr_node_buffer);
 		buffer_offset += bytes_per_node;
 		//std::cout << curr->serial_type;
+
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
-			std::cout << "WE IN HERE";
+			
 			curr->children.push_back(newNode);
 		} else if (curr->serial_type == '2') {
 			curr->parent->children.push_back(newNode);
@@ -105,7 +112,7 @@ StateNode* load_tree(std::string database_name){
 		//however, it may be best to align memory on each page, because after first it will be 2 pages per fscanf
 		//unless it is cleanly on memory barrier
 		if(buffer_offset >= bytes_per_node*73){
-			int eof = fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
+			int eof = fscanf(load_file, "%4088s", node_buffer);
 			buffer_offset = 0;
 			if (eof != bytes_per_node*73){
 				if (eof == EOF){
@@ -142,6 +149,9 @@ StateNode* load_tree(std::string database_name){
 		curr = newNode;
 	}
 	std::cout << "root children: " << root->children.size() << "\n";
+
+	free (node_buffer);
+	free(curr_node_buffer);
 	return root;
 
 }
@@ -235,13 +245,13 @@ int fill_player(char ch[], int offset, Player p){
 
 	//TODO maybe try std::to_string(p.row).c_str() if speed is a problem
 	//see note about snprintf above
-	snprintf(&ch[offset], 3, "%d", p.row);
-	snprintf(&ch[offset+1], 3, "%d", p.col);
+	snprintf(&ch[offset], 2, "%1d", p.row);
+	snprintf(&ch[offset+1], 2, "%1d", p.col);
 	//forgot each player started with 10 fences, need to allocate another byte perhaps? if speeds are slow
 	if(p.numFences == 10){
 		ch[offset+2] = 't';
 	}else{
-		snprintf(&ch[offset+2], 3, "%d", p.numFences);
+		snprintf(&ch[offset+2], 2, "%d", p.numFences);
 	}
 	return offset+3;
 }
@@ -251,13 +261,13 @@ int fill_move(char ch[], int offset, Move m){
 	if (m.row >= 10){
 		ch[offset+1] = '1';
 		//ch[offset+2] = char(m.row % 10);
-		snprintf(&ch[offset+2], 3, "%d", m.row % 10);
+		snprintf(&ch[offset+2], 2, "%d", m.row % 10);
 	}else{
 		ch[offset+1] = '0';
-		snprintf(&ch[offset+2], 3, "%d", m.row);
+		snprintf(&ch[offset+2], 2, "%d", m.row);
 	}
 
-	snprintf(&ch[offset+3], 3, "%d", m.col);
+	snprintf(&ch[offset+3], 2, "%d", m.col);
 	ch[offset+4] = (m.horizontal ? '1' : '0');
 
 	return offset+5;
