@@ -175,28 +175,31 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 			if(ch[i] == '\0') std::cout <<'0';
 			else std::cout << ch[i];
 		}
-		std::cout << "\n" << ch[1];
+		//std::cout << "\n" << ch[1];
 	}
 
 	//score assumed to be normalized to 0-.99 value
 	//could afford one extra byte to get to 56, could switch which one is more valuable 
 	//Also potentially stream.str.cstr is area for performance improvement
-	std::stringstream stream, stream2;
+	std::stringstream stream, stream2, stream3;
 	stream << std::fixed << std::setprecision(7) << node->score;
 	stream2 << std::fixed << std::setprecision(7) << node->vi;
+	stream3 << std::fixed << std::setprecision(7) << node->visits;
+	
+	std::cout << stream.rdbuf() << " " << stream2.rdbuf() << " " << stream3.rdbuf() << "\n";
 	memcpy(&ch[offset], &stream.str().c_str()[2], 8);
 	memcpy(&ch[offset + 7], &stream2.str().c_str()[2], 7);
-	
-	offset += 14;
+	memcpy(&ch[offset + 14], &stream3.str().c_str()[0], 7);
+	offset += 21;
 
-	int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
-	snprintf(&ch[offset], visitsMagnitude+1, "%d", node->visits);
+	// int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
+	// snprintf(&ch[offset], visitsMagnitude+1, "%d", node->visits);
 	//int tempvisits = node->visits;
 	// for(int i = 0; i < visitsMagnitude; i++){
 	// 	snprintf(&ch[offset+i], 2, "%d" tempvisits % (10^(visitsMagnitude - i)); 
 	// 	tempvisits = tempvisits / 10;
 	// }
-	offset += visitsMagnitude;
+	//offset += visitsMagnitude;
 
 	//the snprintf+1 is 3+1 here
 	snprintf(&ch[offset], 4, "%d", node->ply);

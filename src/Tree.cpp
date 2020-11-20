@@ -225,7 +225,7 @@ StateNode::StateNode(bool turn){
 	//THIS IS FOR TESTING READ/WRITE, take out later
 	this->score = .54321;
 	this->vi = .987654321;
-	this->visits = 1212121;
+	this->visits = 12121;
 	this->ply = 999;
 
 	this->p1.row = NUMROWS - 1;
@@ -348,6 +348,10 @@ StateNode::StateNode(char node_buffer[]){
 	this->vi = atof(vi);
 
 	char visits[7], ply[3];
+	int i = 0;
+	// for (i; i<6; i++){
+	// 	if node_buffer
+	// }
 	memcpy(visits, &node_buffer[45], 7);
 	memcpy(ply, &node_buffer[52], 3);
 	this->visits = atoi(visits);
