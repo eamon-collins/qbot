@@ -226,7 +226,7 @@ StateNode::StateNode(bool turn){
 	this->score = .54321;
 	this->vi = .987654321;
 	this->visits = 12121;
-	this->ply = 999;
+	this->ply = 699;
 
 	this->p1.row = NUMROWS - 1;
 	this->p1.col = NUMCOLS/2;
@@ -290,7 +290,7 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 } 
 
 //used to create new nodes directly from the database character string representation
-StateNode::StateNode(char node_buffer[]){
+StateNode::StateNode(char* node_buffer){
 	//read move
 	//std::cout << node_buffer;
 	Move move;
@@ -308,34 +308,46 @@ StateNode::StateNode(char node_buffer[]){
 	sscanf(c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
 	c += 0x003; //moves array pointer up 3 bytes
 	sscanf(c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
-	if(node_buffer[7] == 't') p2.numFences = 10;
+	if(node_buffer[7] == 't') p1.numFences = 10;
 	if(node_buffer[10] == 't') p2.numFences = 10;
 	this->p1 = p1;
 	this->p2 = p2;
 
-	//read gamestate and turn
-	char bit_chars[160];
-	int index = 0;
-	string tempString;
-	for (int i = 0; i < 20; i++){ 
-		tempString = bitset<8>(node_buffer[11 + i]).to_string();
-		for(int j = 0; j<8; j++){
-			bit_chars[index] = tempString[j];
-			index++;
-		}
-	}
+	// //read gamestate and turn
+	// char bit_chars[160];
+	// int index = 0;
+	// string tempString;
+	// for (int i = 0; i < 20; i++){ 
+	// 	tempString = bitset<8>(node_buffer[11 + i]).to_string();
+	// 	for(int j = 0; j<8; j++){
+	// 		bit_chars[index] = tempString[j];
+	// 		index++;
+	// 	}
+	// }
 
-	index = 0;	
-	for(int i = 0; i < (2*NUMROWS-1); i++){
-		for(int j = 0; j < NUMCOLS; j++){
-			this->gamestate[i][j] = bit_chars[index] == '1';
-			//std::cout << this->gamestate[i][j];
-			index++;
+	// index = 0;	
+	// for(int i = 0; i < (2*NUMROWS-1); i++){
+	// 	for(int j = 0; j < NUMCOLS; j++){
+	// 		this->gamestate[i][j] = bit_chars[index] == '1';
+	// 		//std::cout << this->gamestate[i][j];
+	// 		index++;
+	// 	}
+	// 	//std::cout << "\n";
+	// }
+	// //std::cout << "\n\n";
+	// this->turn = (bit_chars[index] == '1');
+	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
+	for (int i =0; i < 19; i++){
+		unsigned char inp = (unsigned char)node_buffer[11+i];
+		for (int j = 0; j < 8; j++){
+			temp_gamestate[i*8+j] = inp & (true<<j);
 		}
-		//std::cout << "\n";
 	}
-	//std::cout << "\n\n";
-	this->turn = (bit_chars[index] == '1');
+	unsigned char last = (unsigned char)node_buffer[30];
+	temp_gamestate[152] = last & (true<<0);
+	this->turn = last & (true<<1);
+	memcpy(&(this->gamestate[0][0]), temp_gamestate, 153);
+
 
 	//score and vi normalized to 0-1, with 7 digits after the decimal stored
 	//add the 0. and null terminator and atof()
@@ -347,13 +359,16 @@ StateNode::StateNode(char node_buffer[]){
 	this->score = atof(score);
 	this->vi = atof(vi);
 
-	char visits[7], ply[3];
+
+	char visits[8] = {'0','0','0','0','0','0','0','\0'};
+	char ply[4] = {'0','0','0','\0'};
 	int i = 0;
 	// for (i; i<6; i++){
 	// 	if node_buffer
 	// }
 	memcpy(visits, &node_buffer[45], 7);
 	memcpy(ply, &node_buffer[52], 3);
+	std::cout << "visit/ply string: "<< visits << " " << ply;
 	this->visits = atoi(visits);
 	this->ply = atoi(ply);
 	

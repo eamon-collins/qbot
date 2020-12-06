@@ -313,3 +313,8 @@ int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map)
 		return cost_so_far;
 }
 
+void fill_int(char ch[], int integer, int num_digits){
+	for (int i = num_digits-1; i >= 0; i--){
+		
+	}
+}

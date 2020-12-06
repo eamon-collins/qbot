@@ -50,7 +50,7 @@ public:
 
 	StateNode(bool turn); //should only be used to start a new game, all positions will be starting positions, p1 starts turn=true p2 starts turn=false
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
-	StateNode(char node_buffer[]);
+	StateNode(char* node_buffer);
 
 	bool operator==(const StateNode& node);
 

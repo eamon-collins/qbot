@@ -12,8 +12,8 @@ void print_node(StateNode* root){
 	std::cout << "visits " << root->visits << " " << root->ply << " " << root->serial_type << "\n";
 	std::cout << root->turn << "\n";
 	int index = 0;	
-	for(int i = 0; i < (2*NUMROWS-1); i++){
-		for(int j = 0; j < NUMCOLS; j++){
+	for(int i = 0; i < 20; i++){
+		for(int j = 0; j < 8; j++){
 			std::cout << root->gamestate[i][j];
 			index++;
 		}

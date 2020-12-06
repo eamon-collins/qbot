@@ -60,6 +60,8 @@ StateNode* load_tree(std::string database_name){
 	// char curr_node_buffer[bytes_per_node];
 	char* node_buffer = (char*)malloc((bytes_per_node+1)*nodes_per_write);
 	char* curr_node_buffer = (char*)malloc(bytes_per_node+1);
+	// memset(node_buffer, '\0', (bytes_per_node+1)*nodes_per_write);
+	// memset(curr_node_buffer, '\0', bytes_per_node+1);
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 	std::cout << fscanf(load_file, "%4088s", node_buffer) << "\n";
 	std::cout <<"LOAD:\n" << node_buffer << "\n";
@@ -181,16 +183,18 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	//score assumed to be normalized to 0-.99 value
 	//could afford one extra byte to get to 56, could switch which one is more valuable 
 	//Also potentially stream.str.cstr is area for performance improvement
-	std::stringstream stream, stream2, stream3;
+	std::stringstream stream, stream2, stream3, stream4;
 	stream << std::fixed << std::setprecision(7) << node->score;
 	stream2 << std::fixed << std::setprecision(7) << node->vi;
 	stream3 << std::fixed << std::setprecision(7) << node->visits;
+	//stream4 << std::fixed << std::setprecision(3) << node->ply;
 	
-	std::cout << stream.rdbuf() << " " << stream2.rdbuf() << " " << stream3.rdbuf() << "\n";
+	if (node->parent==nullptr) std::cout << stream.rdbuf() << " " << stream2.rdbuf() << " " << stream3.rdbuf() << "\n";
 	memcpy(&ch[offset], &stream.str().c_str()[2], 8);
 	memcpy(&ch[offset + 7], &stream2.str().c_str()[2], 7);
-	memcpy(&ch[offset + 14], &stream3.str().c_str()[0], 7);
-	offset += 21;
+	//memcpy(&ch[offset + 14], &stream3.str().c_str()[0], 7);
+	//memcpy(&ch[offset+21], &stream4.str().c_str()[0], 3);
+	offset += 14;
 
 	// int visitsMagnitude = 7;  //number of digits of visits to save. at 7, 10million visits will rollover the visits counter
 	// snprintf(&ch[offset], visitsMagnitude+1, "%d", node->visits);
@@ -202,7 +206,9 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	//offset += visitsMagnitude;
 
 	//the snprintf+1 is 3+1 here
-	snprintf(&ch[offset], 4, "%d", node->ply);
+	snprintf(&ch[offset], 8, "%07d", node->visits);
+	offset += 7;
+	snprintf(&ch[offset], 4, "%03d", node->ply);
 	// for(int i = 0; i < 3; i++){
 	// 	ch[offset + i] = char( node->ply % (10^(3-i)));
 	// }
@@ -280,29 +286,54 @@ int fill_move(char ch[], int offset, Move m){
 //also takes responsibility for turn as it fits in the extra space 
 //might need to use unsigned chars
 int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
-	char bitstring[160];
-	int index = 0;
-	for (int i = 0; i < 2*NUMROWS-1; i++){
-		for(int j = 0; j < NUMCOLS; j++){
-			bitstring[index] = (gamestate[i][j] ? '1' : '0');
-			index++;
-		}
-	}
-	bitstring[index] = turn ? '1' : '0';
-	//pad last 6 bits out as 0
-	for (int i = 0; i < 6; i++){
-		bitstring[index++] = '0';
-	}
+	// char bitstring[160];
+	// int index = 0;
+	// int num_spaces = (2*NUMROWS-1)*NUMCOLS; //153 +1 for turn, then last 6 bits padded
+	// for (int i = 0; i < 2*NUMROWS-1; i++){
+	// 	for(int j = 0; j < NUMCOLS; j++){
+	// 		bitstring[index] = (gamestate[i][j] ? '1' : '0');
+	// 		index++;
+	// 	}
+	// }
+	// bitstring[index] = turn ? '1' : '0';
+	// //pad last 6 bits out as 0
+	// for (int i = 0; i < 6; i++){
+	// 	bitstring[index++] = '0';
+	// }
 	
 
-	char temp[8];
-	for (int i = 0; i < 20; i++){
-		std::memcpy(temp, &bitstring[i*8], 8);
-		std::bitset<8> bin(temp);
-		char binchar = char(bin.to_ulong());
-		ch[offset+i] = binchar == '\0' ? '0' : binchar;
-		// std::cout << temp << "\n";
-		// std::cout << ch[offset+i];
+	// char temp[8];
+	// for (int i = 0; i < 20; i++){
+	// 	std::memcpy(temp, &bitstring[i*8], 8);
+	// 	std::bitset<8> bin(temp);
+	// 	char binchar = char(bin.to_ulong());
+	// 	ch[offset+i] = binchar == '\0' ? '0' : binchar;
+	// 	// std::cout << temp << "\n";
+	// 	// std::cout << ch[offset+i];
+	// }
+
+	// return offset+20;
+	char bitstring[160];
+	int index = 0;
+	int num_spaces = (2*NUMROWS-1)*NUMCOLS; //153 +1 for turn, then last 6 bits padded
+	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
+	memcpy(temp_gamestate, &(gamestate[0][0]), 153);
+
+	unsigned char output = 0;
+	for (int i = 0; i < 19; i++){
+		for (int j=0; j < 8; j++){
+			output = output|(temp_gamestate[i*8 + j]<<j);
+		}
+		ch[offset+i] = (char)output;
+		output = 0;		
+	}
+	//the last bit in gamestate and turn and padding
+	output = 0;
+	output = output|(temp_gamestate[152]<<0);
+	output = output|(turn<<1);
+	//pad last 6 bits out as 0
+	for (int i = 2; i < 8; i++){
+		output = output|(false<<i);
 	}
 
 	return offset+20;
