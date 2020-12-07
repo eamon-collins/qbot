@@ -12,8 +12,8 @@ void print_node(StateNode* root){
 	std::cout << "visits " << root->visits << " " << root->ply << " " << root->serial_type << "\n";
 	std::cout << root->turn << "\n";
 	int index = 0;	
-	for(int i = 0; i < 20; i++){
-		for(int j = 0; j < 8; j++){
+	for(int i = 0; i < 17; i++){
+		for(int j = 0; j < 9; j++){
 			std::cout << root->gamestate[i][j];
 			index++;
 		}
@@ -82,6 +82,8 @@ int main(int argc, char *argv[]){
 
 	std::cout << "ROOT before save\n";
 	print_node(root);
+	print_node(&(root->children[0]));
+	//print_node(&root->children[0].children[0]);
 	// std::cout << "First child of root before save\n";
 	// print_node(arbitrary);
 
@@ -93,6 +95,8 @@ int main(int argc, char *argv[]){
 
 	std::cout << "ROOT after save\n";
 	print_node(root2);
+	print_node(&(root2->children[0]));
+	//print_node(&root2->children[0].children[0]);
 	// std::cout << "First child of root after save\n";
 	// print_node(&root2->children[0]);
 	int second_time = save_tree(root2, "database2.txt");

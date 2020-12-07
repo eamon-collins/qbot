@@ -93,18 +93,22 @@ StateNode* load_tree(std::string database_name){
 		//std::cout << curr->serial_type;
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
-			
+						std::cout << "ZERO\n";
+
 			curr->children.push_back(newNode);
 		} else if (curr->serial_type == '2') {
 			curr->parent->children.push_back(newNode);
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
+			std::cout << "THREE\n";
 			while(curr->serial_type != '0'){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
 			curr = curr->parent;
 			curr->children.push_back(newNode);
+		}else{
+			std::cout << "UNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
 		}
 		//the student becomes the master
 		curr = newNode;
@@ -229,6 +233,8 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 			node->children.empty())
 	{
 		ch[offset] = '3';
+		std::cout << "THREE\n";
+
 	}
 	//last child in parent's vector but not leaf
 	else if (*(node->parent->children.begin()) == *node){

@@ -237,7 +237,7 @@ StateNode::StateNode(bool turn){
 
 
 	//only 8 possible vertical fence locations b/w the squares
-	for(int i = 0; i < 2*NUMROWS-1; i+=2){
+	for(int i = 0; i < 2*NUMROWS-1; i++){
 		for (int j = 0; j < NUMCOLS; j++){
 			this->gamestate[i][j] = false;
 		}
@@ -368,7 +368,7 @@ StateNode::StateNode(char* node_buffer){
 	// }
 	memcpy(visits, &node_buffer[45], 7);
 	memcpy(ply, &node_buffer[52], 3);
-	std::cout << "visit/ply string: "<< visits << " " << ply;
+	//std::cout << "visit/ply string: "<< visits << " " << ply;
 	this->visits = atoi(visits);
 	this->ply = atoi(ply);
 	
