@@ -44,7 +44,7 @@ int StateNode::prune_children(){
 	int dist_threshold = 1;
 	int count = 0;
 	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
-	for(std::vector<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
+	for(std::list<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
 	    if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
 	    	it = this->children.erase(it);
 	    	count++;
@@ -123,8 +123,9 @@ int StateNode::generate_valid_children(){
 
 
 	//evaluate all child moves now
-	for(int i = 0; i < this->children.size(); i++){
-		this->children[i].evaluate();
+	for (std::list<StateNode>::iterator it = this->children.begin();
+			it != this->children.end(); it++){
+		it->evaluate();
 	}
 
 	//here this->children should be list of all states created by valid moves.
@@ -136,32 +137,33 @@ int StateNode::generate_valid_children(){
 
 //play the game out from the current state with random moves and backpropagate the result
 void StateNode::play_out(){
-	int numChildren = this->generate_valid_children();
-	int choice = rand() % numChildren;
-	StateNode currState = this->children[choice];
+	int numChildren;
+	int choice;
+	StateNode* currState = this;
 
-	while (currState.p1.row != 0 && currState.p2.row != NUMROWS-1){
-		numChildren = currState.generate_valid_children();
+	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
+		numChildren = currState->generate_valid_children();
 		choice = rand() % numChildren;
-		currState = currState.children[choice];
+		std::list<StateNode>::iterator it = std::next(currState->children.begin(), choice);
+		currState = &(*it);
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, so the further they are from the end the better the game
 	int scoreModifier;
-	if (currState.p1.row == 0){
-		scoreModifier = NUMROWS - currState.p2.row;
+	if (currState->p1.row == 0){
+		scoreModifier = NUMROWS - currState->p2.row;
 	}else{
-		scoreModifier = -currState.p1.row - 1;
+		scoreModifier = -currState->p1.row - 1;
 	}
 
-	while (currState.parent != nullptr){
-		currState.score += scoreModifier;
-		currState.visits += 1;
-		currState = currState.parent;
+	while (currState->parent != nullptr){
+		currState->score += scoreModifier;
+		currState->visits += 1;
+		currState = currState->parent;
 	}
-	currState.score += scoreModifier;
-	currState.visits += 1; //propagate to root
+	currState->score += scoreModifier;
+	currState->visits += 1; //propagate to root
 }
 
 double StateNode::UCB(){
@@ -180,7 +182,7 @@ void StateNode::update_vi(){
 			s.push(root);
 
 			if (root->children.size() >= 1)
-				root = &(root->children[0]);
+				root = &(root->children.front());
 			else
 				root = nullptr;
 

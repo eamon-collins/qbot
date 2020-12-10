@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <vector>
 #include <iostream>
+#include <list>
 
 typedef struct Player{
 	int row;
@@ -32,7 +33,7 @@ typedef struct Move{
 class StateNode
 {
 public:
-	std::vector<StateNode> children;
+	std::list<StateNode> children;
 	StateNode* parent = nullptr;
 
 	

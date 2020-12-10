@@ -63,26 +63,26 @@ int main(int argc, char *argv[]){
 	//uses generate_children and prune_children to generate state tree of moves from current root
 	game.run_game();
 
-	StateNode* arbitrary = &game.root->children[0];
+	StateNode* arbitrary = &game.root->children.front();
 	int numChildren = arbitrary->children.size();
 
 
 	std::cout << numChildren <<"\n";
 
 
-	int seclevel;
-	for(int i = 0; i < numChildren; i++){
-		//seclevel = root->children[i].generate_valid_children();
-		seclevel = arbitrary->children[i].score;
-		// std::cout << seclevel << "\t";
-		// if (seclevel >4)
-		// 	std::cout << arbitrary->children[i];
-	}
-	std::cout << arbitrary->children[0].children.size() << "\n";
+	// int seclevel;
+	// for(int i = 0; i < numChildren; i++){
+	// 	seclevel = root->children[i].generate_valid_children();
+	// 	seclevel = arbitrary->children[i].score;
+	// 	std::cout << seclevel << "\t";
+	// 	if (seclevel >4)
+	// 		std::cout << arbitrary->children[i];
+	// }
+	std::cout << arbitrary->children.front().children.size() << "\n";
 
 	std::cout << "ROOT before save\n";
 	print_node(root);
-	print_node(&(root->children[0]));
+	print_node(&(root->children.front()));
 	//print_node(&root->children[0].children[0]);
 	// std::cout << "First child of root before save\n";
 	// print_node(arbitrary);
@@ -95,7 +95,7 @@ int main(int argc, char *argv[]){
 
 	std::cout << "ROOT after save\n";
 	print_node(root2);
-	print_node(&(root2->children[0]));
+	print_node(&(root2->children.front()));
 	//print_node(&root2->children[0].children[0]);
 	// std::cout << "First child of root after save\n";
 	// print_node(&root2->children[0]);

@@ -36,8 +36,8 @@ int save_tree(StateNode* root, std::string database_name){
 			fwrite((const void*)file_buffer, bytes_per_node, (size_t)nodes_per_write, save_file);
 		}
 
-		std::vector<StateNode>::iterator it;
-		for (it = curr->children.begin(); it < curr->children.end(); it++) {
+		std::list<StateNode>::iterator it;
+		for (it = curr->children.begin(); it != curr->children.end(); it++) {
 			tree_stack.push(&(*it));
 		}
 	}
@@ -94,9 +94,10 @@ StateNode* load_tree(std::string database_name){
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
 						std::cout << "ZERO\n";
-
+			newNode->parent = curr;
 			curr->children.push_back(newNode);
 		} else if (curr->serial_type == '2') {
+			newNode->parent = curr->parent;
 			curr->parent->children.push_back(newNode);
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
@@ -106,6 +107,7 @@ StateNode* load_tree(std::string database_name){
 			}
 			//once more to get sibling of 0
 			curr = curr->parent;
+			newNode->parent = curr;
 			curr->children.push_back(newNode);
 		}else{
 			std::cout << "UNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";

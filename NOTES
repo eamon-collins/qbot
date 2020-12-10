@@ -1,0 +1,8 @@
+NOTES
+
+justification for list of statenode:
+can't do vector of statenode because parent pointer needs to be kept but everytiume vector resizes and renders pointers unreliable.
+vector of smart pointers to statenodes is aight solution, but if the actual objects are going to be separated in memory anyway, why not use list? get constant time insertion/removal at front, good elsewhere, and some memory management (probably, idk)
+Also, I think in play_out, for every time generate_valid_children is called and needs to sequentially add a bunch of nodes, we need to select one of those at random to explore, so constant pushing probably better than constant random access.
+
+also a significant part might be pruning nodes, so removing from the middle

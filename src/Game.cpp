@@ -27,10 +27,13 @@ void build_tree(StateNode* currState, int depth, int starttime){
 	//removes moves I don't think are good
 	currState->prune_children();
 
-	for(int i = 0; i < currState->children.size(); i++){
+	std::list<StateNode>::iterator it;
+	for (it = currState->children.begin(); it != currState->children.end(); it++) {
 		//must be careful when passing pointer to element in vector, if vector resizes this pointer will become invalid.
 		//should be okay here but in case any unexplained phenoms happen, check this
-		build_tree(&currState->children[i], depth + 1, starttime);
+		//this comment was prophetic^ too bad i didn't remember it was here til i changed the structure to fix this lol
+		//it should be good now as list doesn't change element positions
+		build_tree(&(*it), depth + 1, starttime);
 	}	
 }
 
