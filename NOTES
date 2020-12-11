@@ -6,3 +6,8 @@ vector of smart pointers to statenodes is aight solution, but if the actual obje
 Also, I think in play_out, for every time generate_valid_children is called and needs to sequentially add a bunch of nodes, we need to select one of those at random to explore, so constant pushing probably better than constant random access.
 
 also a significant part might be pruning nodes, so removing from the middle
+
+
+
+replacing char -> unsigned char, only place i had uchar before is gamestate reading and writing in Statenode(buffer) and fill_gamestate
+transferred over to all char, doesn't seem to have done a single thing tbh

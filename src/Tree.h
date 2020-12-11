@@ -14,12 +14,12 @@ typedef struct Player{
 
 //moves of type 'p' are indexed [9][9], moves of type 'f' are [17][9]
 typedef struct Move{
-	char type;
+	unsigned char type;
 	int row;
 	int col;
 	bool horizontal; //only matters if type = 'f' ie this move places a fence
 
-	Move(char type, int row, int col, bool horizontal){
+	Move(unsigned char type, int row, int col, bool horizontal){
 		this->type = type;
 		this->row = row;
 		this->col = col;
@@ -46,12 +46,12 @@ public:
 	double vi; //average score of every node below this one
 	int visits; //number of times we've visited this node
 	int ply; //the total number of moves made up until this point.
-	char serial_type; //bookkeeping for serialization/deserialization
+	unsigned char serial_type; //bookkeeping for serialization/deserialization
 
 
 	StateNode(bool turn); //should only be used to start a new game, all positions will be starting positions, p1 starts turn=true p2 starts turn=false
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
-	StateNode(char* node_buffer);
+	StateNode(unsigned char* node_buffer);
 
 	bool operator==(const StateNode& node);
 

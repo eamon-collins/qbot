@@ -18,7 +18,7 @@ int nodes_per_write = int(4096/bytes_per_node);
 //saves the tree to disk
 //~177 characters estimated for each statenode
 int save_tree(StateNode* root, std::string database_name){
-	char file_buffer[nodes_per_write * bytes_per_node];
+	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 
 	FILE* save_file = fopen(database_name.c_str(), "w");
 
@@ -50,16 +50,16 @@ int save_tree(StateNode* root, std::string database_name){
 }
 
 StateNode* load_tree(std::string database_name){
-	char file_buffer[nodes_per_write * bytes_per_node];
+	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 	FILE* load_file = fopen(database_name.c_str(), "r");
 
 	//4096 / 56 = 73.1
 	//this is to try to get as close to a page as possible each file read
 	//WILL NEED TO PAD THIS TO EXACT PAGE
-	// char node_buffer[bytes_per_node*nodes_per_write];
-	// char curr_node_buffer[bytes_per_node];
-	char* node_buffer = (char*)malloc((bytes_per_node+1)*nodes_per_write);
-	char* curr_node_buffer = (char*)malloc(bytes_per_node+1);
+	// unsigned char node_buffer[bytes_per_node*nodes_per_write];
+	// unsigned char curr_node_buffer[bytes_per_node];
+	unsigned char* node_buffer = (unsigned char*)malloc((bytes_per_node+1)*nodes_per_write);
+	unsigned char* curr_node_buffer = (unsigned char*)malloc(bytes_per_node+1);
 	// memset(node_buffer, '\0', (bytes_per_node+1)*nodes_per_write);
 	// memset(curr_node_buffer, '\0', bytes_per_node+1);
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
@@ -88,17 +88,19 @@ StateNode* load_tree(std::string database_name){
 		//read the next node in the buffer
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], (size_t)bytes_per_node);
 		
-		StateNode* newNode = new StateNode(curr_node_buffer);
+		StateNode newNode = StateNode(curr_node_buffer);
 		buffer_offset += bytes_per_node;
 		//std::cout << curr->serial_type;
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
 						std::cout << "ZERO\n";
-			newNode->parent = curr;
+			newNode.parent = curr;
 			curr->children.push_back(newNode);
+			curr = &(curr->children.back());
 		} else if (curr->serial_type == '2') {
-			newNode->parent = curr->parent;
+			newNode.parent = curr->parent;
 			curr->parent->children.push_back(newNode);
+			curr = &(curr->parent->children.back());
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
 			std::cout << "THREE\n";
@@ -107,13 +109,14 @@ StateNode* load_tree(std::string database_name){
 			}
 			//once more to get sibling of 0
 			curr = curr->parent;
-			newNode->parent = curr;
+			newNode.parent = curr;
 			curr->children.push_back(newNode);
+			curr = &(curr->children.back());
 		}else{
 			std::cout << "UNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
 		}
 		//the student becomes the master
-		curr = newNode;
+		//curr = newNode;
 
 		//if we need to read more nodes
 		//this is currently optimized to read 4096/56=73.1 -> 73 nodes at a time to get pages of 4096.
@@ -137,13 +140,15 @@ StateNode* load_tree(std::string database_name){
 	//then with the nodes left, duplicate of above code
 	for (int i = 0; i < nodes_left; i++){
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
-		StateNode* newNode = new StateNode(curr_node_buffer);
+		StateNode newNode = StateNode(curr_node_buffer);
 		buffer_offset += bytes_per_node;
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
 			curr->children.push_back(newNode);
+			curr = &(curr->children.back());
 		} else if (curr->serial_type == '2') {
 			curr->parent->children.push_back(newNode);
+			curr = &(curr->parent->children.back());
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
 			while(curr->serial_type != '0'){
@@ -152,9 +157,10 @@ StateNode* load_tree(std::string database_name){
 			//once more to get sibling of 0
 			curr = curr->parent;
 			curr->children.push_back(newNode);
+			curr = &(curr->children.back());
 		}
 		//the student becomes the master
-		curr = newNode;
+		//curr = newNode;
 	}
 	std::cout << "root children: " << root->children.size() << "\n";
 
@@ -166,8 +172,8 @@ StateNode* load_tree(std::string database_name){
 
 
 
-bool write_node(StateNode* node, char file_buffer[], int buffer_index){
-	char ch[bytes_per_node];
+bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
+	unsigned char ch[bytes_per_node];
 
 	int offset = 0; 
 	offset = fill_move(ch, offset, node->move);
@@ -212,9 +218,9 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 	//offset += visitsMagnitude;
 
 	//the snprintf+1 is 3+1 here
-	snprintf(&ch[offset], 8, "%07d", node->visits);
+	snprintf((char*)&ch[offset], 8, "%07d", node->visits);
 	offset += 7;
-	snprintf(&ch[offset], 4, "%03d", node->ply);
+	snprintf((char*)&ch[offset], 4, "%03d", node->ply);
 	// for(int i = 0; i < 3; i++){
 	// 	ch[offset + i] = char( node->ply % (10^(3-i)));
 	// }
@@ -255,36 +261,36 @@ bool write_node(StateNode* node, char file_buffer[], int buffer_index){
 
 //NOTE:::snprintf strings are maximum n-1 chars long because the last char is always \0
 // so the second arg will always be 1 more than the chars I actually want from that 
-int fill_player(char ch[], int offset, Player p){
-	/*ch[offset] = char(p.row);
-	ch[offset+1] = char(p.col);
-	ch[offset+2] = char(p.numFences);*/
+int fill_player(unsigned char ch[], int offset, Player p){
+	/*ch[offset] = unsigned char(p.row);
+	ch[offset+1] = unsigned char(p.col);
+	ch[offset+2] = unsigned char(p.numFences);*/
 
 	//TODO maybe try std::to_string(p.row).c_str() if speed is a problem
 	//see note about snprintf above
-	snprintf(&ch[offset], 2, "%1d", p.row);
-	snprintf(&ch[offset+1], 2, "%1d", p.col);
+	snprintf((char*)&ch[offset], 2, "%1d", p.row);
+	snprintf((char*)&ch[offset+1], 2, "%1d", p.col);
 	//forgot each player started with 10 fences, need to allocate another byte perhaps? if speeds are slow
 	if(p.numFences == 10){
 		ch[offset+2] = 't';
 	}else{
-		snprintf(&ch[offset+2], 2, "%d", p.numFences);
+		snprintf((char*)&ch[offset+2], 2, "%d", p.numFences);
 	}
 	return offset+3;
 }
 
-int fill_move(char ch[], int offset, Move m){
+int fill_move(unsigned char ch[], int offset, Move m){
 	ch[offset] = m.type;
 	if (m.row >= 10){
 		ch[offset+1] = '1';
-		//ch[offset+2] = char(m.row % 10);
-		snprintf(&ch[offset+2], 2, "%d", m.row % 10);
+		//ch[offset+2] = unsigned char(m.row % 10);
+		snprintf((char*)&ch[offset+2], 2, "%d", m.row % 10);
 	}else{
 		ch[offset+1] = '0';
-		snprintf(&ch[offset+2], 2, "%d", m.row);
+		snprintf((char*)&ch[offset+2], 2, "%d", m.row);
 	}
 
-	snprintf(&ch[offset+3], 2, "%d", m.col);
+	snprintf((char*)&ch[offset+3], 2, "%d", m.col);
 	ch[offset+4] = (m.horizontal ? '1' : '0');
 
 	return offset+5;
@@ -292,9 +298,9 @@ int fill_move(char ch[], int offset, Move m){
 }
 
 //also takes responsibility for turn as it fits in the extra space 
-//might need to use unsigned chars
-int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
-	// char bitstring[160];
+//might need to use unsigned unsigned chars
+int fill_gamestate(unsigned char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
+	// unsigned char bitstring[160];
 	// int index = 0;
 	// int num_spaces = (2*NUMROWS-1)*NUMCOLS; //153 +1 for turn, then last 6 bits padded
 	// for (int i = 0; i < 2*NUMROWS-1; i++){
@@ -310,18 +316,18 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 	// }
 	
 
-	// char temp[8];
+	// unsigned char temp[8];
 	// for (int i = 0; i < 20; i++){
 	// 	std::memcpy(temp, &bitstring[i*8], 8);
 	// 	std::bitset<8> bin(temp);
-	// 	char binchar = char(bin.to_ulong());
-	// 	ch[offset+i] = binchar == '\0' ? '0' : binchar;
+	// 	unsigned char bin char = unsigned char(bin.to_ulong());
+	// 	ch[offset+i] = bin char == '\0' ? '0' : binchar;
 	// 	// std::cout << temp << "\n";
 	// 	// std::cout << ch[offset+i];
 	// }
 
 	// return offset+20;
-	char bitstring[160];
+	unsigned char bitstring[160];
 	int index = 0;
 	int num_spaces = (2*NUMROWS-1)*NUMCOLS; //153 +1 for turn, then last 6 bits padded
 	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
@@ -332,7 +338,7 @@ int fill_gamestate(char ch[], int offset, bool gamestate[][NUMCOLS], bool turn){
 		for (int j=0; j < 8; j++){
 			output = output|(temp_gamestate[i*8 + j]<<j);
 		}
-		ch[offset+i] = (char)output;
+		ch[offset+i] = output;
 		output = 0;		
 	}
 	//the last bit in gamestate and turn and padding

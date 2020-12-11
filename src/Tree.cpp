@@ -292,31 +292,31 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 } 
 
 //used to create new nodes directly from the database character string representation
-StateNode::StateNode(char* node_buffer){
+StateNode::StateNode(unsigned char* node_buffer){
 	//read move
 	//std::cout << node_buffer;
 	Move move;
 	move.type = node_buffer[0];
-	char* row = &node_buffer[1];
-	sscanf(row, "%2d%1d", &move.row, &move.col);
+	unsigned char* row = &node_buffer[1];
+	sscanf((char*)row, "%2d%1d", &move.row, &move.col);
 	move.horizontal = (node_buffer[4] == '1');
 	this->move = move;
 
 
 	//read players
 	Player p1, p2;
-	char* c = &node_buffer[5];
+	unsigned char* c = &node_buffer[5];
 	
-	sscanf(c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
+	sscanf((char*)c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
 	c += 0x003; //moves array pointer up 3 bytes
-	sscanf(c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
+	sscanf((char*)c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
 	if(node_buffer[7] == 't') p1.numFences = 10;
 	if(node_buffer[10] == 't') p2.numFences = 10;
 	this->p1 = p1;
 	this->p2 = p2;
 
 	// //read gamestate and turn
-	// char bit_chars[160];
+	// unsigned char bit_chars[160];
 	// int index = 0;
 	// string tempString;
 	// for (int i = 0; i < 20; i++){ 
@@ -353,17 +353,17 @@ StateNode::StateNode(char* node_buffer){
 
 	//score and vi normalized to 0-1, with 7 digits after the decimal stored
 	//add the 0. and null terminator and atof()
-	char score[10] = {'0','.','0','0','0','0','0','0','0','\0'};
-	char vi[10] = {'0','.','0','0','0','0','0','0','0','\0'};
+	unsigned char score[10] = {'0','.','0','0','0','0','0','0','0','\0'};
+	unsigned char vi[10] = {'0','.','0','0','0','0','0','0','0','\0'};
 	memcpy(&score[2], &node_buffer[31], 7);
 	memcpy(&vi[2], &node_buffer[38], 7);
 
-	this->score = atof(score);
-	this->vi = atof(vi);
+	this->score = atof((char*)score);
+	this->vi = atof((char*)vi);
 
 
-	char visits[8] = {'0','0','0','0','0','0','0','\0'};
-	char ply[4] = {'0','0','0','\0'};
+	unsigned char visits[8] = {'0','0','0','0','0','0','0','\0'};
+	unsigned char ply[4] = {'0','0','0','\0'};
 	int i = 0;
 	// for (i; i<6; i++){
 	// 	if node_buffer
@@ -371,8 +371,8 @@ StateNode::StateNode(char* node_buffer){
 	memcpy(visits, &node_buffer[45], 7);
 	memcpy(ply, &node_buffer[52], 3);
 	//std::cout << "visit/ply string: "<< visits << " " << ply;
-	this->visits = atoi(visits);
-	this->ply = atoi(ply);
+	this->visits = atoi((char*)visits);
+	this->ply = atoi((char*)ply);
 	
 	//std::cout << "ply " << this->ply;
 	//std::cout << node_buffer[55] << "\n";
