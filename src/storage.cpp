@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <stack>
+#include <filesystem>
 
 //DONT MODIFY UNLESS YOU CHANGE write_node
 #define BYTES_PER_READ "4088"  //56*73
@@ -27,13 +28,14 @@ int save_tree(StateNode* root, std::string database_name){
 	tree_stack.push(root);
 	StateNode* curr;
 	int nodes_written = 0;
+	int bytes_written = 0;
 	while (!tree_stack.empty()){
 		curr = tree_stack.top();
 		tree_stack.pop();
 		write_node(curr, file_buffer, (nodes_written % nodes_per_write) * bytes_per_node);
 		nodes_written++;
 		if ( (nodes_written % nodes_per_write) == 0){
-			fwrite((const void*)file_buffer, bytes_per_node, (size_t)nodes_per_write, save_file);
+			bytes_written += fwrite((const void*)file_buffer, bytes_per_node, (size_t)nodes_per_write, save_file);
 		}
 
 		std::list<StateNode>::iterator it;
@@ -41,7 +43,7 @@ int save_tree(StateNode* root, std::string database_name){
 			tree_stack.push(&(*it));
 		}
 	}
-	fwrite((const void*)file_buffer, bytes_per_node, (size_t)(nodes_written % nodes_per_write), save_file);
+	bytes_written += fwrite((const void*)file_buffer, bytes_per_node, (size_t)(nodes_written % nodes_per_write), save_file);
 
 
 	fclose(save_file);
@@ -51,6 +53,9 @@ int save_tree(StateNode* root, std::string database_name){
 
 StateNode* load_tree(std::string database_name){
 	unsigned char file_buffer[nodes_per_write * bytes_per_node];
+	std::filesystem::path p{database_name.c_str()};
+	unsigned long long nodes_left = std::filesystem::file_size(p) / bytes_per_node; //total number of nodes
+
 	FILE* load_file = fopen(database_name.c_str(), "r");
 
 	//4096 / 56 = 73.1
@@ -63,7 +68,7 @@ StateNode* load_tree(std::string database_name){
 	// memset(node_buffer, '\0', (bytes_per_node+1)*nodes_per_write);
 	// memset(curr_node_buffer, '\0', bytes_per_node+1);
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
-	std::cout << fscanf(load_file, "%4088s", node_buffer) << "\n";
+	std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
 	std::cout <<"LOAD:\n" << node_buffer << "\n";
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
@@ -81,15 +86,16 @@ StateNode* load_tree(std::string database_name){
 	StateNode* curr = root;
 	int nodes_read = 0;
 	int buffer_offset = bytes_per_node; //because we just read root
-	int nodes_left = 999; //placeholder, idk if we need tihs but if so this is arbitrarily high
+	nodes_left--; //also decrement because we read root
 	bool done = false;
-	while (!done){
+	while (nodes_left > 0){
 		//read the next node in the buffer
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], (size_t)bytes_per_node);
 		
 		StateNode newNode = StateNode(curr_node_buffer);
 		print_buffer(curr_node_buffer);
 		buffer_offset += bytes_per_node;
+		nodes_left--;
 		if (curr_node_buffer[55] == '\0'){
 			std::cout << curr_node_buffer[55];
 		}
@@ -111,6 +117,10 @@ StateNode* load_tree(std::string database_name){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
+			if(curr->parent == nullptr){
+				std::cout << "should be last node," << curr_node_buffer[55];
+				break;
+			}
 			curr = curr->parent;
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
@@ -126,18 +136,18 @@ StateNode* load_tree(std::string database_name){
 		//however, it may be best to align memory on each page, because after first it will be 2 pages per fscanf
 		//unless it is cleanly on memory barrier
 		if(buffer_offset >= bytes_per_node*73){
-			int eof = fscanf(load_file, "%4088s", node_buffer);
+			int eof = fscanf(load_file, "%4088c", node_buffer);
 			buffer_offset = 0;
-			if (eof != bytes_per_node*73){
-				if (eof == EOF){
-					nodes_left = 0;
-					done = true;
-				}
-				else{
-					nodes_left = eof / bytes_per_node;
-					done = true;
-				}
-			}
+			// if (eof != bytes_per_node*73){
+			// 	if (eof == EOF){
+			// 		nodes_left = 0;
+			// 		done = true;
+			// 	}
+			// 	else{
+			// 		nodes_left = eof / bytes_per_node;
+			// 		done = true;
+			// 	}
+			// }
 		}
 	}
 	//then with the nodes left, duplicate of above code
@@ -158,6 +168,10 @@ StateNode* load_tree(std::string database_name){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
+			if(curr->parent == nullptr){
+				std::cout << "should be last node," << curr_node_buffer[55];
+				break;
+			}
 			curr = curr->parent;
 			curr->children.push_back(newNode);
 			curr = &(curr->children.back());
@@ -249,15 +263,20 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 		ch[offset] = '0';
 	}
 	//leaf AND last child in parent's vector
-	else if (*(node->parent->children.begin()) == *node &&
+	else if (&(node->parent->children.front()) == node &&
 			node->children.empty())
 	{
 		ch[offset] = '3';
 		std::cout << "THREE\n";
 
 	}
+	//just a leaf
+	else if (node->children.empty())
+	{
+		ch[offset] = '2';
+	}
 	//last child in parent's vector but not leaf
-	else if (*(node->parent->children.begin()) == *node){
+	else if (&(node->parent->children.front()) == node){
 		ch[offset] = '1';
 	}else {
 		ch[offset] = '0';

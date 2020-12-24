@@ -2,7 +2,7 @@
 
 # Compiler options
 CXX = g++ # use g++ compiler
-CXXFLAGS = -lpthread -pthread -std=c++11 -g -D_GNU_SOURCE -no-pie# openmp and pthread, g for debugging
+CXXFLAGS = -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie# openmp and pthread, g for debugging
 
 
 .SUFFIXES: .o .cpp
