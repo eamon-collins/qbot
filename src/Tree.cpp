@@ -340,12 +340,14 @@ StateNode::StateNode(unsigned char* node_buffer){
 	// this->turn = (bit_chars[index] == '1');
 	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
 	for (int i =0; i < 19; i++){
-		unsigned char inp = (unsigned char)node_buffer[11+i];
+		unsigned char inp = (unsigned char)node_buffer[11+i]-33;
+		//if (inp == '~') inp = 0;
 		for (int j = 0; j < 8; j++){
 			temp_gamestate[i*8+j] = inp & (true<<j);
 		}
 	}
-	unsigned char last = (unsigned char)node_buffer[30];
+	unsigned char last = (unsigned char)node_buffer[30]-33;
+	//if (last == '~') last = 0;
 	temp_gamestate[152] = last & (true<<0);
 	this->turn = last & (true<<1);
 	memcpy(&(this->gamestate[0][0]), temp_gamestate, 153);
@@ -379,7 +381,6 @@ StateNode::StateNode(unsigned char* node_buffer){
 	
 	this->serial_type = node_buffer[55];
 }
-
 
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {

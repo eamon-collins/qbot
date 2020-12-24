@@ -84,16 +84,19 @@ StateNode* load_tree(std::string database_name){
 	int nodes_left = 999; //placeholder, idk if we need tihs but if so this is arbitrarily high
 	bool done = false;
 	while (!done){
-
 		//read the next node in the buffer
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], (size_t)bytes_per_node);
 		
 		StateNode newNode = StateNode(curr_node_buffer);
+		print_buffer(curr_node_buffer);
 		buffer_offset += bytes_per_node;
-		//std::cout << curr->serial_type;
+		if (curr_node_buffer[55] == '\0'){
+			std::cout << curr_node_buffer[55];
+		}
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
-						std::cout << "ZERO\n";
+			//if (curr->serial_type == '0') std::cout << "ZERO\n";
+			//else std::cout << "ONE\n";
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
 			curr = &(curr->children.back());
@@ -103,7 +106,7 @@ StateNode* load_tree(std::string database_name){
 			curr = &(curr->parent->children.back());
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
-			std::cout << "THREE\n";
+			//std::cout << "THREE\n";
 			while(curr->serial_type != '0'){
 				curr = curr->parent;
 			}
@@ -113,7 +116,7 @@ StateNode* load_tree(std::string database_name){
 			curr->children.push_back(newNode);
 			curr = &(curr->children.back());
 		}else{
-			std::cout << "UNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
+			std::cout << "\nUNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
 		}
 		//the student becomes the master
 		//curr = newNode;
@@ -170,6 +173,15 @@ StateNode* load_tree(std::string database_name){
 
 }
 
+void print_buffer(unsigned char* node_buffer){
+	std::cout<<"\n";
+	for(int i = 0; i < bytes_per_node; i++){
+		if (node_buffer[i]=='\0')
+			std::cout<<"\\0";
+		else
+			std::cout<<node_buffer[i];
+	}
+}
 
 
 bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
@@ -255,6 +267,9 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 
 	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
 
+	if(ch[55] == '\0' || ch[55] == '\000'){
+		std::cout << "BAD SERIAL TYPE WRITING";
+	}
 	//std::cout << ch << "\n";
 	return true;
 }
@@ -338,7 +353,8 @@ int fill_gamestate(unsigned char ch[], int offset, bool gamestate[][NUMCOLS], bo
 		for (int j=0; j < 8; j++){
 			output = output|(temp_gamestate[i*8 + j]<<j);
 		}
-		ch[offset+i] = output;
+		//if(output == 0) ch[offset+i] = '~';
+		ch[offset+i] = output+33;
 		output = 0;		
 	}
 	//the last bit in gamestate and turn and padding
@@ -349,6 +365,8 @@ int fill_gamestate(unsigned char ch[], int offset, bool gamestate[][NUMCOLS], bo
 	for (int i = 2; i < 8; i++){
 		output = output|(false<<i);
 	}
+	//if(output == 0) ch[offset+19] = '~';
+	ch[offset+19] = output+33;
 
 	return offset+20;
 }

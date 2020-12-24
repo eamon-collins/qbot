@@ -104,7 +104,6 @@ int main(int argc, char *argv[]){
 	std::cout << "number of nodes after recreation: " << second_time << "\n";
 
 	
-
 	//std::cout << root->children[5].children.size() << "\n";
 	
 

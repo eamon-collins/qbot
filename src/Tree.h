@@ -52,6 +52,7 @@ public:
 	StateNode(bool turn); //should only be used to start a new game, all positions will be starting positions, p1 starts turn=true p2 starts turn=false
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
 	StateNode(unsigned char* node_buffer);
+	//StateNode(const StateNode& rhs);
 
 	bool operator==(const StateNode& node);
 
@@ -66,7 +67,6 @@ public:
 	void update_vi(); //calculates average score for every node under this one.
 
 };
-
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode
 bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* state, Move move); //helps testing validity and also beginning scoring before state fully initialized.
