@@ -143,6 +143,7 @@ void StateNode::play_out(){
 
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		numChildren = currState->generate_valid_children();
+		if (numChildren == 0) 
 		choice = rand() % numChildren;
 		std::list<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 		currState = &(*it);
@@ -294,7 +295,6 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 //used to create new nodes directly from the database character string representation
 StateNode::StateNode(unsigned char* node_buffer){
 	//read move
-	//std::cout << node_buffer;
 	Move move;
 	move.type = node_buffer[0];
 	unsigned char* row = &node_buffer[1];
@@ -341,13 +341,11 @@ StateNode::StateNode(unsigned char* node_buffer){
 	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
 	for (int i =0; i < 19; i++){
 		unsigned char inp = (unsigned char)node_buffer[11+i]-33;
-		//if (inp == '~') inp = 0;
 		for (int j = 0; j < 8; j++){
 			temp_gamestate[i*8+j] = inp & (true<<j);
 		}
 	}
 	unsigned char last = (unsigned char)node_buffer[30]-33;
-	//if (last == '~') last = 0;
 	temp_gamestate[152] = last & (true<<0);
 	this->turn = last & (true<<1);
 	memcpy(&(this->gamestate[0][0]), temp_gamestate, 153);
@@ -366,18 +364,12 @@ StateNode::StateNode(unsigned char* node_buffer){
 
 	unsigned char visits[8] = {'0','0','0','0','0','0','0','\0'};
 	unsigned char ply[4] = {'0','0','0','\0'};
-	int i = 0;
-	// for (i; i<6; i++){
-	// 	if node_buffer
-	// }
+
 	memcpy(visits, &node_buffer[45], 7);
 	memcpy(ply, &node_buffer[52], 3);
-	//std::cout << "visit/ply string: "<< visits << " " << ply;
 	this->visits = atoi((char*)visits);
 	this->ply = atoi((char*)ply);
 	
-	//std::cout << "ply " << this->ply;
-	//std::cout << node_buffer[55] << "\n";
 	
 	this->serial_type = node_buffer[55];
 }

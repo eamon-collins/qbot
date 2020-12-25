@@ -11,3 +11,6 @@ also a significant part might be pruning nodes, so removing from the middle
 
 replacing char -> unsigned char, only place i had uchar before is gamestate reading and writing in Statenode(buffer) and fill_gamestate
 transferred over to all char, doesn't seem to have done a single thing tbh
+
+
+offsetting the gamestate chars by 33 is to avoid the bottom 33 slots of the ascii encoding, which is full of whitespace and other utility bs. just avoiding it all together is simply better. Maybe thing about doing +64 instead by bit operations, to make it quicker?

@@ -87,21 +87,23 @@ int main(int argc, char *argv[]){
 	// std::cout << "First child of root before save\n";
 	// print_node(arbitrary);
 
+	root->children.front().children.front().play_out();
+
 	int num_nodes = save_tree(root, save_file);
 
 	std::cout << "number of nodes saved: " << num_nodes << "\n";
 
-	StateNode* root2 = load_tree(save_file);
+	// StateNode* root2 = load_tree(save_file);
 
-	std::cout << "ROOT after save\n";
-	print_node(root2);
-	print_node(&(root2->children.front()));
-	//print_node(&root2->children[0].children[0]);
-	// std::cout << "First child of root after save\n";
-	// print_node(&root2->children[0]);
-	int second_time = save_tree(root2, "database2.txt");
+	// std::cout << "ROOT after save\n";
+	// print_node(root2);
+	// print_node(&(root2->children.front()));
+	// //print_node(&root2->children[0].children[0]);
+	// // std::cout << "First child of root after save\n";
+	// // print_node(&root2->children[0]);
+	// int second_time = save_tree(root2, "database2.txt");
 
-	std::cout << "number of nodes after recreation: " << second_time << "\n";
+	// std::cout << "number of nodes after recreation: " << second_time << "\n";
 
 	
 	//std::cout << root->children[5].children.size() << "\n";

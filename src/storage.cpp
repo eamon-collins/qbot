@@ -69,10 +69,9 @@ StateNode* load_tree(std::string database_name){
 	// memset(curr_node_buffer, '\0', bytes_per_node+1);
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 	std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
-	std::cout <<"LOAD:\n" << node_buffer << "\n";
+	std::cout <<"LOAD:\n";
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
-	std::cout << "WE IN HERE";
 	// if(DEBUG){
 	// 	std::cout << "Root node:\n";
 	// 	std::cout << "turn " << root->turn << "\n";
@@ -93,16 +92,10 @@ StateNode* load_tree(std::string database_name){
 		memcpy(curr_node_buffer, &node_buffer[buffer_offset], (size_t)bytes_per_node);
 		
 		StateNode newNode = StateNode(curr_node_buffer);
-		print_buffer(curr_node_buffer);
 		buffer_offset += bytes_per_node;
 		nodes_left--;
-		if (curr_node_buffer[55] == '\0'){
-			std::cout << curr_node_buffer[55];
-		}
 
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
-			//if (curr->serial_type == '0') std::cout << "ZERO\n";
-			//else std::cout << "ONE\n";
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
 			curr = &(curr->children.back());
@@ -112,15 +105,10 @@ StateNode* load_tree(std::string database_name){
 			curr = &(curr->parent->children.back());
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
-			//std::cout << "THREE\n";
 			while(curr->serial_type != '0'){
 				curr = curr->parent;
 			}
 			//once more to get sibling of 0
-			if(curr->parent == nullptr){
-				std::cout << "should be last node," << curr_node_buffer[55];
-				break;
-			}
 			curr = curr->parent;
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
@@ -138,47 +126,9 @@ StateNode* load_tree(std::string database_name){
 		if(buffer_offset >= bytes_per_node*73){
 			int eof = fscanf(load_file, "%4088c", node_buffer);
 			buffer_offset = 0;
-			// if (eof != bytes_per_node*73){
-			// 	if (eof == EOF){
-			// 		nodes_left = 0;
-			// 		done = true;
-			// 	}
-			// 	else{
-			// 		nodes_left = eof / bytes_per_node;
-			// 		done = true;
-			// 	}
-			// }
 		}
 	}
-	//then with the nodes left, duplicate of above code
-	for (int i = 0; i < nodes_left; i++){
-		memcpy(curr_node_buffer, &node_buffer[buffer_offset], bytes_per_node);
-		StateNode newNode = StateNode(curr_node_buffer);
-		buffer_offset += bytes_per_node;
 
-		if(curr->serial_type == '0' || curr->serial_type == '1'){
-			curr->children.push_back(newNode);
-			curr = &(curr->children.back());
-		} else if (curr->serial_type == '2') {
-			curr->parent->children.push_back(newNode);
-			curr = &(curr->parent->children.back());
-		} else if (curr->serial_type == '3'){
-			//start upward iteration til find a 0
-			while(curr->serial_type != '0'){
-				curr = curr->parent;
-			}
-			//once more to get sibling of 0
-			if(curr->parent == nullptr){
-				std::cout << "should be last node," << curr_node_buffer[55];
-				break;
-			}
-			curr = curr->parent;
-			curr->children.push_back(newNode);
-			curr = &(curr->children.back());
-		}
-		//the student becomes the master
-		//curr = newNode;
-	}
 	std::cout << "root children: " << root->children.size() << "\n";
 
 	free (node_buffer);
@@ -209,14 +159,13 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 	offset = fill_gamestate(ch, offset, node->gamestate, node->turn);
 
 	//this is root
-	if(node->parent == nullptr){
-		std::cout << offset << "OFFSET AT GAMESTATE\n";
-		for (int i = 0; i < 31; i++){
-			if(ch[i] == '\0') std::cout <<'0';
-			else std::cout << ch[i];
-		}
-		//std::cout << "\n" << ch[1];
-	}
+	// if(node->parent == nullptr){
+	// 	for (int i = 0; i < 31; i++){
+	// 		if(ch[i] == '\0') std::cout <<'0';
+	// 		else std::cout << ch[i];
+	// 	}
+	// 	//std::cout << "\n" << ch[1];
+	// }
 
 	//score assumed to be normalized to 0-.99 value
 	//could afford one extra byte to get to 56, could switch which one is more valuable 
@@ -267,8 +216,6 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 			node->children.empty())
 	{
 		ch[offset] = '3';
-		std::cout << "THREE\n";
-
 	}
 	//just a leaf
 	else if (node->children.empty())
@@ -286,10 +233,6 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 
 	memcpy(&file_buffer[buffer_index], ch, bytes_per_node );
 
-	if(ch[55] == '\0' || ch[55] == '\000'){
-		std::cout << "BAD SERIAL TYPE WRITING";
-	}
-	//std::cout << ch << "\n";
 	return true;
 }
 
