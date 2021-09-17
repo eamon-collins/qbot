@@ -122,6 +122,12 @@ int StateNode::generate_valid_children(){
 	}
 
 
+	//evaluate will error with empty list
+	if (this->children.size() == 0){
+		return 0;
+		printf("EMPTY CHILDREN VECTOR");
+	}
+
 	//evaluate all child moves now
 	for (std::list<StateNode>::iterator it = this->children.begin();
 			it != this->children.end(); it++){
@@ -143,8 +149,10 @@ void StateNode::play_out(){
 
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		numChildren = currState->generate_valid_children();
-		if (numChildren == 0) 
-		choice = rand() % numChildren;
+		if (numChildren != 0) 
+			choice = rand() % numChildren;
+		else 
+			printf("No valid children during playout");
 		std::list<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 		currState = &(*it);
 	}
