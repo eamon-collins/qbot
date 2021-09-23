@@ -131,7 +131,7 @@ int StateNode::generate_valid_children(){
 	//evaluate all child moves now
 	for (std::list<StateNode>::iterator it = this->children.begin();
 			it != this->children.end(); it++){
-		it->evaluate();
+			it->evaluate();
 	}
 
 	//here this->children should be list of all states created by valid moves.
@@ -148,7 +148,11 @@ void StateNode::play_out(){
 	StateNode* currState = this;
 
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
-		numChildren = currState->generate_valid_children();
+		if (currState->children.size() == 0)
+			numChildren = currState->generate_valid_children();
+		else
+			numChildren = currState->children.size();
+
 		if (numChildren != 0) 
 			choice = rand() % numChildren;
 		else 
