@@ -7,21 +7,6 @@
 #include <cstddef>
 #include <iostream>
 
-void print_node(StateNode* root){
-	std::cout << root->move.type << " " << root->score << " " << root->vi << "\n";
-	std::cout << "visits " << root->visits << " " << root->ply << " " << root->serial_type << "\n";
-	std::cout << root->turn << "\n";
-	int index = 0;	
-	for(int i = 0; i < 17; i++){
-		for(int j = 0; j < 9; j++){
-			std::cout << root->gamestate[i][j];
-			index++;
-		}
-		std::cout << "\n";
-	}
-	std::cout << "\n\n";
-	
-}
 
 int main(int argc, char *argv[]){
 	int threadCount, player;
@@ -81,8 +66,8 @@ int main(int argc, char *argv[]){
 	std::cout << arbitrary->children.front().children.size() << "\n";
 
 	std::cout << "ROOT before save\n";
-	print_node(root);
-	print_node(&(root->children.front()));
+	root->print_node();
+	root->children.front().print_node();
 	//print_node(&root->children[0].children[0]);
 	// std::cout << "First child of root before save\n";
 	// print_node(arbitrary);

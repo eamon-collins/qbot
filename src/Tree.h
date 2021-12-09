@@ -66,6 +66,8 @@ public:
 	double UCB(); //simple 
 	void update_vi(); //calculates average score for every node under this one.
 
+
+	void print_node(); //printfs a representation of the gamestate at this node
 };
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode

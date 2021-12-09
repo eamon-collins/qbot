@@ -155,14 +155,18 @@ void StateNode::play_out(){
 
 		if (numChildren != 0) 
 			choice = rand() % numChildren;
-		else 
+		else {
 			printf("No valid children during playout");
+			break;
+		}
 		std::list<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 		currState = &(*it);
+		currState->print_node();
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
-	//value of terminal state is based on how far the opponent is from winning, so the further they are from the end the better the game
+	//value of terminal state is based on how far the opponent is from winning, 
+	//so the further they are from the end the better the game
 	int scoreModifier;
 	if (currState->p1.row == 0){
 		scoreModifier = NUMROWS - currState->p2.row;
@@ -409,4 +413,20 @@ bool StateNode::operator==(const StateNode& node) {
 	}
 
 	return isEqual;
+}
+
+void StateNode::print_node(){
+	std::cout << this->move.type << " " << this->score << " " << this->vi << "\n";
+	std::cout << "visits " << this->visits << " " << this->ply << " " << this->serial_type << "\n";
+	std::cout << this->turn << "\n";
+	int index = 0;	
+	for(int i = 0; i < 17; i++){
+		for(int j = 0; j < 9; j++){
+			std::cout << this->gamestate[i][j];
+			index++;
+		}
+		std::cout << "\n";
+	}
+	std::cout << "\n\n";
+	
 }
