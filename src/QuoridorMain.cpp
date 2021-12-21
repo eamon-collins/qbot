@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <iostream>
+#include <ctime>
 
 
 int main(int argc, char *argv[]){
@@ -73,6 +74,13 @@ int main(int argc, char *argv[]){
 	// print_node(arbitrary);
 
 	root->children.front().children.front().play_out();
+
+	//test build_tree
+
+	// build_tree(&(root->children.front().children.front().children.front()),
+	// 	0, std::time(0));
+
+
 
 	int num_nodes = save_tree(root, save_file);
 

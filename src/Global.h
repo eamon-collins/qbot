@@ -10,7 +10,7 @@
 #define NUMFENCES 10
 
 
-#define MAXTIME 10000 //milliseconds it will take maximum building the state tree
+#define MAXTIME 10 //seconds it will take maximum building the state tree
 #define MAXDEPTH 3
 /* ex: if MAXDEPTH = 3 you have:
 	1		r

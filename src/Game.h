@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Tree.h"
+#include <ctime>
 
 class Game
 {
@@ -20,4 +21,4 @@ public:
 };
 
 
-void build_tree(StateNode* currState, int depth, int starttime);
+void build_tree(StateNode* currState, int depth, std::time_t starttime);
