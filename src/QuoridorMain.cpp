@@ -49,7 +49,8 @@ int main(int argc, char *argv[]){
 	//uses generate_children and prune_children to generate state tree of moves from current root
 	game.run_game();
 
-	StateNode* arbitrary = &game.root->children.front();
+	auto arbitrary = game.root->children.begin();
+	std::advance(arbitrary,3);
 	int numChildren = arbitrary->children.size();
 
 

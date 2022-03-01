@@ -4,7 +4,8 @@
 
 
 void Game::run_game(){
-	int depth = 1, time;
+	int depth = 1;
+	std::time_t time = std::time(0);
 	bool gameOver = false;
 
 	while(!gameOver){

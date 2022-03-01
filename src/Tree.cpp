@@ -124,8 +124,8 @@ int StateNode::generate_valid_children(){
 
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
-		return 0;
 		printf("EMPTY CHILDREN VECTOR");
+		return 0;
 	}
 
 	//evaluate all child moves now
