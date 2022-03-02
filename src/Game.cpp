@@ -28,7 +28,7 @@ void build_tree(StateNode* currState, int depth, std::time_t starttime){
 	//removes moves I don't think are good
 	currState->prune_children();
 
-	std::list<StateNode>::iterator it;
+	std::deque<StateNode>::iterator it;
 	for (it = currState->children.begin(); it != currState->children.end(); it++) {
 		//must be careful when passing pointer to element in vector, if vector resizes this pointer will become invalid.
 		//should be okay here but in case any unexplained phenoms happen, check this

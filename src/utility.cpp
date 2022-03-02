@@ -261,7 +261,8 @@ int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map)
     {
         SMII smii = search_map.find(start);
 
-        if(smii==search_map.end()) { std::cout << "starting outside map\n"; return false; }
+        if(smii==search_map.end()) { std::cout << "starting outside map\n"; 
+        return false; }
         if(smii->second.goal) {return true; }
         if(!smii->second.traversble) { std::cout << "starting in a wall\n"; return false; }
 

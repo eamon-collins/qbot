@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 #include <iostream>
-#include <list>
+#include <deque>
 
 typedef struct Player{
 	int row;
@@ -33,7 +33,7 @@ typedef struct Move{
 class StateNode
 {
 public:
-	std::list<StateNode> children;
+	std::deque<StateNode> children;
 	StateNode* parent = nullptr;
 
 	
@@ -62,7 +62,7 @@ public:
 	bool is_valid_move(Move move); //checks whether the resulting gamestate from a certain move is legal or not
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
-	void play_out(); //simulates by random choice to determine a winner from this state
+	StateNode* play_out(); //simulates by random choice to determine a winner from this state
 	double UCB(); //simple 
 	void update_vi(); //calculates average score for every node under this one.
 
@@ -71,4 +71,4 @@ public:
 };
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode
-bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* state, Move move); //helps testing validity and also beginning scoring before state fully initialized.
+bool test_and_add_move( StateNode* state, Move move); //helps testing validity and also beginning scoring before state fully initialized.

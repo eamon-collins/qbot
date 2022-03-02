@@ -38,7 +38,7 @@ int save_tree(StateNode* root, std::string database_name){
 			bytes_written += fwrite((const void*)file_buffer, bytes_per_node, (size_t)nodes_per_write, save_file);
 		}
 
-		std::list<StateNode>::iterator it;
+		std::deque<StateNode>::iterator it;
 		for (it = curr->children.begin(); it != curr->children.end(); it++) {
 			tree_stack.push(&(*it));
 		}

@@ -44,13 +44,13 @@ int StateNode::prune_children(){
 	int dist_threshold = 1;
 	int count = 0;
 	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
-	for(std::list<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
-	    if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
-	    	it = this->children.erase(it);
-	    	count++;
-	    }
-	    else
-	    	++it;
+	for(std::deque<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
+			if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
+				it = this->children.erase(it);
+				count++;
+			}
+			else
+				++it;
 	}
 	return count;
 }
@@ -75,30 +75,30 @@ int StateNode::generate_valid_children(){
 	//check up/down
 	for(int i = -1; i < 2; i+=2){
 		if(currPlayer.row +i >= 0 && currPlayer.row +i < NUMROWS && !this->gamestate[2*currPlayer.row + i][currPlayer.col] && (otherPlayer.row != currPlayer.row +i || otherPlayer.col != currPlayer.col))
-			test_and_add_move(vmoves, this, Move('p',currPlayer.row+i, currPlayer.col, false));
+			test_and_add_move( this, Move('p',currPlayer.row+i, currPlayer.col, false));
 		else if(otherPlayer.row == currPlayer.row +i && otherPlayer.col == currPlayer.col && !this->gamestate[2*currPlayer.row + i][currPlayer.col]){
 			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col])//jump the other player
-				test_and_add_move(vmoves, this, Move('p', currPlayer.row+2*i, currPlayer.col, false));
+				test_and_add_move( this, Move('p', currPlayer.row+2*i, currPlayer.col, false));
 			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
 				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
-					test_and_add_move(vmoves, this, Move('p', currPlayer.row+i, currPlayer.col+1, false));
+					test_and_add_move( this, Move('p', currPlayer.row+i, currPlayer.col+1, false));
 				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left
-					test_and_add_move(vmoves, this, Move('p', currPlayer.row+i, currPlayer.col-1, false));
+					test_and_add_move( this, Move('p', currPlayer.row+i, currPlayer.col-1, false));
 			}
 		}
 	}
 	//check left/right
 	for(int i = -1; i < 2; i+=2){
 		if(currPlayer.col +i >= 0 && currPlayer.col +i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)] && (otherPlayer.col != currPlayer.col +i || otherPlayer.row != currPlayer.row))
-			test_and_add_move(vmoves, this, Move('p',currPlayer.row, currPlayer.col+i, false));
+			test_and_add_move( this, Move('p',currPlayer.row, currPlayer.col+i, false));
 		else if(otherPlayer.row == currPlayer.row && otherPlayer.col == currPlayer.col+i && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)]){
 			if(currPlayer.col+2*i >= 0 && currPlayer.col+2*i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)])//jump the other player
-				test_and_add_move(vmoves, this, Move('p', currPlayer.row, currPlayer.col+2*i, false));
+				test_and_add_move( this, Move('p', currPlayer.row, currPlayer.col+2*i, false));
 			else if(this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)]){ //if other player has wall behind them
 				if (currPlayer.row-1 >= 0 && !this->gamestate[2*currPlayer.row -1 ][currPlayer.col+i]) //up
-					test_and_add_move(vmoves, this, Move('p', currPlayer.row-1, currPlayer.col+i, false));
+					test_and_add_move( this, Move('p', currPlayer.row-1, currPlayer.col+i, false));
 				if (currPlayer.row+1 < NUMROWS && !this->gamestate[2*currPlayer.row + 1][currPlayer.col+i]) //down
-					test_and_add_move(vmoves, this, Move('p', currPlayer.row+1, currPlayer.col+i, false));
+					test_and_add_move( this, Move('p', currPlayer.row+1, currPlayer.col+i, false));
 			}
 		}
 	}
@@ -113,9 +113,9 @@ int StateNode::generate_valid_children(){
 				if(i %2 == 1){
 					horizontal = true;
 					if ((!this->gamestate[i-1][j] || !this->gamestate[i+1][j]) && !this->gamestate[i][j] && !this->gamestate[i][j+1])
-						test_and_add_move(vmoves, this, Move('f', i, j, horizontal));
+						test_and_add_move( this, Move('f', i, j, horizontal));
 				}else if((!this->gamestate[i+1][j] || !this->gamestate[i+1][j+1]) && !this->gamestate[i][j] && !this->gamestate[i+2][j]){
-					test_and_add_move(vmoves, this, Move('f', i, j, horizontal));
+					test_and_add_move( this, Move('f', i, j, horizontal));
 				}
 			}
 		} 
@@ -129,7 +129,7 @@ int StateNode::generate_valid_children(){
 	}
 
 	//evaluate all child moves now
-	for (std::list<StateNode>::iterator it = this->children.begin();
+	for (std::deque<StateNode>::iterator it = this->children.begin();
 			it != this->children.end(); it++){
 			it->evaluate();
 	}
@@ -141,8 +141,10 @@ int StateNode::generate_valid_children(){
 }
 
 
-//play the game out from the current state with random moves and backpropagate the result
-void StateNode::play_out(){
+//play the game out from the current state with random moves and return winner and score
+//later maybe test trying a couple close to bottom of the tree and averaging. Not canonical though?
+//returns winning StateNode
+StateNode* StateNode::play_out(){
 	int numChildren;
 	int choice;
 	StateNode* currState = this;
@@ -159,7 +161,7 @@ void StateNode::play_out(){
 			printf("No valid children during playout");
 			break;
 		}
-		std::list<StateNode>::iterator it = std::next(currState->children.begin(), choice);
+		std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 		currState = &(*it);
 		currState->print_node();
 	}
@@ -174,6 +176,8 @@ void StateNode::play_out(){
 		scoreModifier = -currState->p1.row - 1;
 	}
 
+	StateNode* winState = currState;
+
 	while (currState->parent != nullptr){
 		currState->score += scoreModifier;
 		currState->visits += 1;
@@ -181,6 +185,8 @@ void StateNode::play_out(){
 	}
 	currState->score += scoreModifier;
 	currState->visits += 1; //propagate to root
+
+	return winState;
 }
 
 double StateNode::UCB(){
@@ -211,23 +217,24 @@ void StateNode::update_vi(){
 		count += curr->visits;
 
 		// while (s.size() > 0 && curr->childrenIndex ==  
-  //               s.top()->children.size() - 1) 
-  //       { 
-  //           curr = s.top(); 
-  //           s.pop(); 
-              
-  //           //traverse
-  //       } 
+	//               s.top()->children.size() - 1) 
+	//       { 
+	//           curr = s.top(); 
+	//           s.pop(); 
+							
+	//           //traverse
+	//       } 
 	}
 }
 
 
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
-bool test_and_add_move(std::vector<std::tuple<Move, int>> vmoves, StateNode* state, Move move){
+bool test_and_add_move(StateNode* state, Move move){
 	int difference = pathfinding(state, move);
 	if (difference != -999){
-		state->children.push_back(StateNode(state, move, difference));
+		StateNode snode = StateNode(state, move, difference);
+			state->children.push_back(snode);
 		return true;
 	}
 	else return false;
@@ -392,8 +399,8 @@ StateNode::StateNode(unsigned char* node_buffer){
 
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
-  return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
-  //print out opposite of what turn says, because we want the player who made the move resulting in this gamestate
+	return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
+	//print out opposite of what turn says, because we want the player who made the move resulting in this gamestate
 }
 
 bool StateNode::operator==(const StateNode& node) {
