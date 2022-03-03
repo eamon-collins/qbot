@@ -16,6 +16,7 @@ void Game::run_game(){
 	}
 }
 
+
 //recursive function for building the state tree
 void build_tree(StateNode* currState, int depth, std::time_t starttime){
 	std::time_t time = std::time(0) - starttime;

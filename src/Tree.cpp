@@ -18,6 +18,8 @@ bool debugs = true;
 
 int fenceRows = 2*NUMROWS - 1;
 
+using std::vector;
+using std::rand;
 //attempts to evaluate the score of a gamestate
 //note that when a gamenode is created from other gamestates, its score is initialized as the 
 //difference between players' shortest path to respective goals. Do not call evaluate()
@@ -57,70 +59,12 @@ int StateNode::prune_children(){
 
 //generates all valid moves from this state, places them in this->children, and evaluates them.
 int StateNode::generate_valid_children(){
-	Player currPlayer;
-	Player otherPlayer;
-	if (this->turn){
-		currPlayer = this->p1;
-		otherPlayer = this->p2;
-	}
-	else {
-		currPlayer = this->p2;
-		otherPlayer = this->p1;
-	}
+	std::vector<Move> vmoves;
+	generate_valid_moves(vmoves);
 
-	std::vector<std::tuple<Move, int>> vmoves;
-	
-
-	//PAWN MOVES
-	//check up/down
-	for(int i = -1; i < 2; i+=2){
-		if(currPlayer.row +i >= 0 && currPlayer.row +i < NUMROWS && !this->gamestate[2*currPlayer.row + i][currPlayer.col] && (otherPlayer.row != currPlayer.row +i || otherPlayer.col != currPlayer.col))
-			test_and_add_move( this, Move('p',currPlayer.row+i, currPlayer.col, false));
-		else if(otherPlayer.row == currPlayer.row +i && otherPlayer.col == currPlayer.col && !this->gamestate[2*currPlayer.row + i][currPlayer.col]){
-			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col])//jump the other player
-				test_and_add_move( this, Move('p', currPlayer.row+2*i, currPlayer.col, false));
-			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
-				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
-					test_and_add_move( this, Move('p', currPlayer.row+i, currPlayer.col+1, false));
-				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left
-					test_and_add_move( this, Move('p', currPlayer.row+i, currPlayer.col-1, false));
-			}
-		}
+	for(auto it=vmoves.begin(); it != vmoves.end(); it++){
+		test_and_add_move(this, *it);
 	}
-	//check left/right
-	for(int i = -1; i < 2; i+=2){
-		if(currPlayer.col +i >= 0 && currPlayer.col +i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)] && (otherPlayer.col != currPlayer.col +i || otherPlayer.row != currPlayer.row))
-			test_and_add_move( this, Move('p',currPlayer.row, currPlayer.col+i, false));
-		else if(otherPlayer.row == currPlayer.row && otherPlayer.col == currPlayer.col+i && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)]){
-			if(currPlayer.col+2*i >= 0 && currPlayer.col+2*i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)])//jump the other player
-				test_and_add_move( this, Move('p', currPlayer.row, currPlayer.col+2*i, false));
-			else if(this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)]){ //if other player has wall behind them
-				if (currPlayer.row-1 >= 0 && !this->gamestate[2*currPlayer.row -1 ][currPlayer.col+i]) //up
-					test_and_add_move( this, Move('p', currPlayer.row-1, currPlayer.col+i, false));
-				if (currPlayer.row+1 < NUMROWS && !this->gamestate[2*currPlayer.row + 1][currPlayer.col+i]) //down
-					test_and_add_move( this, Move('p', currPlayer.row+1, currPlayer.col+i, false));
-			}
-		}
-	}
-
-	
-	//FENCE MOVES
-	//need to check for intersecting fences, actually might already do that
-	if(currPlayer.numFences > 0){
-		for (int i = 0; i < 2*NUMROWS-2; i++){
-			for (int j=0; j < NUMCOLS-1; j++){
-				bool horizontal = false;
-				if(i %2 == 1){
-					horizontal = true;
-					if ((!this->gamestate[i-1][j] || !this->gamestate[i+1][j]) && !this->gamestate[i][j] && !this->gamestate[i][j+1])
-						test_and_add_move( this, Move('f', i, j, horizontal));
-				}else if((!this->gamestate[i+1][j] || !this->gamestate[i+1][j+1]) && !this->gamestate[i][j] && !this->gamestate[i+2][j]){
-					test_and_add_move( this, Move('f', i, j, horizontal));
-				}
-			}
-		} 
-	}
-
 
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
@@ -140,6 +84,101 @@ int StateNode::generate_valid_children(){
 	return this->children.size();
 }
 
+//
+void StateNode::generate_random_child()
+{
+	Player currPlayer;
+	Player otherPlayer;
+	if (this->turn){
+		currPlayer = this->p1;
+		otherPlayer = this->p2;
+	}
+	else {
+		currPlayer = this->p2;
+		otherPlayer = this->p1;
+	}
+	float chance_to_choose_fence = currPlayer.numFences > 0 ? .3 : 0;
+
+	vector<Move> vmoves;
+	int numFences = generate_valid_moves(vmoves);
+	float random = rand();
+	if( random > chance_to_choose_fence){
+		random = rand() % (vmoves.size()-numFences);
+		test_and_add_move(this, vmoves[random]);
+	}else{
+		random = rand() % numFences;
+		test_and_add_move(this, vmoves[vmoves.size()-numFences+random]);
+	}
+}
+
+int StateNode::generate_valid_moves(vector<Move>& vmoves){
+	Player currPlayer;
+	Player otherPlayer;
+	if (this->turn){
+		currPlayer = this->p1;
+		otherPlayer = this->p2;
+	}
+	else {
+		currPlayer = this->p2;
+		otherPlayer = this->p1;
+	}
+
+	//PAWN MOVES
+	//check up/down
+	for(int i = -1; i < 2; i+=2){
+		if(currPlayer.row +i >= 0 && currPlayer.row +i < NUMROWS && !this->gamestate[2*currPlayer.row + i][currPlayer.col] && (otherPlayer.row != currPlayer.row +i || otherPlayer.col != currPlayer.col))
+			vmoves.push_back(Move('p',currPlayer.row+i, currPlayer.col, false));
+		else if(otherPlayer.row == currPlayer.row +i && otherPlayer.col == currPlayer.col && !this->gamestate[2*currPlayer.row + i][currPlayer.col]){
+			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col])//jump the other player
+				vmoves.push_back(Move('p', currPlayer.row+2*i, currPlayer.col, false));
+			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
+				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
+					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col+1, false));
+				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left
+					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col-1, false));
+			}
+		}
+	}
+	//check left/right
+	for(int i = -1; i < 2; i+=2){
+		if(currPlayer.col +i >= 0 && currPlayer.col +i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)] && (otherPlayer.col != currPlayer.col +i || otherPlayer.row != currPlayer.row))
+			vmoves.push_back(Move('p',currPlayer.row, currPlayer.col+i, false));
+		else if(otherPlayer.row == currPlayer.row && otherPlayer.col == currPlayer.col+i && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 0 : -1)]){
+			if(currPlayer.col+2*i >= 0 && currPlayer.col+2*i < NUMCOLS && !this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)])//jump the other player
+				vmoves.push_back(Move('p', currPlayer.row, currPlayer.col+2*i, false));
+			else if(this->gamestate[2*currPlayer.row][currPlayer.col + (i==1 ? 1 : -2)]){ //if other player has wall behind them
+				if (currPlayer.row-1 >= 0 && !this->gamestate[2*currPlayer.row -1 ][currPlayer.col+i]) //up
+					vmoves.push_back(Move('p', currPlayer.row-1, currPlayer.col+i, false));
+				if (currPlayer.row+1 < NUMROWS && !this->gamestate[2*currPlayer.row + 1][currPlayer.col+i]) //down
+					vmoves.push_back(Move('p', currPlayer.row+1, currPlayer.col+i, false));
+			}
+		}
+	}
+
+	
+	//FENCE MOVES
+	//need to check for intersecting fences, actually might already do that
+	int fenceMoves;
+	if(currPlayer.numFences > 0){
+		for (int i = 0; i < 2*NUMROWS-2; i++){
+			for (int j=0; j < NUMCOLS-1; j++){
+				bool horizontal = false;
+				if(i %2 == 1){
+					horizontal = true;
+					if ((!this->gamestate[i-1][j] || !this->gamestate[i+1][j]) && !this->gamestate[i][j] && !this->gamestate[i][j+1]){
+						vmoves.push_back(Move('f', i, j, horizontal));
+						fenceMoves++;
+					}
+				}else if((!this->gamestate[i+1][j] || !this->gamestate[i+1][j+1]) && !this->gamestate[i][j] && !this->gamestate[i+2][j]){
+					vmoves.push_back(Move('f', i, j, horizontal));
+					fenceMoves++;
+				}
+			}
+		} 
+	}
+
+	return fenceMoves;
+}
 
 //play the game out from the current state with random moves and return winner and score
 //later maybe test trying a couple close to bottom of the tree and averaging. Not canonical though?
