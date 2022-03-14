@@ -11,6 +11,7 @@ Functions for building/managing the state-tree
 #include <tuple>
 #include <stack>
 #include <bitset>
+#include <thread>
 
 bool debugs = true;
 
@@ -20,45 +21,79 @@ int fenceRows = 2*NUMROWS - 1;
 
 using std::vector;
 using std::rand;
-//attempts to evaluate the score of a gamestate
-//note that when a gamenode is created from other gamestates, its score is initialized as the 
-//difference between players' shortest path to respective goals. Do not call evaluate()
-//on the same node more than once to avoid problems.
-void StateNode::evaluate(){
-	Player currPlayer;
-	Player otherPlayer;
-	if (this->turn){
-		currPlayer = this->p1;
-		otherPlayer = this->p2;
+using std::thread;
+
+
+
+//finds a move in the set time limit.
+//at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
+//compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
+Move StateNode::get_best_move(){
+	vector<Move> vmoves;
+	this->generate_valid_moves(vmoves);
+
+	
+	StateNode* root = this;		
+	//copying node so can generate trees in parallel.
+	//might be expensive to copy if we are handed a precomputed tree
+	vector<thread> workers;
+	vector<StateNode> copies;
+	for (int i = 0; i < NUM_THREADS; i++){
+		copies.push_back(std::copy(*this));
+		thread t = thread(best_move_worker, i, &copies[i]);
+		workers.push_back(t);
 	}
-	else {
-		currPlayer = this->p2;
-		otherPlayer = this->p1;
+
+	for (auto it : workers){
+		it.join();
 	}
 
+	return Move();
 
-	double distanceCoeff, fenceCoeff, fence2Coeff = 1.0;
 
-	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
 }
 
+void best_move_worker(int id, StateNode* root){
+	//may get passed a precomputed tree from opponents thinking time, or just a leaf node.
+	if (root->children.size() == 0)
+		root->generate_valid_children();
 
-//DANGEROUS: deque will not preserve pointer validity when things are erased.
-//best solution is probably to filter moves in generate stage so we don't need pruning like this.
-int StateNode::prune_children(){
-	int dist_threshold = 1;
-	int count = 0;
-	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
-	for(std::deque<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
-			if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
-				it = this->children.erase(it);
-				count++;
+	StateNode* curr = root;
+	//SELECTION
+	while(curr->children.size() != 0){
+		vector<StateNode*> max_list;
+		double max_ucb = 0;
+		//find highest UCB in group, random if tied
+		for (int i = 0; i < curr->children.size(); i++){
+			StateNode* currChild = &(curr->children[i]);
+			if (max_ucb <= currChild->UCB()){
+				if (max_ucb != currChild->UCB())
+					max_list.clear();
+				
+				max_list.push_back(currChild);
 			}
-			else
-				++it;
+		}
+
+		int index = rand() % max_list.size();
+		curr = max_list[index];
 	}
-	return count;
+
+	//we have reached a leaf node.
+	//EXPANSION stage begins
+	//expand the node fully so it's not a leaf, and choose one of the new children for simulation
+	if (curr->generate_valid_children() == 0){
+		std::cout << "No valid children during playout";
+		return;
+	}
+
+	//SIMULATION/BACKPROPAGATION stage begins
+	int index = rand() % curr->children.size();	
+	//after playing out, score all the way up should be updated accordingly.
+	//this means we can immediately delete them.
+	curr->children[index].play_out();
+	curr->children[index].children.clear();
 }
+
 
 //generates all valid moves from this state, places them in this->children, and evaluates them.
 int StateNode::generate_valid_children(){
@@ -73,12 +108,6 @@ int StateNode::generate_valid_children(){
 	if (this->children.size() == 0){
 		printf("EMPTY CHILDREN VECTOR");
 		return 0;
-	}
-
-	//evaluate all child moves now
-	for (std::deque<StateNode>::iterator it = this->children.begin();
-			it != this->children.end(); it++){
-			it->evaluate();
 	}
 
 	//here this->children should be list of all states created by valid moves.
@@ -256,43 +285,8 @@ double StateNode::UCB(){
 	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
 }
 
-//finds a move in the set time limit.
-//at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
-//compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
-Move StateNode::get_best_move(){
 
-	//SELECTION
-	StateNode* curr = this;
-	vector<Move> vmoves;
-	curr->generate_valid_moves(vmoves);
-
-	while(curr->children.size() != 0){
-		vector<StateNode*> max_list;
-		double max_ucb = 0;
-		//find highest UCB in group, random if tied
-		for (int i = 0; i < curr->children.size(); i++){
-			StateNode* currChild = &(curr->children[i]);
-			if (max_ucb <= currChild->UCB()){
-				if (max_ucb != currChild->UCB())
-					max_list.clear();
-				
-				max_list.push_back(currChild);
-			}
-		}
-
-		int index = rand() % max_list.size();
-		curr = max_list[index];
-	}
-
-	//we have reached a leaf node.
-	//SIMULATION stage begins
-	curr->generate_valid_children();
-	int index = rand() % curr->children.size();
-	curr->children[index].play_out();
-
-}
-
-//deeply problematic
+//deeply problematic, not used anywhere atm
 //passes around references to objects in vector, but we are guaranteed that the vector is not resizing 
 //during an update_vi pass
 void StateNode::update_vi(){
@@ -326,17 +320,57 @@ void StateNode::update_vi(){
 	}
 }
 
-
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
 bool test_and_add_move(StateNode* state, Move move){
 	int difference = pathfinding(state, move);
 	if (difference != -999){
 		StateNode snode = StateNode(state, move, difference);
-			state->children.push_back(snode);
+		//snode.evaluate(); //perhaps should just let score be set as difference
+		state->children.push_back(snode);
 		return true;
 	}
 	else return false;
+}
+
+//attempts to evaluate the score of a gamestate
+//note that when a gamenode is created from other gamestates, its score is initialized as the 
+//difference between players' shortest path to respective goals. Do not call evaluate()
+//on the same node more than once to avoid problems.
+void StateNode::evaluate(){
+	Player currPlayer;
+	Player otherPlayer;
+	if (this->turn){
+		currPlayer = this->p1;
+		otherPlayer = this->p2;
+	}
+	else {
+		currPlayer = this->p2;
+		otherPlayer = this->p1;
+	}
+
+
+	double distanceCoeff, fenceCoeff, fence2Coeff = 1.0;
+
+	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
+}
+
+
+//DANGEROUS: deque will not preserve pointer validity when things are erased.
+//best solution is probably to filter moves in generate stage so we don't need pruning like this.
+int StateNode::prune_children(){
+	int dist_threshold = 1;
+	int count = 0;
+	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
+	for(std::deque<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
+			if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
+				it = this->children.erase(it);
+				count++;
+			}
+			else
+				++it;
+	}
+	return count;
 }
 
 //used to create the root node, starting gamestate.
@@ -346,6 +380,7 @@ StateNode::StateNode(bool turn){
 	this->ply = 0;
 	this->visits = 1; //have to initialize to 1 to not divide by 0
 	this->serial_type = '0';
+	this->score = 1; //I think this should be nonzero to start
 
 	// //THIS IS FOR TESTING READ/WRITE, take out later
 	// this->score = .54321;

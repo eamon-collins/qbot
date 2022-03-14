@@ -53,6 +53,7 @@ public:
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
 	StateNode(unsigned char* node_buffer);
 	//StateNode(const StateNode& rhs);
+	StateNode(StateNode &&) = default;
 
 	bool operator==(const StateNode& node);
 
@@ -75,3 +76,4 @@ public:
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode
 bool test_and_add_move( StateNode* state, Move move); //helps testing validity and also beginning scoring before state fully initialized.
+void best_move_worker(int id, StateNode* root);
