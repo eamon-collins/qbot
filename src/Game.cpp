@@ -8,13 +8,23 @@ void Game::run_game(){
 	std::time_t time = std::time(0);
 	bool gameOver = false;
 
+	StateNode* currState = this->root;
+	currState->generate_valid_children();
+	//build_tree(currState, depth, time);
+
+
 	while(!gameOver){
-		StateNode* currState = this->root;
-		build_tree(currState, depth, time);
+		if(currState->turn){
+			Move next_move = currState->get_best_move();
+			//std::cout << next_move;
+		} else {
+
+		}
 
 		gameOver = true;
 	}
 }
+
 
 
 //recursive function for building the state tree
@@ -27,7 +37,7 @@ void build_tree(StateNode* currState, int depth, std::time_t starttime){
 	currState->generate_valid_children();
 
 	//removes moves I don't think are good
-	currState->prune_children();
+	//currState->prune_children();
 
 	std::deque<StateNode>::iterator it;
 	for (it = currState->children.begin(); it != currState->children.end(); it++) {

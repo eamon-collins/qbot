@@ -60,8 +60,9 @@ public:
 	void evaluate(); //attempts to score a specific gamestate
 	int generate_valid_children(); //returns number of valid children generated
 	int generate_valid_moves(std::vector<Move>& vmoves); //returns number of fence moves at end of vector
-	void generate_random_child(); //generates a single child and places it in children[]. Can this be more permissive of "valid" states (ie consider all possible states?)
+	int generate_random_child(); //generates a single child and places it in children[]. Can this be more permissive of "valid" states (ie consider all possible states?)
 	bool is_valid_move(Move move); //checks whether the resulting gamestate from a certain move is legal or not
+	Move get_best_move();
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state

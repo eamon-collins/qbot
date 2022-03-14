@@ -42,6 +42,9 @@ void StateNode::evaluate(){
 	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
 }
 
+
+//DANGEROUS: deque will not preserve pointer validity when things are erased.
+//best solution is probably to filter moves in generate stage so we don't need pruning like this.
 int StateNode::prune_children(){
 	int dist_threshold = 1;
 	int count = 0;
@@ -85,7 +88,7 @@ int StateNode::generate_valid_children(){
 }
 
 //
-void StateNode::generate_random_child()
+int StateNode::generate_random_child()
 {
 	Player currPlayer;
 	Player otherPlayer;
@@ -97,18 +100,33 @@ void StateNode::generate_random_child()
 		currPlayer = this->p2;
 		otherPlayer = this->p1;
 	}
+	//THIS MAY NEED TO BE MODIFIED, maybe adjusted according to other metrics?
 	float chance_to_choose_fence = currPlayer.numFences > 0 ? .3 : 0;
 
 	vector<Move> vmoves;
-	int numFences = generate_valid_moves(vmoves);
-	float random = rand();
-	if( random > chance_to_choose_fence){
-		random = rand() % (vmoves.size()-numFences);
-		test_and_add_move(this, vmoves[random]);
-	}else{
-		random = rand() % numFences;
-		test_and_add_move(this, vmoves[vmoves.size()-numFences+random]);
+	int numFenceMoves = generate_valid_moves(vmoves);
+	if (vmoves.size() == 0)
+		return 0;
+
+	float random;
+	int rand_index = 0;
+	bool valid_move = false;
+	while(!valid_move && vmoves.size() != 0) {
+		random = rand();
+		if( random > chance_to_choose_fence){
+			rand_index = rand() % (vmoves.size()-numFenceMoves);
+			valid_move = test_and_add_move(this, vmoves[random]);
+		}else{//choose a fence move, relies on fences being at back of the vector
+			rand_index = rand() % numFenceMoves;
+			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+random]);
+		}
+
+		//remove invalid moves so no infinite loop
+		if(!valid_move)
+			vmoves.erase(vmoves.begin() + random);
 	}
+
+	return vmoves.size();
 }
 
 int StateNode::generate_valid_moves(vector<Move>& vmoves){
@@ -190,18 +208,23 @@ StateNode* StateNode::play_out(){
 
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		if (currState->children.size() == 0)
-			numChildren = currState->generate_valid_children();
+			numChildren = currState->generate_random_child();
 		else
 			numChildren = currState->children.size();
 
-		if (numChildren != 0) 
+		if ( numChildren == 1){
+			currState = &(currState->children.front());
+		}
+		else if (numChildren != 0){
 			choice = rand() % numChildren;
+			std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
+			currState = &(*it);
+		}
 		else {
 			printf("No valid children during playout");
 			break;
 		}
-		std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
-		currState = &(*it);
+
 		currState->print_node();
 	}
 
@@ -229,7 +252,44 @@ StateNode* StateNode::play_out(){
 }
 
 double StateNode::UCB(){
-	return this->vi + 2* sqrt(log(this->visits) / this->parent->visits);
+	//return this->vi + 2* sqrt(log(this->parent->visits) / this->visits);
+	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
+}
+
+//finds a move in the set time limit.
+//at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
+//compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
+Move StateNode::get_best_move(){
+
+	//SELECTION
+	StateNode* curr = this;
+	vector<Move> vmoves;
+	curr->generate_valid_moves(vmoves);
+
+	while(curr->children.size() != 0){
+		vector<StateNode*> max_list;
+		double max_ucb = 0;
+		//find highest UCB in group, random if tied
+		for (int i = 0; i < curr->children.size(); i++){
+			StateNode* currChild = &(curr->children[i]);
+			if (max_ucb <= currChild->UCB()){
+				if (max_ucb != currChild->UCB())
+					max_list.clear();
+				
+				max_list.push_back(currChild);
+			}
+		}
+
+		int index = rand() % max_list.size();
+		curr = max_list[index];
+	}
+
+	//we have reached a leaf node.
+	//SIMULATION stage begins
+	curr->generate_valid_children();
+	int index = rand() % curr->children.size();
+	curr->children[index].play_out();
+
 }
 
 //deeply problematic
@@ -284,14 +344,14 @@ StateNode::StateNode(bool turn){
 	this->parent = nullptr;
 	this->turn = turn;
 	this->ply = 0;
-	this->visits = 0;
+	this->visits = 1; //have to initialize to 1 to not divide by 0
 	this->serial_type = '0';
 
-	//THIS IS FOR TESTING READ/WRITE, take out later
-	this->score = .54321;
-	this->vi = .987654321;
-	this->visits = 12121;
-	this->ply = 699;
+	// //THIS IS FOR TESTING READ/WRITE, take out later
+	// this->score = .54321;
+	// this->vi = .987654321;
+	// this->visits = 12121;
+	// this->ply = 699;
 
 	this->p1.row = NUMROWS - 1;
 	this->p1.col = NUMCOLS/2;
@@ -350,7 +410,7 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->move = move;
 	this->parent = parent;
 	this->score = score;
-	this->visits = 0;
+	this->visits = 1;
 	this->ply = parent->ply + 1;
 } 
 
