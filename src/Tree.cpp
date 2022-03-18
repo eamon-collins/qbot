@@ -35,17 +35,17 @@ Move StateNode::get_best_move(){
 	
 	StateNode* root = this;		
 	//copying node so can generate trees in parallel.
-	//might be expensive to copy if we are handed a precomputed tree
+	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
 	for (int i = 0; i < NUM_THREADS; i++){
-		copies.push_back(std::copy(*this));
+		copies.push_back(*root);
 		thread t = thread(best_move_worker, i, &copies[i]);
-		workers.push_back(t);
+		workers.push_back(std::move(t));
 	}
 
-	for (auto it : workers){
-		it.join();
+	for (auto it = workers.begin(); it != workers.end(); it++){
+		it->join();
 	}
 
 	return Move();
@@ -448,6 +448,21 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->visits = 1;
 	this->ply = parent->ply + 1;
 } 
+
+/*StateNode::StateNode(StateNode& rhs){
+	parent = rhs.parent;
+	children = rhs.children;
+	move = rhs.move;
+	p1 = rhs.p1;
+	p2 = rhs.p2;
+	turn = rhs.turn;
+	memcpy(gamestate, rhs.gamestate, fenceRows*NUMCOLS * sizeof(bool));
+	score = rhs.score;
+	vi = rhs.vi;
+	visits = rhs.visits;
+	ply = rhs.ply;
+	serial_type = rhs.serial_type;
+}*/
 
 //used to create new nodes directly from the database character string representation
 StateNode::StateNode(unsigned char* node_buffer){

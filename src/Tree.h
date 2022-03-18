@@ -53,7 +53,7 @@ public:
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
 	StateNode(unsigned char* node_buffer);
 	//StateNode(const StateNode& rhs);
-	StateNode(StateNode &&) = default;
+	StateNode(const StateNode &rhs) = default;
 
 	bool operator==(const StateNode& node);
 
