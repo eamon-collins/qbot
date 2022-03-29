@@ -28,6 +28,9 @@ int main(int argc, char *argv[]){
 		break;
 	}
 
+	//seeds random number generation with time in seconds
+	std::srand(std::time(0));
+
 	StateNode* root;
 	if(player == 2)
 		root = new StateNode(false); //inits starting gamestate

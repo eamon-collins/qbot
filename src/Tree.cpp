@@ -58,40 +58,46 @@ void best_move_worker(int id, StateNode* root){
 	if (root->children.size() == 0)
 		root->generate_valid_children();
 
-	StateNode* curr = root;
-	//SELECTION
-	while(curr->children.size() != 0){
-		vector<StateNode*> max_list;
-		double max_ucb = 0;
-		//find highest UCB in group, random if tied
-		for (int i = 0; i < curr->children.size(); i++){
-			StateNode* currChild = &(curr->children[i]);
-			if (max_ucb <= currChild->UCB()){
-				if (max_ucb != currChild->UCB())
-					max_list.clear();
-				
-				max_list.push_back(currChild);
+	StateNode* curr;
+
+	std::time_t start_time = std::time(0);
+	while( std::time(0) - start_time < MAXTIME){
+		curr = root;
+		//SELECTION
+		while(curr->children.size() != 0){
+			vector<StateNode*> max_list;
+			double max_ucb = 0;
+			//find highest UCB in group, random if tied
+			for (int i = 0; i < curr->children.size(); i++){
+				StateNode* currChild = &(curr->children[i]);
+				if (max_ucb <= currChild->UCB()){
+					if (max_ucb != currChild->UCB())
+						max_list.clear();
+					
+					max_list.push_back(currChild);
+				}
 			}
+
+			int index = rand() % max_list.size();
+			curr = max_list[index];
 		}
 
-		int index = rand() % max_list.size();
-		curr = max_list[index];
+		//we have reached a leaf node.
+		//EXPANSION stage begins
+		//expand the node fully so it's not a leaf, and choose one of the new children for simulation
+		if (curr->generate_valid_children() == 0){
+			std::cout << "No valid children during playout";
+			return;
+		}
+
+		//SIMULATION/BACKPROPAGATION stage begins
+		int index = rand() % curr->children.size();	
+		//after playing out, score all the way up should be updated accordingly.
+		//this means we can immediately delete them.
+		curr->children[index].play_out();
+		curr->children[index].children.clear();
 	}
 
-	//we have reached a leaf node.
-	//EXPANSION stage begins
-	//expand the node fully so it's not a leaf, and choose one of the new children for simulation
-	if (curr->generate_valid_children() == 0){
-		std::cout << "No valid children during playout";
-		return;
-	}
-
-	//SIMULATION/BACKPROPAGATION stage begins
-	int index = rand() % curr->children.size();	
-	//after playing out, score all the way up should be updated accordingly.
-	//this means we can immediately delete them.
-	curr->children[index].play_out();
-	curr->children[index].children.clear();
 }
 
 
@@ -141,13 +147,13 @@ int StateNode::generate_random_child()
 	int rand_index = 0;
 	bool valid_move = false;
 	while(!valid_move && vmoves.size() != 0) {
-		random = rand();
+		random = (float)rand() / RAND_MAX;
 		if( random > chance_to_choose_fence){
 			rand_index = rand() % (vmoves.size()-numFenceMoves);
-			valid_move = test_and_add_move(this, vmoves[random]);
+			valid_move = test_and_add_move(this, vmoves[rand_index]);
 		}else{//choose a fence move, relies on fences being at back of the vector
 			rand_index = rand() % numFenceMoves;
-			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+random]);
+			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
 		}
 
 		//remove invalid moves so no infinite loop
@@ -205,7 +211,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	
 	//FENCE MOVES
 	//need to check for intersecting fences, actually might already do that
-	int fenceMoves;
+	int fenceMoves = 0;
 	if(currPlayer.numFences > 0){
 		for (int i = 0; i < 2*NUMROWS-2; i++){
 			for (int j=0; j < NUMCOLS-1; j++){
