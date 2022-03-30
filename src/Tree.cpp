@@ -38,15 +38,17 @@ Move StateNode::get_best_move(){
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
-	for (int i = 0; i < NUM_THREADS; i++){
-		copies.push_back(*root);
-		thread t = thread(best_move_worker, i, &copies[i]);
-		workers.push_back(std::move(t));
-	}
+	// for (int i = 0; i < NUM_THREADS; i++){
+	// 	copies.push_back(*root);
+	// 	thread t = thread(best_move_worker, i, &copies[i]);
+	// 	workers.push_back(std::move(t));
+	// }
 
-	for (auto it = workers.begin(); it != workers.end(); it++){
-		it->join();
-	}
+	// for (auto it = workers.begin(); it != workers.end(); it++){
+	// 	it->join();
+	// }
+	//FOR TESTING< SINGLE THREAD ONLY
+	best_move_worker(1, root);
 
 	return Move();
 
@@ -67,7 +69,7 @@ void best_move_worker(int id, StateNode* root){
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
 			double max_ucb = 0;
-			//find highest UCB in group, random if tied
+			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
 				if (max_ucb <= currChild->UCB()){
@@ -147,13 +149,21 @@ int StateNode::generate_random_child()
 	int rand_index = 0;
 	bool valid_move = false;
 	while(!valid_move && vmoves.size() != 0) {
+		if (vmoves.size() == numFenceMoves){
+			cout << currPlayer.col << ","<<currPlayer.row <<std::flush;
+			return 0;
+		}
 		random = (float)rand() / RAND_MAX;
 		if( random > chance_to_choose_fence){
+
+
 			rand_index = rand() % (vmoves.size()-numFenceMoves);
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
 		}else{//choose a fence move, relies on fences being at back of the vector
 			rand_index = rand() % numFenceMoves;
 			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
+			if (valid_move)
+				numFenceMoves--;
 		}
 
 		//remove invalid moves so no infinite loop
@@ -161,7 +171,7 @@ int StateNode::generate_random_child()
 			vmoves.erase(vmoves.begin() + random);
 	}
 
-	return vmoves.size();
+	return this->children.size();
 }
 
 int StateNode::generate_valid_moves(vector<Move>& vmoves){
@@ -253,10 +263,11 @@ StateNode* StateNode::play_out(){
 		else if (numChildren != 0){
 			choice = rand() % numChildren;
 			std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
-			currState = &(*it);
+			//currState = &(*it);
+			currState = &(currState->children[choice]);
 		}
 		else {
-			printf("No valid children during playout");
+			printf("No valid children during playout, or no valid pawn moves");
 			break;
 		}
 
@@ -421,6 +432,7 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 
 	//copies gamestate from parent, then we have to modify 
 	memcpy(this->gamestate, parent->gamestate, fenceRows*NUMCOLS * sizeof(bool));
+	//this->gamestate = parent->gamestate;
 
 	//if they moved a pawn
 	if (move.type == 'p'){

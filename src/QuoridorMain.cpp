@@ -52,12 +52,12 @@ int main(int argc, char *argv[]){
 	//uses generate_children and prune_children to generate state tree of moves from current root
 	game.run_game();
 
-	auto arbitrary = game.root->children.begin();
-	std::advance(arbitrary,3);
-	int numChildren = arbitrary->children.size();
+	// auto arbitrary = game.root->children.begin();
+	// std::advance(arbitrary,3);
+	// int numChildren = arbitrary->children.size();
 
 
-	std::cout << numChildren <<"\n";
+	// std::cout << numChildren <<"\n";
 
 
 	// int seclevel;
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]){
 	// 	if (seclevel >4)
 	// 		std::cout << arbitrary->children[i];
 	// }
-	std::cout << arbitrary->children.front().children.size() << "\n";
+	//std::cout << arbitrary->children.front().children.size() << "\n";
 
 	std::cout << "ROOT before save\n";
 	root->print_node();
