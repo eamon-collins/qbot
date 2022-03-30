@@ -12,3 +12,4 @@ int fill_move( unsigned char ch[], int offset, Move m);
 int fill_gamestate( unsigned char ch[], int offset, bool gamestate[][NUMCOLS], bool turn);
 
 void print_buffer(unsigned char* node_buffer);
+void output_tree_stats(StateNode* root);

@@ -51,6 +51,26 @@ int save_tree(StateNode* root, std::string database_name){
 	return nodes_written;
 }
 
+void output_tree_stats(StateNode* root){
+	//simple, iterative, preorder depth first iteration
+	std::stack<StateNode*> tree_stack;
+	tree_stack.push(root);
+	StateNode* curr;
+	int num_nodes = 0;
+	while (!tree_stack.empty()){
+		curr = tree_stack.top();
+		tree_stack.pop();
+		num_nodes++;
+
+		std::deque<StateNode>::iterator it;
+		for (it = curr->children.begin(); it != curr->children.end(); it++) {
+			tree_stack.push(&(*it));
+		}
+	}
+	
+	std::cout << "Num nodes: " << num_nodes;
+}
+
 StateNode* load_tree(std::string database_name){
 	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 	std::filesystem::path p{database_name.c_str()};
@@ -155,7 +175,7 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 	offset = fill_move(ch, offset, node->move);
 	offset = fill_player(ch, offset, node->p1);
 	offset = fill_player(ch, offset, node->p2);
-	if (node->parent == nullptr) std::cout << offset << " ";
+	//if (node->parent == nullptr) std::cout << offset << " ";
 	offset = fill_gamestate(ch, offset, node->gamestate, node->turn);
 
 	//this is root
@@ -176,7 +196,7 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 	stream3 << std::fixed << std::setprecision(7) << node->visits;
 	//stream4 << std::fixed << std::setprecision(3) << node->ply;
 	
-	if (node->parent==nullptr) std::cout << stream.rdbuf() << " " << stream2.rdbuf() << " " << stream3.rdbuf() << "\n";
+	//if (node->parent==nullptr) std::cout << stream.rdbuf() << " " << stream2.rdbuf() << " " << stream3.rdbuf() << "\n";
 	memcpy(&ch[offset], &stream.str().c_str()[2], 8);
 	memcpy(&ch[offset + 7], &stream2.str().c_str()[2], 7);
 	//memcpy(&ch[offset + 14], &stream3.str().c_str()[0], 7);

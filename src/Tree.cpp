@@ -68,14 +68,15 @@ void best_move_worker(int id, StateNode* root){
 		//SELECTION
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
-			double max_ucb = 0;
+			double max_ucb = 0, curr_ucb = 0;
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
-				if (max_ucb <= currChild->UCB()){
-					if (max_ucb != currChild->UCB())
+				curr_ucb = currChild->UCB();
+				if (max_ucb <= curr_ucb){
+					if (max_ucb != curr_ucb)
 						max_list.clear();
-					
+					max_ucb = curr_ucb;
 					max_list.push_back(currChild);
 				}
 			}
@@ -99,6 +100,25 @@ void best_move_worker(int id, StateNode* root){
 		curr->children[index].play_out();
 		curr->children[index].children.clear();
 	}
+
+	//find best UCB so far for root's direct children
+	vector<StateNode*> max_list;
+	double max_ucb = 0, curr_ucb = 0;
+	//find highest UCB in group, random if tied, important to be able to break ties
+	for (int i = 0; i < root->children.size(); i++){
+		StateNode* currChild = &(root->children[i]);
+		curr_ucb = currChild->UCB();
+		if (max_ucb <= curr_ucb){
+			if (max_ucb != curr_ucb)
+				max_list.clear();
+			max_ucb = curr_ucb;
+			max_list.push_back(currChild);
+		}
+	}
+
+	int index = rand() % max_list.size();
+	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
+	output_tree_stats(root);
 
 }
 
@@ -150,13 +170,11 @@ int StateNode::generate_random_child()
 	bool valid_move = false;
 	while(!valid_move && vmoves.size() != 0) {
 		if (vmoves.size() == numFenceMoves){
-			cout << currPlayer.col << ","<<currPlayer.row <<std::flush;
+			cout << currPlayer.col << ","<<currPlayer.row << "\n" <<std::flush;
 			return 0;
 		}
 		random = (float)rand() / RAND_MAX;
 		if( random > chance_to_choose_fence){
-
-
 			rand_index = rand() % (vmoves.size()-numFenceMoves);
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
 		}else{//choose a fence move, relies on fences being at back of the vector
@@ -267,11 +285,11 @@ StateNode* StateNode::play_out(){
 			currState = &(currState->children[choice]);
 		}
 		else {
-			printf("No valid children during playout, or no valid pawn moves");
+			printf("No valid children during playout, or no valid pawn moves\n");
 			break;
 		}
 
-		currState->print_node();
+		//currState->print_node();
 	}
 
 	//now that we have an end state check who wins and backpropagate that info
@@ -603,4 +621,8 @@ void StateNode::print_node(){
 	}
 	std::cout << "\n\n";
 	
+}
+
+std::ostream& operator<<(std::ostream& os, const Move& m){
+	return os << m.type << (m.type == 'f' ? (m.horizontal ? " horizontal " : " vertical ") : " ") << m.row << "," << m.col;
 }

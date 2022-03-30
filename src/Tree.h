@@ -28,6 +28,8 @@ typedef struct Move{
 	Move(){
 		this->type = 'u'; //default created, signifies unset, possibly root
 	}
+
+	friend std::ostream& operator<<(std::ostream& os, const Move& m);
 } Move;
 
 class StateNode

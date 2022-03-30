@@ -9,8 +9,8 @@ void Game::run_game(){
 	bool gameOver = false;
 
 	StateNode* currState = this->root;
-	currState->generate_valid_children();
-	//build_tree(currState, depth, time);
+	//currState->generate_valid_children();
+	build_tree(currState, depth, time);
 
 
 	while(!gameOver){
