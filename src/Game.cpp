@@ -10,7 +10,7 @@ void Game::run_game(){
 
 	StateNode* currState = this->root;
 	//currState->generate_valid_children();
-	build_tree(currState, depth, time);
+	//build_tree(currState, depth, time);
 
 
 	while(!gameOver){

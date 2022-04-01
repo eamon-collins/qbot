@@ -29,30 +29,24 @@ using std::thread;
 //at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
 Move StateNode::get_best_move(){
-	vector<Move> vmoves;
-	this->generate_valid_moves(vmoves);
 
-	
 	StateNode* root = this;		
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
-	// for (int i = 0; i < NUM_THREADS; i++){
-	// 	copies.push_back(*root);
-	// 	thread t = thread(best_move_worker, i, &copies[i]);
-	// 	workers.push_back(std::move(t));
-	// }
+	for (int i = 0; i < NUM_THREADS; i++){
+		copies.push_back(*root);
+		workers.push_back(thread(best_move_worker, i, &copies[i]));
+	}
 
-	// for (auto it = workers.begin(); it != workers.end(); it++){
-	// 	it->join();
-	// }
+	for (auto it = workers.begin(); it != workers.end(); it++){
+		it->join();
+	}
 	//FOR TESTING< SINGLE THREAD ONLY
-	best_move_worker(1, root);
+	//best_move_worker(1, root);
 
 	return Move();
-
-
 }
 
 void best_move_worker(int id, StateNode* root){
@@ -118,7 +112,7 @@ void best_move_worker(int id, StateNode* root){
 
 	int index = rand() % max_list.size();
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
-	output_tree_stats(root);
+	//output_tree_stats(root);
 
 }
 
@@ -310,7 +304,7 @@ StateNode* StateNode::play_out(){
 		currState = currState->parent;
 	}
 	currState->score += scoreModifier;
-	currState->visits += 1; //propagate to root
+	currState->visits += 1; //propagate to root MIGHT BE BAD IDEA
 
 	return winState;
 }
@@ -360,9 +354,9 @@ void StateNode::update_vi(){
 bool test_and_add_move(StateNode* state, Move move){
 	int difference = pathfinding(state, move);
 	if (difference != -999){
-		StateNode snode = StateNode(state, move, difference);
+		//StateNode snode = StateNode(state, move, difference);
 		//snode.evaluate(); //perhaps should just let score be set as difference
-		state->children.push_back(snode);
+		state->children.push_back(StateNode(state, move, difference));
 		return true;
 	}
 	else return false;

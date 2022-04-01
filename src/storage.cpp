@@ -51,6 +51,7 @@ int save_tree(StateNode* root, std::string database_name){
 	return nodes_written;
 }
 
+//POSSIBLE CIRCULAR reference here, fix.
 void output_tree_stats(StateNode* root){
 	//simple, iterative, preorder depth first iteration
 	std::stack<StateNode*> tree_stack;
@@ -68,7 +69,7 @@ void output_tree_stats(StateNode* root){
 		}
 	}
 	
-	std::cout << "Num nodes: " << num_nodes;
+	std::cout << "Num nodes: " << num_nodes <<"\n";
 }
 
 StateNode* load_tree(std::string database_name){
