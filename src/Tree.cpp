@@ -35,8 +35,13 @@ Move StateNode::get_best_move(){
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
+	copies.reserve(NUM_THREADS); //necessary so addresses change out from under threads.
 	for (int i = 0; i < NUM_THREADS; i++){
+		//copy constructor takes care of deep copying/parent pointer of internal nodes,
+		//just need to set root to nullptr so it knows it's a root node for the relevant subtree
 		copies.push_back(*root);
+		copies[i].parent = nullptr;
+		copies[i].fix_parent_references();
 		workers.push_back(thread(best_move_worker, i, &copies[i]));
 	}
 
@@ -48,6 +53,16 @@ Move StateNode::get_best_move(){
 
 	return Move();
 }
+
+void StateNode::fix_parent_references() {
+	if (children.size() == 0)
+		return;
+	for (auto it = children.begin(); it != children.end(); it++){
+		it->parent = this;
+		it->fix_parent_references();
+	}
+}
+
 
 void best_move_worker(int id, StateNode* root){
 	//may get passed a precomputed tree from opponents thinking time, or just a leaf node.
@@ -357,6 +372,7 @@ bool test_and_add_move(StateNode* state, Move move){
 		//StateNode snode = StateNode(state, move, difference);
 		//snode.evaluate(); //perhaps should just let score be set as difference
 		state->children.push_back(StateNode(state, move, difference));
+		state->children.back().parent = state;
 		return true;
 	}
 	else return false;
@@ -435,6 +451,19 @@ StateNode::StateNode(bool turn){
 	// gamestate[0][4] = true;
 	// gamestate[17][4] = true;
 }
+
+//copy constructor, should create a deep copy of the subtree inclusive of the passed in root
+// StateNode::StateNode(const StateNode &s) :
+// 	move(s.move), p1(s.p1), p2(s.p2), turn(s.turn), score(s.score), vi(s.vi), visits(s.visits),
+// 	ply(s.ply), serial_type(s.serial_type)
+// {
+// 	memcpy(this->gamestate, s.gamestate, fenceRows*NUMCOLS * sizeof(bool));
+
+// 	for (int i = 0; i < s.children.size(); i ++){
+// 		children.push_back(s.children[i]);
+// 		children[i].parent = this;
+// 	}
+// }
 
 //do not use this method directly, use as part of generate_valid_children after the move has been verified as valid
 StateNode::StateNode(StateNode* parent, Move move, int score){

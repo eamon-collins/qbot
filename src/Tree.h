@@ -54,8 +54,9 @@ public:
 	StateNode(bool turn); //should only be used to start a new game, all positions will be starting positions, p1 starts turn=true p2 starts turn=false
 	StateNode(StateNode* parent, Move move, int score); //generate a child node, with a reference to the parent and a the move that takes gamestate from parent->child
 	StateNode(unsigned char* node_buffer);
-	//StateNode(const StateNode& rhs);
+
 	StateNode(const StateNode &rhs) = default;
+	// StateNode(const StateNode &s);
 
 	bool operator==(const StateNode& node);
 
@@ -71,6 +72,7 @@ public:
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state
 	double UCB(); //simple 
 	void update_vi(); //calculates average score for every node under this one.
+	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
 
 
 	void print_node(); //printfs a representation of the gamestate at this node
