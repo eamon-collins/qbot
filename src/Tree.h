@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <vector>
 #include <iostream>
+#include <sstream>
 #include <deque>
 
 typedef struct Player{
@@ -12,7 +13,7 @@ typedef struct Player{
 	int numFences;
 } Player;
 
-//moves of type 'p' are indexed [9][9], moves of type 'f' are [17][9]
+//moves of type 'p' are indexed [9][9], moves of type 'f' are [17][8]
 typedef struct Move{
 	unsigned char type;
 	int row;
@@ -27,6 +28,24 @@ typedef struct Move{
 	}
 	Move(){
 		this->type = 'u'; //default created, signifies unset, possibly root
+	}
+	//this constructor and unique string pair help hash/unhash
+	Move(std::string s){
+		sscanf(&(s.c_str()[2]), "%d %d", &row, &col);
+		type = s.c_str()[0];
+		if (s.c_str()[1] == '1')
+			horizontal = true;
+	}
+	std::string unique_string(){
+		std::ostringstream s;
+		s << type << horizontal << row << " " << col;
+		return s.str();
+	}
+
+	bool operator==(const Move& m){
+		if (type == m.type && row == m.row && col == m.col && horizontal == m.horizontal)
+			return true;
+		return false;
 	}
 
 	friend std::ostream& operator<<(std::ostream& os, const Move& m);
@@ -73,6 +92,7 @@ public:
 	double UCB(); //simple 
 	void update_vi(); //calculates average score for every node under this one.
 	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
+	void visualize_gamestate();
 
 
 	void print_node(); //printfs a representation of the gamestate at this node
@@ -81,3 +101,43 @@ public:
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn); //print override for StateNode
 bool test_and_add_move( StateNode* state, Move move); //helps testing validity and also beginning scoring before state fully initialized.
 void best_move_worker(int id, StateNode* root);
+
+
+ 
+#if PY_VERSION_HEX >= 0x030800f0
+static inline void
+py3__Py_DECREF(const char *filename, int lineno, PyObject *op)
+{
+    (void)filename; /* may be unused, shut up -Wunused-parameter */
+    (void)lineno; /* may be unused, shut up -Wunused-parameter */
+    _Py_DEC_REFTOTAL;
+    if (--op->ob_refcnt != 0)
+    {
+#ifdef Py_REF_DEBUG
+	if (op->ob_refcnt < 0)
+	{
+	    _Py_NegativeRefcount(filename, lineno, op);
+	}
+#endif
+    }
+    else
+    {
+	_Py_Dealloc(op);
+    }
+}
+
+#undef Py_DECREF
+#define Py_DECREF(op) py3__Py_DECREF(__FILE__, __LINE__, _PyObject_CAST(op))
+
+    static inline void
+py3__Py_XDECREF(PyObject *op)
+{
+    if (op != NULL)
+    {
+	Py_DECREF(op);
+    }
+}
+
+#undef Py_XDECREF
+#define Py_XDECREF(op) py3__Py_XDECREF(_PyObject_CAST(op))
+#endif

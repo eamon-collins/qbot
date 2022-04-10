@@ -13,6 +13,11 @@ Functions for building/managing the state-tree
 #include <bitset>
 #include <thread>
 
+
+#include "Python.h"
+//#include "matplotlibcpp.h"
+
+
 bool debugs = true;
 
 //#include <cmath>
@@ -22,7 +27,10 @@ int fenceRows = 2*NUMROWS - 1;
 using std::vector;
 using std::rand;
 using std::thread;
+using std::unordered_map;
+using std::string;
 
+//namespace plt = matplotlibcpp;
 
 
 //finds a move in the set time limit.
@@ -48,21 +56,47 @@ Move StateNode::get_best_move(){
 	for (auto it = workers.begin(); it != workers.end(); it++){
 		it->join();
 	}
-	//FOR TESTING< SINGLE THREAD ONLY
-	//best_move_worker(1, root);
-
-	return Move();
-}
-
-void StateNode::fix_parent_references() {
-	if (children.size() == 0)
-		return;
-	for (auto it = children.begin(); it != children.end(); it++){
-		it->parent = this;
-		it->fix_parent_references();
+	
+	//gather consensus. Right now, we get the highest average UCB from each child of root.
+	unordered_map<string, std::pair<int, float>> scores;
+	for (auto copy : copies){
+		for (auto child : copy.children){
+			auto score = scores.find(child.move.unique_string());
+			if ( score != scores.end()){
+				score->second.first++;
+				score->second.second += child.UCB();
+			}else{
+				std::pair<int, float> s = {1,child.UCB()};
+				scores[child.move.unique_string()] = s;
+			}
+		}
 	}
-}
+	float best_avg_ucb = -1000;
+	Move best_move;
+	for (auto score : scores){
+		float avg_ucb = score.second.second / score.second.first;
+		//cout << Move(score.first) << " : " << score.second.second << " " << score.second.first << "\n";
+		if (avg_ucb > best_avg_ucb){
+			best_avg_ucb = avg_ucb;
+			best_move = Move(score.first);
+		}
+	}
+	//now with the best move, get the node of the best UCB example of that move from all the copies
+	StateNode* best_node;
+	float node_ucb = -1000;
+	for (auto copy : copies){
+		for (StateNode child : copy.children){
+			if (child.move == best_move && child.UCB() > node_ucb){
+				node_ucb = child.UCB();
+				best_node = &child;
+			}
+		}
+	}
 
+	cout << "FINAL RESULT: " << best_move << " with UCB: " << best_avg_ucb <<"\n";
+	best_node->visualize_gamestate();
+	return best_move;
+}
 
 void best_move_worker(int id, StateNode* root){
 	//may get passed a precomputed tree from opponents thinking time, or just a leaf node.
@@ -112,7 +146,7 @@ void best_move_worker(int id, StateNode* root){
 
 	//find best UCB so far for root's direct children
 	vector<StateNode*> max_list;
-	double max_ucb = 0, curr_ucb = 0;
+	double max_ucb = -1000, curr_ucb = 0;
 	//find highest UCB in group, random if tied, important to be able to break ties
 	for (int i = 0; i < root->children.size(); i++){
 		StateNode* currChild = &(root->children[i]);
@@ -127,7 +161,7 @@ void best_move_worker(int id, StateNode* root){
 
 	int index = rand() % max_list.size();
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
-	//output_tree_stats(root);
+	output_tree_stats(root);
 
 }
 
@@ -179,23 +213,24 @@ int StateNode::generate_random_child()
 	bool valid_move = false;
 	while(!valid_move && vmoves.size() != 0) {
 		if (vmoves.size() == numFenceMoves){
-			cout << currPlayer.col << ","<<currPlayer.row << "\n" <<std::flush;
+			cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
 			return 0;
 		}
 		random = (float)rand() / RAND_MAX;
 		if( random > chance_to_choose_fence){
 			rand_index = rand() % (vmoves.size()-numFenceMoves);
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
+			//remove invalid moves so no infinite loop
+			if(!valid_move)
+				vmoves.erase(vmoves.begin() + rand_index);
 		}else{//choose a fence move, relies on fences being at back of the vector
 			rand_index = rand() % numFenceMoves;
 			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
-			if (valid_move)
+			if (!valid_move){
+				vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
 				numFenceMoves--;
+			}
 		}
-
-		//remove invalid moves so no infinite loop
-		if(!valid_move)
-			vmoves.erase(vmoves.begin() + random);
 	}
 
 	return this->children.size();
@@ -249,10 +284,10 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	//FENCE MOVES
 	//need to check for intersecting fences, actually might already do that
 	int fenceMoves = 0;
+	bool horizontal = false;
 	if(currPlayer.numFences > 0){
 		for (int i = 0; i < 2*NUMROWS-2; i++){
 			for (int j=0; j < NUMCOLS-1; j++){
-				bool horizontal = false;
 				if(i %2 == 1){
 					horizontal = true;
 					if ((!this->gamestate[i-1][j] || !this->gamestate[i+1][j]) && !this->gamestate[i][j] && !this->gamestate[i][j+1]){
@@ -260,6 +295,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 						fenceMoves++;
 					}
 				}else if((!this->gamestate[i+1][j] || !this->gamestate[i+1][j+1]) && !this->gamestate[i][j] && !this->gamestate[i+2][j]){
+					horizontal = false;
 					vmoves.push_back(Move('f', i, j, horizontal));
 					fenceMoves++;
 				}
@@ -418,6 +454,15 @@ int StateNode::prune_children(){
 	return count;
 }
 
+void StateNode::fix_parent_references() {
+	if (children.size() == 0)
+		return;
+	for (auto it = children.begin(); it != children.end(); it++){
+		it->parent = this;
+		it->fix_parent_references();
+	}
+}
+
 //used to create the root node, starting gamestate.
 StateNode::StateNode(bool turn){	
 	this->parent = nullptr;
@@ -503,25 +548,10 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 	this->turn = !parent->turn;
 	this->move = move;
 	this->parent = parent;
-	this->score = score;
+	this->score = 0;
 	this->visits = 1;
 	this->ply = parent->ply + 1;
 } 
-
-/*StateNode::StateNode(StateNode& rhs){
-	parent = rhs.parent;
-	children = rhs.children;
-	move = rhs.move;
-	p1 = rhs.p1;
-	p2 = rhs.p2;
-	turn = rhs.turn;
-	memcpy(gamestate, rhs.gamestate, fenceRows*NUMCOLS * sizeof(bool));
-	score = rhs.score;
-	vi = rhs.vi;
-	visits = rhs.visits;
-	ply = rhs.ply;
-	serial_type = rhs.serial_type;
-}*/
 
 //used to create new nodes directly from the database character string representation
 StateNode::StateNode(unsigned char* node_buffer){
@@ -605,6 +635,98 @@ StateNode::StateNode(unsigned char* node_buffer){
 	this->serial_type = node_buffer[55];
 }
 
+//0 is empty square
+//1 is empty fence lane
+//2 is filled fence lane
+//3 is p1
+//4 is p2
+void StateNode::visualize_gamestate(){
+	std::vector<int> x, y;
+	std::vector<double> color;
+
+	const int EMPTY_TILE = 0;
+	const int EMPTY_FENCE = 1;
+	const int FILL_FENCE = 2;
+	const int PLAYER1 = 3;
+	const int PLAYER2 = 4;
+	int square_color;
+	for (int i = 0; i < 2*NUMROWS -1; i++){
+		for (int j = 0; j < 2*NUMCOLS -1; j++){
+			square_color = -1;
+			x.push_back(j);
+			y.push_back(i);
+			if(i % 2 == 0 && j % 2 == 0){
+				square_color = EMPTY_TILE;
+			}
+			else if (i % 2 == 1 && j % 2 == 1){
+				square_color = FILL_FENCE;
+			}else if (i % 2 != j % 2){
+				if (i % 2 == 0) // vertical fence
+					square_color = gamestate[2*NUMROWS-1 - i][j/2 + 1] ? FILL_FENCE : EMPTY_FENCE;
+				else
+					square_color = gamestate[2*NUMROWS-1 - i][j/2] ? FILL_FENCE : EMPTY_FENCE;
+			}
+			gamestate[p1.row*2][p1.col] = PLAYER1;
+			gamestate[p2.row*2][p2.col] = PLAYER2;
+
+			color.push_back(square_color);
+
+		}
+	}
+
+	// Set PYTHONPATH TO working directory
+	//setenv("PYTHONPATH",".",1);
+	PyObject *pName, *pModule, *pDict, *pFunc, *px, *py, *pcolor, *presult;
+
+	// Initialize the Python Interpreter
+	//Py_SetProgramName("visualization");
+	Py_Initialize();
+
+	// Build the name object
+	PyObject* sysPath = PySys_GetObject("path");
+	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
+	pName = PyUnicode_FromString("bot_integration");
+
+	// Load the module object
+	pModule = PyImport_Import(pName);
+
+	// pDict is a borrowed reference 
+	pDict = PyModule_GetDict(pModule);
+
+	// pFunc is also a borrowed reference 
+	pFunc = PyDict_GetItemString(pDict, "visualize_gamestate");
+
+	if (PyCallable_Check(pFunc))
+	{
+		int spots_in_map = (NUMCOLS*2-1)*(NUMROWS*2-1);
+		px=PyList_New(spots_in_map);
+		py=PyList_New(spots_in_map);
+		pcolor = PyList_New(spots_in_map);
+		for (int i =0; i < spots_in_map; i++){
+			PyList_SetItem(px, i, Py_BuildValue("i",x[i]));
+			PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
+			//PyList_SetItem(pcolor, i, PyFloat_FromDouble(color[i]));
+		}
+		PyErr_Print();
+		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, NULL);
+		PyErr_Print();
+	} else 
+	{
+		PyErr_Print();
+	}
+	//printf("Result is %d\n",PyInt_AsLong(presult));
+	Py_DECREF(px);
+
+	// Clean up
+	Py_DECREF(pModule);
+	Py_DECREF(pName);
+
+	// Finish the Python Interpreter
+	Py_Finalize();
+
+
+
+}
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
 	return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
