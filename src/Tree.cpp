@@ -641,7 +641,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 //3 is p1
 //4 is p2
 void StateNode::visualize_gamestate(){
-	std::vector<int> x, y;
+	std::vector<int> x, y, walls;
 	std::vector<double> color;
 
 	const int EMPTY_TILE = 0;
@@ -666,10 +666,16 @@ void StateNode::visualize_gamestate(){
 				else
 					square_color = gamestate[2*NUMROWS-1 - i][j/2] ? FILL_FENCE : EMPTY_FENCE;
 			}
-			gamestate[p1.row*2][p1.col] = PLAYER1;
-			gamestate[p2.row*2][p2.col] = PLAYER2;
+			// gamestate[p1.row*2][p1.col] = PLAYER1;
+			// gamestate[p2.row*2][p2.col] = PLAYER2;
 
 			color.push_back(square_color);
+
+		}
+	}
+
+	for (int i = 0; i < 2*NUMROWS-1; i++){
+		for (int j = 0; j < NUMCOLS; j++){
 
 		}
 	}
