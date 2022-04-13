@@ -9,7 +9,7 @@ def scatter(x, y, color):
 
 
 def main():
-	visualize_gamestate([],[])
+	visualize_gamestate([],[], None,None,None,None,None,None)
 
 
 if __name__ == "__main__":

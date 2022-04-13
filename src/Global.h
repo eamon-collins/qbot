@@ -11,7 +11,7 @@
 
 #define MAXDEPTH 3
 #define MAXTIME 5 //seconds it will take maximum building the state tree
-#define NUM_THREADS 2
+#define NUM_THREADS 1
 /* ex: if MAXDEPTH = 3 you have:
 	1		r
 			/\

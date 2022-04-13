@@ -86,7 +86,7 @@ Move StateNode::get_best_move(){
 	float node_ucb = -1000;
 	for (auto copy : copies){
 		for (StateNode child : copy.children){
-			if (child.move == best_move && child.UCB() > node_ucb){
+			if (child.move == best_move && child.UCB() >= node_ucb){
 				node_ucb = child.UCB();
 				best_node = &child;
 			}
@@ -649,34 +649,52 @@ void StateNode::visualize_gamestate(){
 	const int FILL_FENCE = 2;
 	const int PLAYER1 = 3;
 	const int PLAYER2 = 4;
-	int square_color;
-	for (int i = 0; i < 2*NUMROWS -1; i++){
-		for (int j = 0; j < 2*NUMCOLS -1; j++){
-			square_color = -1;
-			x.push_back(j);
-			y.push_back(i);
-			if(i % 2 == 0 && j % 2 == 0){
-				square_color = EMPTY_TILE;
-			}
-			else if (i % 2 == 1 && j % 2 == 1){
-				square_color = FILL_FENCE;
-			}else if (i % 2 != j % 2){
-				if (i % 2 == 0) // vertical fence
-					square_color = gamestate[2*NUMROWS-1 - i][j/2 + 1] ? FILL_FENCE : EMPTY_FENCE;
-				else
-					square_color = gamestate[2*NUMROWS-1 - i][j/2] ? FILL_FENCE : EMPTY_FENCE;
-			}
-			// gamestate[p1.row*2][p1.col] = PLAYER1;
-			// gamestate[p2.row*2][p2.col] = PLAYER2;
+	// int square_color;
+	// for (int i = 0; i < 2*NUMROWS -1; i++){
+	// 	for (int j = 0; j < 2*NUMCOLS -1; j++){
+	// 		square_color = -1;
+	// 		x.push_back(j);
+	// 		y.push_back(i);
+	// 		if(i % 2 == 0 && j % 2 == 0){
+	// 			square_color = EMPTY_TILE;
+	// 		}
+	// 		else if (i % 2 == 1 && j % 2 == 1){
+	// 			square_color = FILL_FENCE;
+	// 		}else if (i % 2 != j % 2){
+	// 			if (i % 2 == 0) // vertical fence
+	// 				square_color = gamestate[2*NUMROWS-1 - i][j/2 + 1] ? FILL_FENCE : EMPTY_FENCE;
+	// 			else
+	// 				square_color = gamestate[2*NUMROWS-1 - i][j/2] ? FILL_FENCE : EMPTY_FENCE;
+	// 		}
+	// 		// gamestate[p1.row*2][p1.col] = PLAYER1;
+	// 		// gamestate[p2.row*2][p2.col] = PLAYER2;
 
-			color.push_back(square_color);
+	// 		color.push_back(square_color);
 
-		}
-	}
-
+	// 	}
+	// }
+	//copy gamestate so we can remove walls as we add them to python list
+	bool copy_gamestate[2*NUMROWS - 1][NUMCOLS];
+	memcpy(copy_gamestate, this->gamestate, (2*NUMROWS-1)*NUMCOLS * sizeof(bool));
 	for (int i = 0; i < 2*NUMROWS-1; i++){
 		for (int j = 0; j < NUMCOLS; j++){
-
+			if (copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
+				if (j==8)
+					continue;
+				x.push_back(j);
+				x.push_back(j);
+				y.push_back(i/2);
+				y.push_back(i/2+1);
+				copy_gamestate[i][j] = false;
+				copy_gamestate[i+2][j] = false;
+			}else if (copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
+				x.push_back(j);
+				x.push_back(j+1);
+				y.push_back(i/2);
+				y.push_back(i/2);
+				copy_gamestate[i][j] = false;
+				copy_gamestate[i][j+1] = false;
+			}
 		}
 	}
 
@@ -704,17 +722,24 @@ void StateNode::visualize_gamestate(){
 
 	if (PyCallable_Check(pFunc))
 	{
-		int spots_in_map = (NUMCOLS*2-1)*(NUMROWS*2-1);
-		px=PyList_New(spots_in_map);
-		py=PyList_New(spots_in_map);
-		pcolor = PyList_New(spots_in_map);
-		for (int i =0; i < spots_in_map; i++){
+		int num_wall_coords = x.size();
+		px=PyList_New(num_wall_coords);
+		py=PyList_New(num_wall_coords);
+		for (int i =0; i < num_wall_coords; i++){
 			PyList_SetItem(px, i, Py_BuildValue("i",x[i]));
 			PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
-			//PyList_SetItem(pcolor, i, PyFloat_FromDouble(color[i]));
 		}
 		PyErr_Print();
-		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, NULL);
+		PyObject *p1w, *p1x, *p1y, *p2w, *p2x, *p2y;
+		p1w = Py_BuildValue("i", p1.numFences);
+		p2w = Py_BuildValue("i", p2.numFences);
+		p1x = Py_BuildValue("i", p1.col);
+		p1y = Py_BuildValue("i", p1.row);
+		p2x = Py_BuildValue("i", p2.col);
+		p2y = Py_BuildValue("i", p2.row);
+
+		//Actually call the method to visualize the gamestate.
+		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);
 		PyErr_Print();
 	} else 
 	{
@@ -722,6 +747,7 @@ void StateNode::visualize_gamestate(){
 	}
 	//printf("Result is %d\n",PyInt_AsLong(presult));
 	Py_DECREF(px);
+	Py_DECREF(py);
 
 	// Clean up
 	Py_DECREF(pModule);
