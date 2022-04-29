@@ -111,7 +111,6 @@ Py_Initialize();
 	cout << "FINAL RESULT: " << best_move << " with UCB: " << best_avg_ucb <<"\n";
 	// why does this segfault?
 	if (best_node != nullptr){
-		cout << best_node->move;
 		best_node->visualize_gamestate();
 	}else{
 		cout << "best_node is nullptr";
@@ -785,6 +784,14 @@ void StateNode::visualize_gamestate(){
 
 		//Actually call the method to visualize the gamestate.
 		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);
+		if (presult != NULL){
+			PyObject *bytes = PyUnicode_AsUTF8String(presult);
+			string retval = PyBytes_AsString(bytes);
+			Py_DECREF(bytes);
+			cout << "Intaking move: " << retval << "\n";
+			cout << "of type "<<Py_TYPE(presult)->tp_name;
+		}
+
 		Py_DECREF(p1w);
 		Py_DECREF(p1x);
 		Py_DECREF(p1y);
