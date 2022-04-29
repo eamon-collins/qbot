@@ -14,3 +14,17 @@ transferred over to all char, doesn't seem to have done a single thing tbh
 
 
 offsetting the gamestate chars by 33 is to avoid the bottom 33 slots of the ascii encoding, which is full of whitespace and other utility bs. just avoiding it all together is simply better. Maybe thing about doing +64 instead by bit operations, to make it quicker?
+
+
+
+
+
+
+
+
+scores are so similar, visits basically all 1, score is 0. what?
+
+
+OBSERVED ISSUES:
+printing best_node->move segfaults sometimes. Why?
+Once it added a 3-wall, with coordinates 2,7 2,8 and 3,7 3,8

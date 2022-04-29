@@ -35,10 +35,12 @@ typedef struct Move{
 		type = s.c_str()[0];
 		if (s.c_str()[1] == '1')
 			horizontal = true;
+		else 
+			horizontal = false;
 	}
 	std::string unique_string(){
 		std::ostringstream s;
-		s << type << horizontal << row << " " << col;
+		s << type << (horizontal ? "1" : "0") << row << " " << col;
 		return s.str();
 	}
 
@@ -89,7 +91,7 @@ public:
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state
-	double UCB(); //simple 
+	double UCB() const; //simple 
 	void update_vi(); //calculates average score for every node under this one.
 	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
 	void visualize_gamestate();

@@ -12,31 +12,35 @@ Functions for building/managing the state-tree
 #include <stack>
 #include <bitset>
 #include <thread>
+#include <mutex>
 
 
 #include "Python.h"
-//#include "matplotlibcpp.h"
 
 
 bool debugs = true;
-
-//#include <cmath>
 
 int fenceRows = 2*NUMROWS - 1;
 
 using std::vector;
 using std::rand;
 using std::thread;
+using std::mutex;
 using std::unordered_map;
 using std::string;
 
-//namespace plt = matplotlibcpp;
+mutex viz_mutex;
 
 
 //finds a move in the set time limit.
 //at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
 Move StateNode::get_best_move(){
+Py_Initialize();
+
+	// Build the name object
+	PyObject* sysPath = PySys_GetObject("path");
+	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
 
 	StateNode* root = this;		
 	//copying node so can generate trees in parallel.
@@ -59,42 +63,61 @@ Move StateNode::get_best_move(){
 	
 	//gather consensus. Right now, we get the highest average UCB from each child of root.
 	unordered_map<string, std::pair<int, float>> scores;
-	for (auto copy : copies){
-		for (auto child : copy.children){
+	for (auto &copy : copies){
+		for (auto &child : copy.children){
 			auto score = scores.find(child.move.unique_string());
+			//cout << child.UCB() << " : " << child.visits << "\n";
 			if ( score != scores.end()){
 				score->second.first++;
 				score->second.second += child.UCB();
 			}else{
 				std::pair<int, float> s = {1,child.UCB()};
 				scores[child.move.unique_string()] = s;
+				if (!(child.move == Move(child.move.unique_string())))
+					cout << child.move << "  string  " << child.move.unique_string() << " // " << Move(child.move.unique_string()) << "\n";
 			}
 		}
 	}
+	//selects move with best avg ucb across copies
+	//if multiple are tied, chooses among them at random
 	float best_avg_ucb = -1000;
+	vector<Move> best_moves;
 	Move best_move;
 	for (auto score : scores){
 		float avg_ucb = score.second.second / score.second.first;
-		//cout << Move(score.first) << " : " << score.second.second << " " << score.second.first << "\n";
-		if (avg_ucb > best_avg_ucb){
+		//cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
+		if (avg_ucb >= best_avg_ucb){
+			if (avg_ucb > best_avg_ucb)
+				best_moves.clear();
 			best_avg_ucb = avg_ucb;
-			best_move = Move(score.first);
+			best_moves.push_back(Move(score.first));
 		}
 	}
-	//now with the best move, get the node of the best UCB example of that move from all the copies
-	StateNode* best_node;
+	best_move = best_moves[rand() % best_moves.size()];
+	//now with the best move, get the node of the best UCB example of that move from across the copies
+	//maybe not finding bestnode is problem with horizontal bool, or with conversion
+	StateNode* best_node = nullptr;
 	float node_ucb = -1000;
-	for (auto copy : copies){
-		for (StateNode child : copy.children){
-			if (child.move == best_move && child.UCB() >= node_ucb){
+	for (auto &copy : copies){
+		for (StateNode &child : copy.children){
+			if (child.move == best_move && child.UCB() > node_ucb){
 				node_ucb = child.UCB();
 				best_node = &child;
+				break;
 			}
 		}
 	}
 
 	cout << "FINAL RESULT: " << best_move << " with UCB: " << best_avg_ucb <<"\n";
-	best_node->visualize_gamestate();
+	// why does this segfault?
+	if (best_node != nullptr){
+		cout << best_node->move;
+		best_node->visualize_gamestate();
+	}else{
+		cout << "best_node is nullptr";
+	}
+
+	Py_Finalize();
 	return best_move;
 }
 
@@ -133,7 +156,7 @@ void best_move_worker(int id, StateNode* root){
 		//expand the node fully so it's not a leaf, and choose one of the new children for simulation
 		if (curr->generate_valid_children() == 0){
 			std::cout << "No valid children during playout";
-			return;
+			continue;
 		}
 
 		//SIMULATION/BACKPROPAGATION stage begins
@@ -151,7 +174,7 @@ void best_move_worker(int id, StateNode* root){
 	for (int i = 0; i < root->children.size(); i++){
 		StateNode* currChild = &(root->children[i]);
 		curr_ucb = currChild->UCB();
-		if (max_ucb <= curr_ucb){
+		if (max_ucb < curr_ucb){
 			if (max_ucb != curr_ucb)
 				max_list.clear();
 			max_ucb = curr_ucb;
@@ -161,6 +184,7 @@ void best_move_worker(int id, StateNode* root){
 
 	int index = rand() % max_list.size();
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
+	max_list[index]->print_node();
 	output_tree_stats(root);
 
 }
@@ -312,7 +336,9 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 StateNode* StateNode::play_out(){
 	int numChildren;
 	int choice;
+	bool found_move = true;
 	StateNode* currState = this;
+
 
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		if (currState->children.size() == 0)
@@ -330,12 +356,16 @@ StateNode* StateNode::play_out(){
 			currState = &(currState->children[choice]);
 		}
 		else {
+			//currState->visualize_gamestate();
 			printf("No valid children during playout, or no valid pawn moves\n");
+			found_move = false;
 			break;
 		}
 
 		//currState->print_node();
 	}
+	// if (found_move)
+	// 	currState->visualize_gamestate();
 
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, 
@@ -360,7 +390,7 @@ StateNode* StateNode::play_out(){
 	return winState;
 }
 
-double StateNode::UCB(){
+double StateNode::UCB() const{
 	//return this->vi + 2* sqrt(log(this->parent->visits) / this->visits);
 	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
 }
@@ -640,6 +670,8 @@ StateNode::StateNode(unsigned char* node_buffer){
 //2 is filled fence lane
 //3 is p1
 //4 is p2
+//NEED A LOCK ON VISUALIZATION CAUSE PYTHON GIL WILL MESS YOU UP
+//SIMPLE MUTEX around pyinit and py end should do it.
 void StateNode::visualize_gamestate(){
 	std::vector<int> x, y, walls;
 	std::vector<double> color;
@@ -698,21 +730,30 @@ void StateNode::visualize_gamestate(){
 		}
 	}
 
+	//lock the visualization mutex so only one instance of python interpreter
+	viz_mutex.lock();
+
+
 	// Set PYTHONPATH TO working directory
 	//setenv("PYTHONPATH",".",1);
 	PyObject *pName, *pModule, *pDict, *pFunc, *px, *py, *pcolor, *presult;
 
 	// Initialize the Python Interpreter
 	//Py_SetProgramName("visualization");
-	Py_Initialize();
+	// Py_Initialize();
 
-	// Build the name object
-	PyObject* sysPath = PySys_GetObject("path");
-	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
+	// // Build the name object
+	// PyObject* sysPath = PySys_GetObject("path");
+	// PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
 	pName = PyUnicode_FromString("bot_integration");
 
 	// Load the module object
 	pModule = PyImport_Import(pName);
+	if (pModule == nullptr)
+	{
+	    PyErr_Print();
+	    std::exit(1);
+	}
 
 	// pDict is a borrowed reference 
 	pDict = PyModule_GetDict(pModule);
@@ -725,6 +766,10 @@ void StateNode::visualize_gamestate(){
 		int num_wall_coords = x.size();
 		px=PyList_New(num_wall_coords);
 		py=PyList_New(num_wall_coords);
+		if (num_wall_coords == 0){
+			PyList_SetItem(px, 0, Py_BuildValue("i",-1));
+			PyList_SetItem(py, 0, Py_BuildValue("i",-1));
+		}
 		for (int i =0; i < num_wall_coords; i++){
 			PyList_SetItem(px, i, Py_BuildValue("i",x[i]));
 			PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
@@ -740,22 +785,27 @@ void StateNode::visualize_gamestate(){
 
 		//Actually call the method to visualize the gamestate.
 		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);
+		Py_DECREF(p1w);
+		Py_DECREF(p1x);
+		Py_DECREF(p1y);
+		Py_DECREF(p2w);
+		Py_DECREF(p2x);
+		Py_DECREF(p2y);
 		PyErr_Print();
 	} else 
 	{
 		PyErr_Print();
 	}
-	//printf("Result is %d\n",PyInt_AsLong(presult));
+	// Clean up
 	Py_DECREF(px);
 	Py_DECREF(py);
-
-	// Clean up
 	Py_DECREF(pModule);
 	Py_DECREF(pName);
 
 	// Finish the Python Interpreter
-	Py_Finalize();
+	//Py_Finalize();
 
+	viz_mutex.unlock();
 
 
 }
