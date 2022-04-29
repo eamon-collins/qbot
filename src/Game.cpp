@@ -2,6 +2,9 @@
 #include "Global.h"
 #include "Game.h"
 
+#include "Python.h"
+
+
 
 void Game::run_game(){
 	int depth = 1;
@@ -12,17 +15,58 @@ void Game::run_game(){
 	//currState->generate_valid_children();
 	//build_tree(currState, depth, time);
 
+	//make it so all threads can use python interpreter. mutex to govern GIL
+	Py_Initialize();
+	// Build the name object
+	PyObject* sysPath = PySys_GetObject("path");
+	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
 
+	Move player_move;
+	std::string viz_retval;
 	while(!gameOver){
 		if(currState->turn){
-			Move next_move = currState->get_best_move();
-			//std::cout << next_move;
-		} else {
+			StateNode* next_state = currState->get_best_move();
+			if (next_state != nullptr){
+				viz_retval = next_state->visualize_gamestate();
+			}else{
+				std::cout << "best_node is nullptr";
+				return;
+			}
 
+			player_move = Move(viz_retval);
+			std::cout << player_move << "\n";
+
+			//find the move in the tree, create it if it doesn't exist yet.
+			bool move_exists = false;
+			for (auto &child : next_state->children){
+				if (player_move == child.move){
+					currState = &child;
+					move_exists = true;
+				}
+			}
+			if (!move_exists){
+				move_exists = test_and_add_move(next_state, player_move);
+				for (auto &child : next_state->children){
+					if (player_move == child.move){
+						currState = &child;
+					}
+				}
+			}
+
+			if (!move_exists){
+				std::cout << "Could not produce player move state\n";
+				return;
+			}
+		} else {
+			std::cout << "reached bad turn state\n";
+			return;
 		}
 
-		gameOver = true;
+
+		//gameOver = true;
 	}
+
+	Py_Finalize();
 }
 
 

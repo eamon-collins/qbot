@@ -35,13 +35,7 @@ mutex viz_mutex;
 //finds a move in the set time limit.
 //at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
-Move StateNode::get_best_move(){
-Py_Initialize();
-
-	// Build the name object
-	PyObject* sysPath = PySys_GetObject("path");
-	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
-
+StateNode* StateNode::get_best_move(){
 	StateNode* root = this;		
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
@@ -109,15 +103,8 @@ Py_Initialize();
 	}
 
 	cout << "FINAL RESULT: " << best_move << " with UCB: " << best_avg_ucb <<"\n";
-	// why does this segfault?
-	if (best_node != nullptr){
-		best_node->visualize_gamestate();
-	}else{
-		cout << "best_node is nullptr";
-	}
-
-	Py_Finalize();
-	return best_move;
+	
+	return best_node;
 }
 
 void best_move_worker(int id, StateNode* root){
@@ -671,7 +658,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 //4 is p2
 //NEED A LOCK ON VISUALIZATION CAUSE PYTHON GIL WILL MESS YOU UP
 //SIMPLE MUTEX around pyinit and py end should do it.
-void StateNode::visualize_gamestate(){
+string StateNode::visualize_gamestate(){
 	std::vector<int> x, y, walls;
 	std::vector<double> color;
 
@@ -736,7 +723,7 @@ void StateNode::visualize_gamestate(){
 	// Set PYTHONPATH TO working directory
 	//setenv("PYTHONPATH",".",1);
 	PyObject *pName, *pModule, *pDict, *pFunc, *px, *py, *pcolor, *presult;
-
+	string retval;
 	// Initialize the Python Interpreter
 	//Py_SetProgramName("visualization");
 	// Py_Initialize();
@@ -786,7 +773,7 @@ void StateNode::visualize_gamestate(){
 		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);
 		if (presult != NULL){
 			PyObject *bytes = PyUnicode_AsUTF8String(presult);
-			string retval = PyBytes_AsString(bytes);
+			retval = PyBytes_AsString(bytes);
 			Py_DECREF(bytes);
 			cout << "Intaking move: " << retval << "\n";
 			cout << "of type "<<Py_TYPE(presult)->tp_name;
@@ -814,7 +801,7 @@ void StateNode::visualize_gamestate(){
 
 	viz_mutex.unlock();
 
-
+	return retval;
 }
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
