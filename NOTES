@@ -28,3 +28,4 @@ scores are so similar, visits basically all 1, score is 0. what?
 OBSERVED ISSUES:
 Once it added a 3-wall, with coordinates 2,7 2,8 and 3,7 3,8
 sometimes it just hangs one of the threads
+No valid children during playout, or no valid pawn moves BANE OF PLAY

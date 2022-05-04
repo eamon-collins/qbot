@@ -170,7 +170,7 @@ void best_move_worker(int id, StateNode* root){
 
 	int index = rand() % max_list.size();
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
-	max_list[index]->print_node();
+	//max_list[index]->print_node();
 	output_tree_stats(root);
 
 }
@@ -223,7 +223,7 @@ int StateNode::generate_random_child()
 	bool valid_move = false;
 	while(!valid_move && vmoves.size() != 0) {
 		if (vmoves.size() == numFenceMoves){
-			cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
+			//cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
 			return 0;
 		}
 		random = (float)rand() / RAND_MAX;
@@ -343,7 +343,7 @@ StateNode* StateNode::play_out(){
 		}
 		else {
 			//currState->visualize_gamestate();
-			printf("No valid children during playout, or no valid pawn moves\n");
+			//printf("No valid children during playout, or no valid pawn moves\n");
 			found_move = false;
 			break;
 		}
@@ -699,17 +699,25 @@ string StateNode::visualize_gamestate(){
 			if (copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
 				if (j==8)
 					continue;
-				x.push_back(j);
-				x.push_back(j);
-				y.push_back(i/2);
-				y.push_back(i/2+1);
-				copy_gamestate[i][j] = false;
-				copy_gamestate[i+2][j] = false;
-			}else if (copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
+				// x.push_back(j);
+				// x.push_back(j);
+				// y.push_back(i/2);
+				// y.push_back(i/2+1);
 				x.push_back(j);
 				x.push_back(j+1);
 				y.push_back(i/2);
 				y.push_back(i/2);
+				copy_gamestate[i][j] = false;
+				copy_gamestate[i+2][j] = false;
+			}else if (copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
+				// x.push_back(j);
+				// x.push_back(j+1);
+				// y.push_back(i/2);
+				// y.push_back(i/2);
+				x.push_back(j);
+				x.push_back(j);
+				y.push_back(i/2);
+				y.push_back(i/2+1);
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i][j+1] = false;
 			}
