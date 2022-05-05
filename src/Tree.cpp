@@ -135,6 +135,7 @@ void best_move_worker(int id, StateNode* root){
 
 			int index = rand() % max_list.size();
 			curr = max_list[index];
+			cout << "-";
 		}
 
 		//we have reached a leaf node.
@@ -290,6 +291,17 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 		}
 	}
 
+	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
+	if (p1.numFences == 0 && p2.numFences == 0){
+		int difference;
+		for (Move &move : vmoves){
+			Move suggested_move = Move();
+			difference = pathfinding(this, move, suggested_move);
+			if (suggested_move.type == 'p')
+				
+		}
+	}
+
 	
 	//FENCE MOVES
 	//need to check for intersecting fences, actually might already do that
@@ -325,10 +337,11 @@ StateNode* StateNode::play_out(){
 	bool found_move = true;
 	StateNode* currState = this;
 
-
+	std::time_t start_time = std::time(0);
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
 		if (currState->children.size() == 0)
 			numChildren = currState->generate_random_child();
+			
 		else
 			numChildren = currState->children.size();
 
@@ -347,7 +360,13 @@ StateNode* StateNode::play_out(){
 			found_move = false;
 			break;
 		}
-
+		
+		if( std::time(0) - start_time > 4){
+			cout <<"VISUALIZING BROKEN";
+			currState->visualize_gamestate();
+			currState->parent->visualize_gamestate();
+			break;
+		}
 		//currState->print_node();
 	}
 	// if (found_move)
@@ -381,45 +400,11 @@ double StateNode::UCB() const{
 	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
 }
 
-
-//deeply problematic, not used anywhere atm
-//passes around references to objects in vector, but we are guaranteed that the vector is not resizing 
-//during an update_vi pass
-void StateNode::update_vi(){
-	std::stack<StateNode*> s;
-	StateNode* root = this;
-	int count=0;
-	while(root != nullptr || s.size() > 0){
-		if (root != nullptr){
-			s.push(root);
-
-			if (root->children.size() >= 1)
-				root = &(root->children.front());
-			else
-				root = nullptr;
-
-		}
-
-		StateNode* curr = s.top();
-		s.pop();
-		//traverse 
-		count += curr->visits;
-
-		// while (s.size() > 0 && curr->childrenIndex ==  
-	//               s.top()->children.size() - 1) 
-	//       { 
-	//           curr = s.top(); 
-	//           s.pop(); 
-							
-	//           //traverse
-	//       } 
-	}
-}
-
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
 bool test_and_add_move(StateNode* state, Move move){
-	int difference = pathfinding(state, move);
+	Move suggested_move = Move();
+	int difference = pathfinding(state, move, suggested_move);
 	if (difference != -999){
 		//StateNode snode = StateNode(state, move, difference);
 		//snode.evaluate(); //perhaps should just let score be set as difference

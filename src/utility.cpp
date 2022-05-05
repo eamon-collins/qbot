@@ -21,7 +21,7 @@ int l1_f_p(Move move1,  Player player) {
  		return std::abs(move1.row - player.row) + std::abs(move1.col - player.col);
 }
 
-int pathfinding(StateNode* state, Move move){
+int pathfinding(StateNode* state, Move move, Move& pawn_move){
 	
 	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
 	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
@@ -45,11 +45,16 @@ int pathfinding(StateNode* state, Move move){
 
 
 	std::map<Pos, SearchMapItem> search_map;
+	std::vector<SMII> found;
 
 	MakeMap(gamestate, true, search_map); //fills search_map for player1
-	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map);
+	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map, found);
 	if (pathLength == -1){ //
 		return -999;
+	}else if(state->turn){
+		pawn_move.type = 'p';
+		pawn_move.row = found[0].first.y / 2;
+		pawn_move.col = found[0].first.x / 2;
 	}
 
 	//all that needs to be different for player 2 is the bottom row is the goal, then we can reuse the search_map
@@ -57,12 +62,17 @@ int pathfinding(StateNode* state, Move move){
 		search_map[Pos(0,i)].goal = false;
 		search_map[Pos(2*NUMROWS-1,i)].goal = true;
 	}
-
+	found.clear();
 
 	//MakeMap(gamestate, false, search_map); //for player2 
-	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map);
-	if (p2pathLength == -1) //
+	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map, found);
+	if (p2pathLength == -1){ 
 		return -999;
+	}else if(!state->turn){ //player2 turn
+		pawn_move.type = 'p';
+		pawn_move.row = found[0].first.y / 2;
+		pawn_move.col = found[0].first.x / 2;
+	}
 
 	int score = p2pathLength/2 - pathLength/2;
 
@@ -172,7 +182,7 @@ Dir other(Dir d)
     }
 }
 
-typedef std::map<Pos,SearchMapItem>::iterator SMII;
+
 
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map)
 {
@@ -253,10 +263,10 @@ void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem
 
 }
 
-int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map)
+int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map, std::vector<SMII> found)
 {
 
-    std::vector<SMII> found;
+    //std::vector<SMII> found;
 
     {
         SMII smii = search_map.find(start);

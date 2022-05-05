@@ -47,6 +47,8 @@ struct SearchMapItem
     bool paths[d_end];
 };
 
+typedef std::map<Pos,SearchMapItem>::iterator SMII;
+
 bool valid(Pos p);
 
 
@@ -57,11 +59,11 @@ int l1_f_p(Move move1,  Player p1);
 
 
 //checks shortest path of each pawn to goal to make sure a proposed move is valid, but also returns p2pathlength-p1pathlength in move.row to help with scoring
-int pathfinding(StateNode* state, Move move);
+int pathfinding(StateNode* state, Move move, Move &pawn_move);
 
 //pathfinding helpers
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
 //returns length of the shortest path or -1 if there is no path
-int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map);
+int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map, std::vector<SMII> found);
 
 void fill_int(char ch[], int integer, int num_digits);
