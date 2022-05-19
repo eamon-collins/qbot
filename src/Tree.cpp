@@ -298,7 +298,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 			Move suggested_move = Move();
 			difference = pathfinding(this, move, suggested_move);
 			if (suggested_move.type == 'p')
-				
+				cout << "only viable pawn move: " << suggested_move <<"\n";
 		}
 	}
 
@@ -363,8 +363,10 @@ StateNode* StateNode::play_out(){
 		
 		if( std::time(0) - start_time > 4){
 			cout <<"VISUALIZING BROKEN";
+			currState->print_node();
+			cout << std::flush;
 			currState->visualize_gamestate();
-			currState->parent->visualize_gamestate();
+			//currState->parent->visualize_gamestate();
 			break;
 		}
 		//currState->print_node();
@@ -681,7 +683,7 @@ string StateNode::visualize_gamestate(){
 	memcpy(copy_gamestate, this->gamestate, (2*NUMROWS-1)*NUMCOLS * sizeof(bool));
 	for (int i = 0; i < 2*NUMROWS-1; i++){
 		for (int j = 0; j < NUMCOLS; j++){
-			if (copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
+			if (i % 2 == 0 && copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
 				if (j==8)
 					continue;
 				// x.push_back(j);
@@ -694,7 +696,7 @@ string StateNode::visualize_gamestate(){
 				y.push_back(i/2);
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i+2][j] = false;
-			}else if (copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
+			}else if (i % 2 == 1 && copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
 				// x.push_back(j);
 				// x.push_back(j+1);
 				// y.push_back(i/2);

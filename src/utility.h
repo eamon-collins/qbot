@@ -64,6 +64,6 @@ int pathfinding(StateNode* state, Move move, Move &pawn_move);
 //pathfinding helpers
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
 //returns length of the shortest path or -1 if there is no path
-int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map, std::vector<SMII> found);
+int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map, std::vector<SMII>& found);
 
 void fill_int(char ch[], int integer, int num_digits);

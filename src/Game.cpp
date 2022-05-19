@@ -27,6 +27,7 @@ void Game::run_game(){
 		if(currState->turn){
 			StateNode* next_state = currState->get_best_move();
 			if (next_state != nullptr){
+				next_state->print_node();
 				viz_retval = next_state->visualize_gamestate();
 			}else{
 				std::cout << "best_node is nullptr";

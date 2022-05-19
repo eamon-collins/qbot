@@ -51,10 +51,10 @@ int pathfinding(StateNode* state, Move move, Move& pawn_move){
 	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map, found);
 	if (pathLength == -1){ //
 		return -999;
-	}else if(state->turn){
+	}else if(state->turn && !found.empty()){
 		pawn_move.type = 'p';
-		pawn_move.row = found[0].first.y / 2;
-		pawn_move.col = found[0].first.x / 2;
+		pawn_move.row = found[0]->first.y / 2;
+		pawn_move.col = found[0]->first.x / 2;
 	}
 
 	//all that needs to be different for player 2 is the bottom row is the goal, then we can reuse the search_map
@@ -68,10 +68,10 @@ int pathfinding(StateNode* state, Move move, Move& pawn_move){
 	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map, found);
 	if (p2pathLength == -1){ 
 		return -999;
-	}else if(!state->turn){ //player2 turn
+	}else if(!state->turn && !found.empty()){ //player2 turn
 		pawn_move.type = 'p';
-		pawn_move.row = found[0].first.y / 2;
-		pawn_move.col = found[0].first.x / 2;
+		pawn_move.row = found[0]->first.y / 2;
+		pawn_move.col = found[0]->first.x / 2;
 	}
 
 	int score = p2pathLength/2 - pathLength/2;
@@ -263,7 +263,8 @@ void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem
 
 }
 
-int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map, std::vector<SMII> found)
+//places path in found
+int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map, std::vector<SMII>& found)
 {
 
     //std::vector<SMII> found;
