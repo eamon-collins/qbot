@@ -30,3 +30,5 @@ Once it added a 3-wall, with coordinates 2,7 2,8 and 3,7 3,8
 sometimes it just hangs one of the threads
 No valid children during playout, or no valid pawn moves BANE OF PLAY
 I've seen walls move around, probably if click isn't valid
+
+probably shouldnt do pathfinding for each necessary pawn move, once fences are out we can just pathfind once and return the list of best moves and just determine the distance and see who wins.

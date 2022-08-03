@@ -259,6 +259,18 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 		otherPlayer = this->p1;
 	}
 
+	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
+	if (p1.numFences == 0 && p2.numFences == 0){
+		int difference;
+		vector<Move> myTurnMoves, theirTurnMoves;
+		difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		if (this->turn)
+			vmoves.push_back(myTurnMoves[0]);
+		else
+			vmoves.push_back(theirTurnMoves[0]);
+		return 0;
+	}
+
 	//PAWN MOVES
 	//check up/down
 	for(int i = -1; i < 2; i+=2){
@@ -288,17 +300,6 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 				if (currPlayer.row+1 < NUMROWS && !this->gamestate[2*currPlayer.row + 1][currPlayer.col+i]) //down
 					vmoves.push_back(Move('p', currPlayer.row+1, currPlayer.col+i, false));
 			}
-		}
-	}
-
-	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
-	if (p1.numFences == 0 && p2.numFences == 0){
-		int difference;
-		for (Move &move : vmoves){
-			Move suggested_move = Move();
-			difference = pathfinding(this, move, suggested_move);
-			if (suggested_move.type == 'p')
-				cout << "only viable pawn move: " << suggested_move <<"\n";
 		}
 	}
 
@@ -336,9 +337,18 @@ StateNode* StateNode::play_out(){
 	int choice;
 	bool found_move = true;
 	StateNode* currState = this;
+	int scoreModifier;
 
 	std::time_t start_time = std::time(0);
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
+
+		//if there are no more fences this game is over
+		if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
+			scoreModifier = pathfinding(currState, currState->move );
+			cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
+			break;
+		}
+
 		if (currState->children.size() == 0)
 			numChildren = currState->generate_random_child();
 			
@@ -362,7 +372,7 @@ StateNode* StateNode::play_out(){
 		}
 		
 		if( std::time(0) - start_time > 4){
-			cout <<"VISUALIZING BROKEN";
+			cout <<"VISUALIZING BROKEN STATE";
 			currState->print_node();
 			cout << std::flush;
 			currState->visualize_gamestate();
@@ -377,21 +387,23 @@ StateNode* StateNode::play_out(){
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, 
 	//so the further they are from the end the better the game
-	int scoreModifier;
-	if (currState->p1.row == 0){
-		scoreModifier = NUMROWS - currState->p2.row;
-	}else{
-		scoreModifier = -currState->p1.row - 1;
+	if (scoreModifier == 0){
+		if (currState->p1.row == 0){
+			scoreModifier = NUMROWS - currState->p2.row;
+		}else{
+			scoreModifier = -currState->p1.row - 1;
+		}
 	}
 
 	StateNode* winState = currState;
-
+	int negation = currState->turn ? 1 : -1;
 	while (currState->parent != nullptr){
-		currState->score += scoreModifier;
+		currState->score += negation * scoreModifier;
 		currState->visits += 1;
 		currState = currState->parent;
+		negation = currState->turn ? 1 : -1;
 	}
-	currState->score += scoreModifier;
+	currState->score += negation * scoreModifier;
 	currState->visits += 1; //propagate to root MIGHT BE BAD IDEA
 
 	return winState;
@@ -405,8 +417,10 @@ double StateNode::UCB() const{
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
 bool test_and_add_move(StateNode* state, Move move){
-	Move suggested_move = Move();
-	int difference = pathfinding(state, move, suggested_move);
+	
+	int difference;
+	if (move.type == 'f')
+		difference = pathfinding(state, move);
 	if (difference != -999){
 		//StateNode snode = StateNode(state, move, difference);
 		//snode.evaluate(); //perhaps should just let score be set as difference

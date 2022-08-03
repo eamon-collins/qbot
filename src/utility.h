@@ -59,7 +59,8 @@ int l1_f_p(Move move1,  Player p1);
 
 
 //checks shortest path of each pawn to goal to make sure a proposed move is valid, but also returns p2pathlength-p1pathlength in move.row to help with scoring
-int pathfinding(StateNode* state, Move move, Move &pawn_move);
+int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> p2Moves);
+int pathfinding(StateNode* state, Move move);
 
 //pathfinding helpers
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
