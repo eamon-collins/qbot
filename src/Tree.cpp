@@ -120,7 +120,7 @@ void best_move_worker(int id, StateNode* root){
 		//SELECTION
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
-			double max_ucb = 0, curr_ucb = 0;
+			double max_ucb = -1000, curr_ucb = 0;
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
@@ -365,7 +365,7 @@ StateNode* StateNode::play_out(){
 			currState = &(currState->children[choice]);
 		}
 		else {
-			//currState->visualize_gamestate();
+			//currState->state();
 			//printf("No valid children during playout, or no valid pawn moves\n");
 			found_move = false;
 			break;

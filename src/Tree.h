@@ -6,6 +6,9 @@
 #include <iostream>
 #include <sstream>
 #include <deque>
+#include <memory>
+
+using std::shared_ptr;
 
 typedef struct Player{
 	int row;
@@ -57,7 +60,7 @@ class StateNode
 {
 public:
 	std::deque<StateNode> children;
-	StateNode* parent = nullptr;
+	shared_ptr<StateNode> parent = nullptr;
 
 	
 	Move move; //the move directly prior to this state

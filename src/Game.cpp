@@ -45,7 +45,9 @@ void Game::run_game(){
 					move_exists = true;
 				}
 			}
+			//Need to look at whether this produces an actually valid move chain
 			if (!move_exists){
+				std::cout << "Move doesn't exist, producing new one" << std::endl;
 				move_exists = test_and_add_move(next_state, player_move);
 				for (auto &child : next_state->children){
 					if (player_move == child.move){
