@@ -11,7 +11,7 @@ void Game::run_game(){
 	std::time_t time = std::time(0);
 	bool gameOver = false;
 
-	StateNode* currState = this->root;
+	shared_ptr<StateNode> currState = this->root;
 	//currState->generate_valid_children();
 	//build_tree(currState, depth, time);
 
@@ -25,7 +25,7 @@ void Game::run_game(){
 	std::string viz_retval;
 	while(!gameOver){
 		if(currState->turn){
-			StateNode* next_state = currState->get_best_move();
+			shared_ptr<StateNode> next_state = currState->get_best_move();
 			if (next_state != nullptr){
 				next_state->print_node();
 				viz_retval = next_state->visualize_gamestate();
@@ -41,7 +41,7 @@ void Game::run_game(){
 			bool move_exists = false;
 			for (auto &child : next_state->children){
 				if (player_move == child.move){
-					currState = &child;
+					currState = child.shared_from_this();
 					move_exists = true;
 				}
 			}
@@ -51,7 +51,7 @@ void Game::run_game(){
 				move_exists = test_and_add_move(next_state, player_move);
 				for (auto &child : next_state->children){
 					if (player_move == child.move){
-						currState = &child;
+						currState = child.shared_from_this();
 					}
 				}
 			}
@@ -75,7 +75,7 @@ void Game::run_game(){
 
 
 //recursive function for building the state tree
-void build_tree(StateNode* currState, int depth, std::time_t starttime){
+void build_tree(shared_ptr<StateNode> currState, int depth, std::time_t starttime){
 	std::time_t time = std::time(0) - starttime;
 	if (depth >= MAXDEPTH || time > MAXTIME)
 		return;
@@ -92,7 +92,7 @@ void build_tree(StateNode* currState, int depth, std::time_t starttime){
 		//should be okay here but in case any unexplained phenoms happen, check this
 		//this comment was prophetic^ too bad i didn't remember it was here til i changed the structure to fix this lol
 		//it should be good now as list doesn't change element positions
-		build_tree(&(*it), depth + 1, starttime);
+		build_tree(it->shared_from_this(), depth + 1, starttime);
 	}	
 }
 
@@ -106,7 +106,7 @@ bool Game::play_move(){
 	return false;
 }
 
-Game::Game(StateNode* start){
+Game::Game(shared_ptr<StateNode> start){
 	this->root = start;
 	this->ply = start->ply;
 }

@@ -23,7 +23,7 @@ int l1_f_p(Move move1,  Player player) {
 
 //if the move is a fence move, we are considering this move.
 //if not, basically finding the necessary moves of the passed in state
-int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> p2Moves){
+int pathfinding(shared_ptr<StateNode> state, Move move, vector<Move> p1Moves, vector<Move> p2Moves){
 	
 	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
 	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
@@ -91,7 +91,7 @@ int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> 
 	return score;
 }
 
-int pathfinding(StateNode* state, Move move){
+int pathfinding(shared_ptr<StateNode> state, Move move){
 	
 	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
 	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
@@ -143,7 +143,7 @@ int pathfinding(StateNode* state, Move move){
 	return score;
 }
 
-int pathfinding2(StateNode* state, Move move){
+int pathfinding2(shared_ptr<StateNode> state, Move move){
 	
 	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
 	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;

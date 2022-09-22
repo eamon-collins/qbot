@@ -16,6 +16,8 @@ transferred over to all char, doesn't seem to have done a single thing tbh
 offsetting the gamestate chars by 33 is to avoid the bottom 33 slots of the ascii encoding, which is full of whitespace and other utility bs. just avoiding it all together is simply better. Maybe thing about doing +64 instead by bit operations, to make it quicker?
 
 
+BE vvery careful about use of copy constructor, it creates deep copies. authorized use is in StateNode::get_best_move, to spawn copies of the tree from that point
+	this may be source of issues, check for bugs in copy constructor, and places where copy constructor might be called inadverdently
 
 
 

@@ -7,11 +7,11 @@
 class Game
 {
 public:
-	StateNode* root; //the root statenode at any given time, not the gameroot but basically state of game currently.
+	shared_ptr<StateNode> root; //the root statenode at any given time, not the gameroot but basically state of game currently.
 	int ply;
 
 	//
-	Game(StateNode* start);
+	Game(shared_ptr<StateNode> start);
 
 	//starts playing from root
 	//this method organizes most of the bot's activities at a high level
@@ -21,4 +21,4 @@ public:
 };
 
 
-void build_tree(StateNode* currState, int depth, std::time_t starttime);
+void build_tree(shared_ptr<StateNode> currState, int depth, std::time_t starttime);

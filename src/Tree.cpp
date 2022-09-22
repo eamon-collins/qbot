@@ -35,20 +35,21 @@ mutex viz_mutex;
 //finds a move in the set time limit.
 //at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
-StateNode* StateNode::get_best_move(){
-	StateNode* root = this;		
+shared_ptr<StateNode> StateNode::get_best_move(){
+	shared_ptr<StateNode> root = shared_from_this();		
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
-	vector<StateNode> copies;
+	vector<shared_ptr<StateNode>> copies;
 	copies.reserve(NUM_THREADS); //necessary so addresses change out from under threads.
 	for (int i = 0; i < NUM_THREADS; i++){
 		//copy constructor takes care of deep copying/parent pointer of internal nodes,
 		//just need to set root to nullptr so it knows it's a root node for the relevant subtree
-		copies.push_back(*root);
-		copies[i].parent = nullptr;
-		copies[i].fix_parent_references();
-		workers.push_back(thread(best_move_worker, i, &copies[i]));
+		//shared_ptr construction uses copy constructors
+		copies.push_back(shared_ptr<StateNode>(root));
+		copies[i]->parent = nullptr;
+		copies[i]->fix_parent_references();
+		workers.push_back(thread(best_move_worker, i, copies[i]));
 	}
 
 	for (auto it = workers.begin(); it != workers.end(); it++){
@@ -57,8 +58,8 @@ StateNode* StateNode::get_best_move(){
 	
 	//gather consensus. Right now, we get the highest average UCB from each child of root.
 	unordered_map<string, std::pair<int, float>> scores;
-	for (auto &copy : copies){
-		for (auto &child : copy.children){
+	for (auto copy : copies){
+		for (auto &child : copy->children){
 			auto score = scores.find(child.move.unique_string());
 			//cout << child.UCB() << " : " << child.visits << "\n";
 			if ( score != scores.end()){
@@ -90,13 +91,13 @@ StateNode* StateNode::get_best_move(){
 	best_move = best_moves[rand() % best_moves.size()];
 	//now with the best move, get the node of the best UCB example of that move from across the copies
 	//maybe not finding bestnode is problem with horizontal bool, or with conversion
-	StateNode* best_node = nullptr;
+	shared_ptr<StateNode> best_node = nullptr;
 	float node_ucb = -1000;
-	for (auto &copy : copies){
-		for (StateNode &child : copy.children){
+	for (auto copy : copies){
+		for (StateNode &child : copy->children){
 			if (child.move == best_move && child.UCB() > node_ucb){
 				node_ucb = child.UCB();
-				best_node = &child;
+				best_node = child.shared_from_this();
 				break;
 			}
 		}
@@ -107,23 +108,23 @@ StateNode* StateNode::get_best_move(){
 	return best_node;
 }
 
-void best_move_worker(int id, StateNode* root){
+void best_move_worker(int id, shared_ptr<StateNode> root){
 	//may get passed a precomputed tree from opponents thinking time, or just a leaf node.
 	if (root->children.size() == 0)
 		root->generate_valid_children();
 
-	StateNode* curr;
+	shared_ptr<StateNode> curr;
 
 	std::time_t start_time = std::time(0);
 	while( std::time(0) - start_time < MAXTIME){
 		curr = root;
 		//SELECTION
 		while(curr->children.size() != 0){
-			vector<StateNode*> max_list;
+			vector<shared_ptr<StateNode>> max_list;
 			double max_ucb = -1000, curr_ucb = 0;
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
-				StateNode* currChild = &(curr->children[i]);
+				shared_ptr<StateNode> currChild = curr->children[i].shared_from_this();
 				curr_ucb = currChild->UCB();
 				if (max_ucb <= curr_ucb){
 					if (max_ucb != curr_ucb)
@@ -155,11 +156,11 @@ void best_move_worker(int id, StateNode* root){
 	}
 
 	//find best UCB so far for root's direct children
-	vector<StateNode*> max_list;
+	vector<shared_ptr<StateNode>> max_list;
 	double max_ucb = -1000, curr_ucb = 0;
 	//find highest UCB in group, random if tied, important to be able to break ties
 	for (int i = 0; i < root->children.size(); i++){
-		StateNode* currChild = &(root->children[i]);
+		shared_ptr<StateNode> currChild = root->children[i].shared_from_this();
 		curr_ucb = currChild->UCB();
 		if (max_ucb < curr_ucb){
 			if (max_ucb != curr_ucb)
@@ -183,7 +184,7 @@ int StateNode::generate_valid_children(){
 	generate_valid_moves(vmoves);
 
 	for(auto it=vmoves.begin(); it != vmoves.end(); it++){
-		test_and_add_move(this, *it);
+		test_and_add_move(shared_from_this(), *it);
 	}
 
 	//evaluate will error with empty list
@@ -230,13 +231,13 @@ int StateNode::generate_random_child()
 		random = (float)rand() / RAND_MAX;
 		if( random > chance_to_choose_fence){
 			rand_index = rand() % (vmoves.size()-numFenceMoves);
-			valid_move = test_and_add_move(this, vmoves[rand_index]);
+			valid_move = test_and_add_move(shared_from_this(), vmoves[rand_index]);
 			//remove invalid moves so no infinite loop
 			if(!valid_move)
 				vmoves.erase(vmoves.begin() + rand_index);
 		}else{//choose a fence move, relies on fences being at back of the vector
 			rand_index = rand() % numFenceMoves;
-			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
+			valid_move = test_and_add_move(shared_from_this(), vmoves[vmoves.size()-numFenceMoves+rand_index]);
 			if (!valid_move){
 				vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
 				numFenceMoves--;
@@ -263,7 +264,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	if (p1.numFences == 0 && p2.numFences == 0){
 		int difference;
 		vector<Move> myTurnMoves, theirTurnMoves;
-		difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		difference = pathfinding(shared_from_this(), move, myTurnMoves, theirTurnMoves);
 		if (this->turn)
 			vmoves.push_back(myTurnMoves[0]);
 		else
@@ -332,11 +333,11 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 //play the game out from the current state with random moves and return winner and score
 //later maybe test trying a couple close to bottom of the tree and averaging. Not canonical though?
 //returns winning StateNode
-StateNode* StateNode::play_out(){
+shared_ptr<StateNode> StateNode::play_out(){
 	int numChildren;
 	int choice;
 	bool found_move = true;
-	StateNode* currState = this;
+	shared_ptr<StateNode> currState = shared_from_this();
 	int scoreModifier;
 
 	std::time_t start_time = std::time(0);
@@ -356,13 +357,13 @@ StateNode* StateNode::play_out(){
 			numChildren = currState->children.size();
 
 		if ( numChildren == 1){
-			currState = &(currState->children.front());
+			currState = currState->children[0].shared_from_this();
 		}
 		else if (numChildren != 0){
 			choice = rand() % numChildren;
 			std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 			//currState = &(*it);
-			currState = &(currState->children[choice]);
+			currState = currState->children[choice].shared_from_this();
 		}
 		else {
 			//currState->state();
@@ -395,7 +396,7 @@ StateNode* StateNode::play_out(){
 		}
 	}
 
-	StateNode* winState = currState;
+	shared_ptr<StateNode> winState = currState;
 	int negation = currState->turn ? 1 : -1;
 	while (currState->parent != nullptr){
 		currState->score += negation * scoreModifier;
@@ -416,7 +417,7 @@ double StateNode::UCB() const{
 
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
-bool test_and_add_move(StateNode* state, Move move){
+bool test_and_add_move(shared_ptr<StateNode> state, Move move){
 	
 	int difference;
 	if (move.type == 'f')
@@ -475,7 +476,7 @@ void StateNode::fix_parent_references() {
 	if (children.size() == 0)
 		return;
 	for (auto it = children.begin(); it != children.end(); it++){
-		it->parent = this;
+		it->parent = shared_from_this();
 		it->fix_parent_references();
 	}
 }
@@ -528,7 +529,7 @@ StateNode::StateNode(bool turn){
 // }
 
 //do not use this method directly, use as part of generate_valid_children after the move has been verified as valid
-StateNode::StateNode(StateNode* parent, Move move, int score){
+StateNode::StateNode(shared_ptr<StateNode> parent, Move move, int score){
 	this->p1 = parent->p1;
 	this->p2 = parent->p2;
 

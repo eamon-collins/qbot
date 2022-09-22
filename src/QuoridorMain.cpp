@@ -31,16 +31,16 @@ int main(int argc, char *argv[]){
 	//seeds random number generation with time in seconds
 	std::srand(std::time(0));
 
-	StateNode* root;
+	shared_ptr<StateNode> root;
 	if(player == 2)
-		root = new StateNode(false); //inits starting gamestate
+		root = shared_ptr<StateNode>(new StateNode(false)); //inits starting gamestate
 	else
-		root = new StateNode(true);
+		root = shared_ptr<StateNode>(new StateNode(true));
 
-
+	
 	//TESTING PURPOSES ONLY< REMOVE THIS SEGMENT LATER
 	// int num_no = save_tree(root, save_file);
-	// StateNode* root3 = load_tree(save_file);
+	// shared_ptr<StateNode> root3 = load_tree(save_file);
 	// return 0;
 
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem

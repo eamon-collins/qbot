@@ -18,15 +18,15 @@ int nodes_per_write = int(4096/bytes_per_node);
 
 //saves the tree to disk
 //~177 characters estimated for each statenode
-int save_tree(StateNode* root, std::string database_name){
+int save_tree(shared_ptr<StateNode> root, std::string database_name){
 	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 
 	FILE* save_file = fopen(database_name.c_str(), "w");
 
 	//simple, iterative, preorder depth first iteration
-	std::stack<StateNode*> tree_stack;
+	std::stack<shared_ptr<StateNode>> tree_stack;
 	tree_stack.push(root);
-	StateNode* curr;
+	shared_ptr<StateNode> curr;
 	int nodes_written = 0;
 	int bytes_written = 0;
 	while (!tree_stack.empty()){
@@ -40,7 +40,7 @@ int save_tree(StateNode* root, std::string database_name){
 
 		std::deque<StateNode>::iterator it;
 		for (it = curr->children.begin(); it != curr->children.end(); it++) {
-			tree_stack.push(&(*it));
+			tree_stack.push(it->shared_from_this());
 		}
 	}
 	bytes_written += fwrite((const void*)file_buffer, bytes_per_node, (size_t)(nodes_written % nodes_per_write), save_file);
@@ -52,11 +52,11 @@ int save_tree(StateNode* root, std::string database_name){
 }
 
 //POSSIBLE CIRCULAR reference here, fix.
-void output_tree_stats(StateNode* root){
+void output_tree_stats(shared_ptr<StateNode> root){
 	//simple, iterative, preorder depth first iteration
-	std::stack<StateNode*> tree_stack;
+	std::stack<shared_ptr<StateNode>> tree_stack;
 	tree_stack.push(root);
-	StateNode* curr;
+	shared_ptr<StateNode> curr;
 	int num_nodes = 0;
 	while (!tree_stack.empty()){
 		curr = tree_stack.top();
@@ -65,14 +65,14 @@ void output_tree_stats(StateNode* root){
 
 		std::deque<StateNode>::iterator it;
 		for (it = curr->children.begin(); it != curr->children.end(); it++) {
-			tree_stack.push(&(*it));
+			tree_stack.push(it->shared_from_this());
 		}
 	}
 	
 	std::cout << "Num nodes: " << num_nodes <<"\n";
 }
 
-StateNode* load_tree(std::string database_name){
+shared_ptr<StateNode> load_tree(std::string database_name){
 	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 	std::filesystem::path p{database_name.c_str()};
 	unsigned long long nodes_left = std::filesystem::file_size(p) / bytes_per_node; //total number of nodes
@@ -92,7 +92,7 @@ StateNode* load_tree(std::string database_name){
 	std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
 	std::cout <<"LOAD:\n";
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
-	StateNode* root = new StateNode(curr_node_buffer);
+	shared_ptr<StateNode> root = shared_ptr<StateNode>(new StateNode(curr_node_buffer));
 	// if(DEBUG){
 	// 	std::cout << "Root node:\n";
 	// 	std::cout << "turn " << root->turn << "\n";
@@ -103,7 +103,7 @@ StateNode* load_tree(std::string database_name){
 	// 	std::cout << curr_node_buffer << "\n";
 	// }
 
-	StateNode* curr = root;
+	shared_ptr<StateNode> curr = root;
 	int nodes_read = 0;
 	int buffer_offset = bytes_per_node; //because we just read root
 	nodes_left--; //also decrement because we read root
@@ -119,11 +119,11 @@ StateNode* load_tree(std::string database_name){
 		if(curr->serial_type == '0' || curr->serial_type == '1'){
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
-			curr = &(curr->children.back());
+			curr = curr->children.back().shared_from_this();
 		} else if (curr->serial_type == '2') {
 			newNode.parent = curr->parent;
 			curr->parent->children.push_back(newNode);
-			curr = &(curr->parent->children.back());
+			curr = curr->parent->children.back().shared_from_this();
 		} else if (curr->serial_type == '3'){
 			//start upward iteration til find a 0
 			while(curr->serial_type != '0'){
@@ -133,7 +133,7 @@ StateNode* load_tree(std::string database_name){
 			curr = curr->parent;
 			newNode.parent = curr;
 			curr->children.push_back(newNode);
-			curr = &(curr->children.back());
+			curr = curr->children.back().shared_from_this();
 		}else{
 			std::cout << "\nUNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
 		}
@@ -169,7 +169,7 @@ void print_buffer(unsigned char* node_buffer){
 }
 
 
-bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
+bool write_node(shared_ptr<StateNode> node, unsigned char file_buffer[], int buffer_index){
 	unsigned char ch[bytes_per_node];
 
 	int offset = 0; 
@@ -233,7 +233,7 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 		ch[offset] = '0';
 	}
 	//leaf AND last child in parent's vector
-	else if (&(node->parent->children.front()) == node &&
+	else if (&(node->parent->children.front()) == &(*node) &&
 			node->children.empty())
 	{
 		ch[offset] = '3';
@@ -244,7 +244,7 @@ bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index){
 		ch[offset] = '2';
 	}
 	//last child in parent's vector but not leaf
-	else if (&(node->parent->children.front()) == node){
+	else if (&(node->parent->children.front()) == &(*node)){
 		ch[offset] = '1';
 	}else {
 		ch[offset] = '0';

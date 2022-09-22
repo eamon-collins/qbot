@@ -5,6 +5,8 @@
 #include "stlastar.h"
 #include <map>
 
+using std::shared_ptr;
+
 class SearchNode
 {
 public:
@@ -52,15 +54,15 @@ typedef std::map<Pos,SearchMapItem>::iterator SMII;
 bool valid(Pos p);
 
 
-int save_tree(StateNode* root);
+int save_tree(shared_ptr<StateNode> root);
 
 int l1_norm(int i0, int j0, int i1, int j1);
 int l1_f_p(Move move1,  Player p1);
 
 
 //checks shortest path of each pawn to goal to make sure a proposed move is valid, but also returns p2pathlength-p1pathlength in move.row to help with scoring
-int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> p2Moves);
-int pathfinding(StateNode* state, Move move);
+int pathfinding(shared_ptr<StateNode> state, Move move, vector<Move> p1Moves, vector<Move> p2Moves);
+int pathfinding(shared_ptr<StateNode> state, Move move);
 
 //pathfinding helpers
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
