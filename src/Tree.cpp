@@ -13,6 +13,7 @@ Functions for building/managing the state-tree
 #include <bitset>
 #include <thread>
 #include <mutex>
+#include <unordered_map>
 
 
 #include "Python.h"
