@@ -2,8 +2,9 @@
 #include "Global.h"
 #include "Game.h"
 
+#ifndef NOVIZ
 #include "Python.h"
-
+#endif
 
 
 void Game::run_game(){
@@ -15,11 +16,13 @@ void Game::run_game(){
 	//currState->generate_valid_children();
 	//build_tree(currState, depth, time);
 
+#ifndef NOVIZ
 	//make it so all threads can use python interpreter. mutex to govern GIL
 	Py_Initialize();
 	// Build the name object
 	PyObject* sysPath = PySys_GetObject("path");
 	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
+#endif
 
 	Move player_move;
 	std::string viz_retval;
@@ -66,8 +69,9 @@ void Game::run_game(){
 
 		//gameOver = true;
 	}
-
+#ifndef NOVIZ
 	Py_Finalize();
+#endif
 }
 
 

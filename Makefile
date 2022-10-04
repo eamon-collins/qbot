@@ -3,12 +3,16 @@
 # Compiler options
 CXX = g++ # use g++ compiler
 FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8  -Wno-unused-result -g -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector -Wformat -Werror=format-security  -DNDEBUG -fwrapv
-WFLAGS = -I/usr/include/python3.6m -I/usr/lib/python3.6  -Wno-unused-result -g -fstack-protector -Wformat -Werror=format-security  -DNDEBUG -fwrapv
-WCXXFLAGS = $(WFLAGS) -lpthread -pthread -lstdc++fs -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 LDFLAGS = -L/usr/lib/lib/x86_64-linux-gnu
 LDLIBS = -lpython3.8
+#flags for python 3.6 compatibility
 WLDLIBS = -lpython3.6m
+WFLAGS = -I/usr/include/python3.6m -I/usr/lib/python3.6  -Wno-unused-result -g -fstack-protector -Wformat -Werror=format-security  -DNDEBUG -fwrapv
+WCXXFLAGS = $(WFLAGS) -lpthread -pthread -lstdc++fs -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
+#flags to compile without python integration and all c++ visualization/input
+VFLAGS = -Wno-unused-result -g -fstack-protector -Wformat -Werror=format-security -DNDEBUG -fwrapv -DNOVIZ
+VCXXFLAGS = $(VFLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie
 
 
 .SUFFIXES: .o .cpp
@@ -24,6 +28,12 @@ work: LDLIBS = $(WLDLIBS)
 work: $(OFILES)
 	$(CXX) $(WCXXFLAGS) $(OFILES) -lpython3.6m -lcrypt -pthread -ldl -lutil -lm -o qbot
 	@echo Produced python3.6 executable
+
+noviz: FLAGS = $(VFLAGS)
+noviz: CXXFLAGS = $(VCXXFLAGS)
+noviz: $(OFILES)
+	$(CXX) $(VCXXFLAGS) $(OFILES) -lcrypt -ldl -lutil -lm -o qbot
+	@echo Produced non-visualizing executable
 
 clean: 
 	$(RM) $(OFILES)

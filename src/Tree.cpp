@@ -15,9 +15,9 @@ Functions for building/managing the state-tree
 #include <mutex>
 #include <unordered_map>
 
-
+#ifndef NOVIZ
 #include "Python.h"
-
+#endif
 
 bool debugs = true;
 
@@ -660,6 +660,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 //4 is p2
 //NEED A LOCK ON VISUALIZATION CAUSE PYTHON GIL WILL MESS YOU UP
 //SIMPLE MUTEX around pyinit and py end should do it.
+#ifndef NOVIZ
 string StateNode::visualize_gamestate(){
 	std::vector<int> x, y, walls;
 	std::vector<double> color;
@@ -813,6 +814,15 @@ string StateNode::visualize_gamestate(){
 
 	return retval;
 }
+#else
+//want wasd corresponding to pawn move direction, or
+//fx,y corresponding to fence play. dont give bad input.
+string StateNode::visualize_gamestate(){
+	string input_move;
+	getline(cin, input_move);
+	return input_move;
+}
+#endif
 
 std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
 	return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
