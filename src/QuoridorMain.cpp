@@ -8,6 +8,7 @@
 #include <iostream>
 #include <ctime>
 
+int num_threads = NUM_THREADS;
 
 int main(int argc, char *argv[]){
 	int threadCount, player;
@@ -17,16 +18,17 @@ int main(int argc, char *argv[]){
 	while ((c = getopt(argc, argv, "t:p:")) != -1) {
 		switch (c) {
 			case 't':
-				threadCount = atoi(optarg);
+				num_threads = atoi(optarg); 
 				break;
 			case 'p':
 				player = atoi(optarg);
 				break;
 			case 's':
 				save_file = optarg;
-			}	
+			}
 		break;
 	}
+
 
 	//seeds random number generation with time in seconds
 	std::srand(std::time(0));

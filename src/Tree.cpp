@@ -42,8 +42,8 @@ StateNode* StateNode::get_best_move(){
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
-	copies.reserve(NUM_THREADS); //necessary so addresses change out from under threads.
-	for (int i = 0; i < NUM_THREADS; i++){
+	copies.reserve(num_threads); //necessary so addresses change out from under threads.
+	for (int i = 0; i < num_threads; i++){
 		//copy constructor takes care of deep copying/parent pointer of internal nodes,
 		//just need to set root to nullptr so it knows it's a root node for the relevant subtree
 		copies.push_back(*root);
@@ -560,7 +560,6 @@ StateNode::StateNode(StateNode* parent, Move move, int score){
 			this->p1.numFences--;
 		else
 			this->p2.numFences--;
-		
 	}
 
 	this->turn = !parent->turn;
@@ -866,9 +865,6 @@ void StateNode::print_node(){
 
 				if (gamestate[i][j])
 					sstream << '|';
-				// else if ( j % 2 == 0){//empty square
-				// 	sstream << '0';
-				// } 
 				else
 					sstream << ' ';
 			} else {
