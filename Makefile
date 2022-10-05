@@ -2,7 +2,7 @@
 
 # Compiler options
 CXX = g++ # use g++ compiler
-FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8  -Wno-unused-result -g -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector -Wformat -Werror=format-security  -DNDEBUG -fwrapv
+FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -g -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 LDFLAGS = -L/usr/lib/lib/x86_64-linux-gnu
 LDLIBS = -lpython3.8

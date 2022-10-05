@@ -849,20 +849,44 @@ bool StateNode::operator==(const StateNode& node) {
 }
 
 void StateNode::print_node(){
-	std::cout << this->move.type << " " << this->score << " " << this->vi << "\n";
-	std::cout << "visits " << this->visits << " " << this->ply << " " << this->serial_type << "\n";
-	std::cout << this->turn << "\n";
+	std::ostringstream sstream; 
+	sstream << this->move.type << " " << this->score << " " << this->vi << "\n";
+	sstream << "visits " << this->visits << " " << this->ply << " " << this->serial_type << "\n";
+	sstream << this->turn << "\n";
 	int index = 0;	
 	for(int i = 0; i < 17; i++){
 		for(int j = 0; j < 9; j++){
-			std::cout << this->gamestate[i][j];
+			char c = '\0';
+			if ( i % 2 == 0 ) {
+
+				if ( (p1.row == i/2 && p1.col == j) || (p2.row == i/2 && p2.col == j) )
+					sstream << 'X';
+				else
+					sstream << '0';
+
+				if (gamestate[i][j])
+					sstream << '|';
+				// else if ( j % 2 == 0){//empty square
+				// 	sstream << '0';
+				// } 
+				else
+					sstream << ' ';
+			} else {
+				if (j % 2 == 1)
+					sstream << ' ';
+				else if (gamestate[i][j])
+					sstream << '-';
+
+			}
 			index++;
 		}
-		std::cout << "\n";
+		sstream << "\n";
 	}
-	std::cout << "\n\n";
-	
+	sstream << "\n\n";
+
+	std::cout << sstream.str();
 }
+	
 
 std::ostream& operator<<(std::ostream& os, const Move& m){
 	return os << m.type << (m.type == 'f' ? (m.horizontal ? " horizontal " : " vertical ") : " ") << m.row << "," << m.col;
