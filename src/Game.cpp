@@ -26,12 +26,24 @@ void Game::run_game(){
 
 	Move player_move;
 	std::string viz_retval;
+	bool is_move_valid;
 	while(!gameOver){
 		if(currState->turn){
 			StateNode* next_state = currState->get_best_move();
 			if (next_state != nullptr){
 				next_state->print_node();
-				viz_retval = next_state->visualize_gamestate();
+				is_move_valid = false;
+				while( !is_move_valid ){
+					viz_retval = next_state->visualize_gamestate();
+					try {
+						player_move = Move(viz_retval);
+						is_move_valid = true;
+					}catch(InvalidMoveException& e ){
+						std::cout << e.what() << std::endl;
+						std::coutn << "Enter a valid move" << std::endl;
+					}
+				}
+				
 			}else{
 				std::cout << "best_node is nullptr";
 				return;

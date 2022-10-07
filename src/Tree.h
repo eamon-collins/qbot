@@ -6,6 +6,13 @@
 #include <iostream>
 #include <sstream>
 #include <deque>
+#include <exception>
+
+struct InvalidMoveException : public std::exception {
+   const char * what () const throw () {
+      return "Error: Invalid Move String";
+   }
+};
 
 typedef struct Player{
 	int row;
@@ -37,6 +44,18 @@ typedef struct Move{
 			horizontal = true;
 		else 
 			horizontal = false;
+
+		if (row < 0 || col < 0 )
+			throw InvalidMoveException();
+		if(type == 'p'){
+			if (row > 8 || col > 8)
+				throw InvalidMoveException();
+		}else if (type == 'f'){
+			if (row > 16 || row > 7)
+				throw InvalidMoveException();
+		} else {
+			throw InvalidMoveException();
+		}
 	}
 	std::string unique_string(){
 		std::ostringstream s;

@@ -849,9 +849,8 @@ bool StateNode::operator==(const StateNode& node) {
 
 void StateNode::print_node(){
 	std::ostringstream sstream; 
-	sstream << this->move.type << " " << this->score << " " << this->vi << "\n";
-	sstream << "visits " << this->visits << " " << this->ply << " " << this->serial_type << "\n";
-	sstream << this->turn << "\n";
+	sstream << "Last move: " << this->move << "\n" << "Score: " << this->score << "\n";
+	sstream << "Visits: " << this->visits << "   Ply: " << this->ply << "    Turn: " << this->turn << "\n";
 	int index = 0;	
 	for(int i = 0; i < 17; i++){
 		for(int j = 0; j < 9; j++){
@@ -868,11 +867,10 @@ void StateNode::print_node(){
 				else
 					sstream << ' ';
 			} else {
-				if (j % 2 == 1)
-					sstream << ' ';
-				else if (gamestate[i][j])
+				if (gamestate[i][j])
 					sstream << '-';
-
+				else if (j % 2 == 1)
+					sstream << ' ';
 			}
 			index++;
 		}
