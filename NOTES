@@ -32,3 +32,6 @@ No valid children during playout, or no valid pawn moves BANE OF PLAY
 I've seen walls move around, probably if click isn't valid
 
 probably shouldnt do pathfinding for each necessary pawn move, once fences are out we can just pathfind once and return the list of best moves and just determine the distance and see who wins.
+
+try inputting f11 0 which should be a valid move, but segfaults
+hard to error check in move creation whether valid with gamestate, need to check alongside gamestate representation

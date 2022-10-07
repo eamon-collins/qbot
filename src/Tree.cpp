@@ -254,8 +254,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	if (this->turn){
 		currPlayer = this->p1;
 		otherPlayer = this->p2;
-	}
-	else {
+	} else {
 		currPlayer = this->p2;
 		otherPlayer = this->p1;
 	}
@@ -593,29 +592,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 	this->p1 = p1;
 	this->p2 = p2;
 
-	// //read gamestate and turn
-	// unsigned char bit_chars[160];
-	// int index = 0;
-	// string tempString;
-	// for (int i = 0; i < 20; i++){ 
-	// 	tempString = bitset<8>(node_buffer[11 + i]).to_string();
-	// 	for(int j = 0; j<8; j++){
-	// 		bit_chars[index] = tempString[j];
-	// 		index++;
-	// 	}
-	// }
-
-	// index = 0;	
-	// for(int i = 0; i < (2*NUMROWS-1); i++){
-	// 	for(int j = 0; j < NUMCOLS; j++){
-	// 		this->gamestate[i][j] = bit_chars[index] == '1';
-	// 		//std::cout << this->gamestate[i][j];
-	// 		index++;
-	// 	}
-	// 	//std::cout << "\n";
-	// }
-	// //std::cout << "\n\n";
-	// this->turn = (bit_chars[index] == '1');
+	// read gamestate and turn
 	bool temp_gamestate[(2*NUMROWS-1)*NUMCOLS];
 	for (int i =0; i < 19; i++){
 		unsigned char inp = (unsigned char)node_buffer[11+i]-33;
@@ -852,7 +829,7 @@ void StateNode::print_node(){
 	sstream << "Last move: " << this->move << "\n" << "Score: " << this->score << "\n";
 	sstream << "Visits: " << this->visits << "   Ply: " << this->ply << "    Turn: " << this->turn << "\n";
 	int index = 0;	
-	for(int i = 0; i < 17; i++){
+	for(int i = 16; i >= 0; i--){
 		for(int j = 0; j < 9; j++){
 			char c = '\0';
 			if ( i % 2 == 0 ) {
@@ -867,10 +844,12 @@ void StateNode::print_node(){
 				else
 					sstream << ' ';
 			} else {
-				if (gamestate[i][j])
-					sstream << '-';
-				else if (j % 2 == 1)
-					sstream << ' ';
+				if (gamestate[i][j] && j<8 && gamestate[i][j+1])
+					sstream << "--";
+				else if (gamestate[i][j])
+					sstream << "- ";
+				else //if (j % 2 == 1)
+					sstream << "  ";
 			}
 			index++;
 		}

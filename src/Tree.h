@@ -51,7 +51,9 @@ typedef struct Move{
 			if (row > 8 || col > 8)
 				throw InvalidMoveException();
 		}else if (type == 'f'){
-			if (row > 16 || row > 7)
+			if (row > 16 || col > 7)
+				throw InvalidMoveException();
+			if(horizontal && row % 2 == 0)
 				throw InvalidMoveException();
 		} else {
 			throw InvalidMoveException();

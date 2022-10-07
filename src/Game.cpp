@@ -1,6 +1,8 @@
 
 #include "Global.h"
 #include "Game.h"
+#include "utility.h"
+
 
 #ifndef NOVIZ
 #include "Python.h"
@@ -25,60 +27,48 @@ void Game::run_game(){
 #endif
 
 	Move player_move;
-	std::string viz_retval;
-	bool is_move_valid;
 	while(!gameOver){
+		StateNode* next_state;
 		if(currState->turn){
-			StateNode* next_state = currState->get_best_move();
+			next_state = currState->get_best_move();
 			if (next_state != nullptr){
 				next_state->print_node();
-				is_move_valid = false;
-				while( !is_move_valid ){
-					viz_retval = next_state->visualize_gamestate();
-					try {
-						player_move = Move(viz_retval);
-						is_move_valid = true;
-					}catch(InvalidMoveException& e ){
-						std::cout << e.what() << std::endl;
-						std::coutn << "Enter a valid move" << std::endl;
-					}
-				}
-				
+				player_move = get_player_move(next_state);	
 			}else{
 				std::cout << "best_node is nullptr";
 				return;
 			}
+		} else { //should only be run if we start game with player move
+			next_state = currState;
+			next_state->print_node();
+			player_move = get_player_move(next_state);
+		}
 
-			player_move = Move(viz_retval);
-			std::cout << player_move << "\n";
+		//player_move = Move(viz_retval);
+		std::cout << player_move << "\n";
 
-			//find the move in the tree, create it if it doesn't exist yet.
-			bool move_exists = false;
+		//find the move in the tree, create it if it doesn't exist yet.
+		bool move_exists = false;
+		for (auto &child : next_state->children){
+			if (player_move == child.move){
+				currState = &child;
+				move_exists = true;
+			}
+		}
+		if (!move_exists){
+			move_exists = test_and_add_move(next_state, player_move);
 			for (auto &child : next_state->children){
 				if (player_move == child.move){
 					currState = &child;
-					move_exists = true;
 				}
 			}
-			if (!move_exists){
-				move_exists = test_and_add_move(next_state, player_move);
-				for (auto &child : next_state->children){
-					if (player_move == child.move){
-						currState = &child;
-					}
-				}
-			}
-
-			if (!move_exists){
-				std::cout << "Could not produce player move state\n";
-				return;
-			}
-		} else {
-			std::cout << "reached bad turn state\n";
-			return;
 		}
 
-
+		if (!move_exists){
+			std::cout << "Could not produce player move state\n";
+			return;
+		}
+	
 		//gameOver = true;
 	}
 #ifndef NOVIZ
@@ -86,7 +76,33 @@ void Game::run_game(){
 #endif
 }
 
-
+Move Game::get_player_move(StateNode* currState){
+	Move player_move;
+	std::string viz_retval;
+	while( true ){ //input loop, gathers input from player until it receives a valid move
+		viz_retval = currState->visualize_gamestate();
+		try {
+			player_move = Move(viz_retval);
+			//basic checking done in Move constructor, but we need gamestate specific
+			std::vector<Move> valid_moves;
+			currState->generate_valid_moves(valid_moves);
+			for (auto move : valid_moves){
+				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
+					if (player_move.type == 'f' && pathfinding(currState, move) == -999){
+						std::cout << "Attempted move blocks a player from their goal" << std::endl;	
+					}else{
+						return player_move;
+					}
+					break;
+				}
+			}
+			std::cout << "Attempted move doesn't appear to be possible" << std::endl;
+		}catch(InvalidMoveException& e ){
+			std::cout << e.what() << std::endl;
+			std::cout << "Enter a valid move" << std::endl;
+		}
+	}
+}
 
 //recursive function for building the state tree
 void build_tree(StateNode* currState, int depth, std::time_t starttime){
