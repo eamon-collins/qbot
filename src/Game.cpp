@@ -63,6 +63,8 @@ void Game::run_game(){
 				}
 			}
 		}
+		std::cout << "AFTER playermove";
+		currState->print_node();
 
 		if (!move_exists){
 			std::cout << "Could not produce player move state\n";
@@ -81,6 +83,10 @@ Move Game::get_player_move(StateNode* currState){
 	std::string viz_retval;
 	while( true ){ //input loop, gathers input from player until it receives a valid move
 		viz_retval = currState->visualize_gamestate();
+		if (viz_retval == "error"){
+			std::cout << "Viz gamestate returned error" << std::endl;
+			break;
+		}
 		try {
 			player_move = Move(viz_retval);
 			//basic checking done in Move constructor, but we need gamestate specific

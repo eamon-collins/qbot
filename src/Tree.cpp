@@ -345,7 +345,7 @@ StateNode* StateNode::play_out(){
 		//if there are no more fences this game is over
 		if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
 			scoreModifier = pathfinding(currState, currState->move );
-			cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
+			//cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
 			break;
 		}
 
@@ -381,8 +381,6 @@ StateNode* StateNode::play_out(){
 		}
 		//currState->print_node();
 	}
-	// if (found_move)
-	// 	currState->visualize_gamestate();
 
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, 
@@ -673,7 +671,7 @@ string StateNode::visualize_gamestate(){
 	//copy gamestate so we can remove walls as we add them to python list
 	bool copy_gamestate[2*NUMROWS - 1][NUMCOLS];
 	memcpy(copy_gamestate, this->gamestate, (2*NUMROWS-1)*NUMCOLS * sizeof(bool));
-	for (int i = 0; i < 2*NUMROWS-1; i++){
+	for (int i = 2*NUMROWS-2; i >= 0; i--){
 		for (int j = 0; j < NUMCOLS; j++){
 			if (i % 2 == 0 && copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
 				if (j==8)
@@ -684,8 +682,8 @@ string StateNode::visualize_gamestate(){
 				// y.push_back(i/2+1);
 				x.push_back(j);
 				x.push_back(j+1);
-				y.push_back(i/2);
-				y.push_back(i/2);
+				y.push_back(7-(i/2));
+				y.push_back(7-(i/2));
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i+2][j] = false;
 			}else if (i % 2 == 1 && copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
@@ -695,8 +693,8 @@ string StateNode::visualize_gamestate(){
 				// y.push_back(i/2);
 				x.push_back(j);
 				x.push_back(j);
-				y.push_back(i/2);
-				y.push_back(i/2+1);
+				y.push_back(7-(i/2));
+				y.push_back(7-(i/2+1));
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i][j+1] = false;
 			}
