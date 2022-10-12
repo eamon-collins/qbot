@@ -682,8 +682,8 @@ string StateNode::visualize_gamestate(){
 				// y.push_back(i/2+1);
 				x.push_back(j);
 				x.push_back(j+1);
-				y.push_back((i/2));
-				y.push_back((i/2));
+				y.push_back(7-(i/2));
+				y.push_back(7-(i/2));
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i+2][j] = false;
 			}else if (i % 2 == 1 && copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
@@ -693,8 +693,8 @@ string StateNode::visualize_gamestate(){
 				// y.push_back(i/2);
 				x.push_back(j);
 				x.push_back(j);
-				y.push_back((i/2));
-				y.push_back((i/2+1));
+				y.push_back(7-(i/2));
+				y.push_back(7-(i/2+1));
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i][j+1] = false;
 			}
