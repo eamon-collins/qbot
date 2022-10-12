@@ -2,12 +2,14 @@
 #include "Global.h"
 #include "Game.h"
 #include "utility.h"
+#include <chrono>
 
 
 #ifndef NOVIZ
 #include "Python.h"
 #endif
 
+using namespace std::chrono;
 
 void Game::run_game(){
 	int depth = 1;
@@ -81,8 +83,20 @@ void Game::run_game(){
 Move Game::get_player_move(StateNode* currState){
 	Move player_move;
 	std::string viz_retval;
+	time_point<system_clock> t, now;
 	while( true ){ //input loop, gathers input from player until it receives a valid move
+		now = system_clock::now();
+		duration<double> length = now - t;
+		if (length.count() < 1.0){//trys to detect error state so it doesnt open python instances on loop
+			std::cout << length.count() << " too short, loop detected, terminating" << std::endl;
+			//TERMINATE PROGRAM
+			//If this is short it means the python is erroring out and returning too quick
+			std::terminate();
+			return Move();
+		}
+		
 		viz_retval = currState->visualize_gamestate();
+		t = system_clock::now();
 		if (viz_retval == "error"){
 			std::cout << "Viz gamestate returned error" << std::endl;
 			break;
