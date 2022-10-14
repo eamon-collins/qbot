@@ -98,6 +98,7 @@ public:
 	StateNode(unsigned char* node_buffer);
 
 	StateNode(const StateNode &rhs) = default;
+	StateNode& operator=(const StateNode &rhs) = default;
 	// StateNode(const StateNode &s);
 
 	bool operator==(const StateNode& node);
@@ -108,7 +109,7 @@ public:
 	int generate_valid_moves(std::vector<Move>& vmoves); //returns number of fence moves at end of vector
 	int generate_random_child(); //generates a single child and places it in children[]. Can this be more permissive of "valid" states (ie consider all possible states?)
 	bool is_valid_move(Move move); //checks whether the resulting gamestate from a certain move is legal or not
-	StateNode* get_best_move();
+	int get_best_move();
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state

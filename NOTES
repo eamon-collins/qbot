@@ -35,3 +35,12 @@ probably shouldnt do pathfinding for each necessary pawn move, once fences are o
 
 try inputting f11 0 which should be a valid move, but segfaults
 hard to error check in move creation whether valid with gamestate, need to check alongside gamestate representation
+
+
+
+
+PATHFINDING MAY BE SOURCE OF MEM INSTABILITY?
+
+==13054== HEAP SUMMARY:
+==13054==     in use at exit: 891,384 bytes in 3,690 blocks
+==13054==   total heap usage: 1,692,116 allocs, 1,688,426 frees, 126,272,594 bytes allocated

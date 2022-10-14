@@ -24,6 +24,13 @@ int l1_f_p(Move move1,  Player player) {
 //if the move is a fence move, we are considering this move.
 //if not, basically finding the necessary moves of the passed in state
 int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> p2Moves){
+
+	// int arr[3] = {-2, 1, 2};
+
+	// if(true)
+	// 	return arr[rand() % 3];
+
+
 	
 	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
 	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;

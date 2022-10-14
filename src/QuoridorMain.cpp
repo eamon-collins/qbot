@@ -11,7 +11,7 @@
 int num_threads = NUM_THREADS;
 
 int main(int argc, char *argv[]){
-	int threadCount, player;
+	int player = 1;
 	std::string save_file = "database.txt";
 	//
 	int c;

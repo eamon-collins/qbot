@@ -2,18 +2,19 @@
 
 # Compiler options
 CXX = g++ # use g++ compiler
-FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -g -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
+FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 LDFLAGS = -L/usr/lib/lib/x86_64-linux-gnu
 LDLIBS = -lpython3.8
 #flags for python 3.6 compatibility
 WLDLIBS = -lpython3.6m
-WFLAGS = -I/usr/include/python3.6m -I/usr/lib/python3.6  -Wno-unused-result -g -fstack-protector -Wformat -Werror=format-security  -DNDEBUG -fwrapv
+WFLAGS = -I/usr/include/python3.6m -I/usr/lib/python3.6 -fstack-protector -Wformat -DNDEBUG -fwrapv
 WCXXFLAGS = $(WFLAGS) -lpthread -pthread -lstdc++fs -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 #flags to compile without python integration and all c++ visualization/input
-VFLAGS = -Wno-unused-result -g -fstack-protector -Wformat -Werror=format-security -DNDEBUG -fwrapv -DNOVIZ
+VFLAGS = -fstack-protector -Wall -Wformat -Werror=format-security -DNDEBUG -fwrapv -DNOVIZ
 VCXXFLAGS = $(VFLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie
 
+FCXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie -O3
 
 .SUFFIXES: .o .cpp
 OFILES = src/QuoridorMain.o src/Tree.o src/utility.o src/Game.o src/storage.o
@@ -34,6 +35,11 @@ noviz: CXXFLAGS = $(VCXXFLAGS)
 noviz: $(OFILES)
 	$(CXX) $(VCXXFLAGS) $(OFILES) -lcrypt -ldl -lutil -lm -o qbot
 	@echo Produced non-visualizing executable
+
+fast: CXXFLAGS = $(FCXXFLAGS)
+fast: $(OFILES)
+	$(CXX) $(FCXXFLAGS) $(OFILES) -lpython3.8 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	@echo Produced fast qbot executable 
 
 clean: 
 	$(RM) $(OFILES)

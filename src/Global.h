@@ -10,7 +10,7 @@
 #define NUMFENCES 10
 
 #define MAXDEPTH 3
-#define MAXTIME 3 //seconds it will take maximum building the state tree
+#define MAXTIME 5 //seconds it will take maximum building the state tree
 #define NUM_THREADS 4
 
 extern int num_threads;

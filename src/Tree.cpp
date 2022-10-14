@@ -36,13 +36,13 @@ mutex viz_mutex;
 //finds a move in the set time limit.
 //at the moment, I generate all child moves for leafs. If memory is a limiting factor, I may instead want to
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
-StateNode* StateNode::get_best_move(){
+int StateNode::get_best_move(){
 	StateNode* root = this;		
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
 	vector<StateNode> copies;
-	copies.reserve(num_threads); //necessary so addresses change out from under threads.
+	copies.reserve(num_threads); //necessary so addresses don't change out from under threads.
 	for (int i = 0; i < num_threads; i++){
 		//copy constructor takes care of deep copying/parent pointer of internal nodes,
 		//just need to set root to nullptr so it knows it's a root node for the relevant subtree
@@ -56,7 +56,7 @@ StateNode* StateNode::get_best_move(){
 		it->join();
 	}
 	
-	//gather consensus. Right now, we get the highest average UCB from each child of root.
+	//gather consensus. Right now, we get the highest average score from each child of root.
 	unordered_map<string, std::pair<int, float>> scores;
 	for (auto &copy : copies){
 		for (auto &child : copy.children){
@@ -64,27 +64,27 @@ StateNode* StateNode::get_best_move(){
 			//cout << child.UCB() << " : " << child.visits << "\n";
 			if ( score != scores.end()){
 				score->second.first++;
-				score->second.second += child.UCB();
+				score->second.second += child.score;
 			}else{
-				std::pair<int, float> s = {1,child.UCB()};
+				std::pair<int, float> s = {1,child.score};
 				scores[child.move.unique_string()] = s;
 				if (!(child.move == Move(child.move.unique_string())))
 					cout << child.move << "  string  " << child.move.unique_string() << " // " << Move(child.move.unique_string()) << "\n";
 			}
 		}
 	}
-	//selects move with best avg ucb across copies
+	//selects move with best avg score across copies
 	//if multiple are tied, chooses among them at random
-	float best_avg_ucb = -1000;
+	float best_avg_score = -1000;
 	vector<Move> best_moves;
 	Move best_move;
 	for (auto score : scores){
-		float avg_ucb = score.second.second / score.second.first;
+		float avg_score = score.second.second / score.second.first;
 		//cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
-		if (avg_ucb >= best_avg_ucb){
-			if (avg_ucb > best_avg_ucb)
+		if (avg_score >= best_avg_score){
+			if (avg_score > best_avg_score)
 				best_moves.clear();
-			best_avg_ucb = avg_ucb;
+			best_avg_score = avg_score;
 			best_moves.push_back(Move(score.first));
 		}
 	}
@@ -92,20 +92,46 @@ StateNode* StateNode::get_best_move(){
 	//now with the best move, get the node of the best UCB example of that move from across the copies
 	//maybe not finding bestnode is problem with horizontal bool, or with conversion
 	StateNode* best_node = nullptr;
-	float node_ucb = -1000;
+	float node_score = -1000;
 	for (auto &copy : copies){
 		for (StateNode &child : copy.children){
-			if (child.move == best_move && child.UCB() > node_ucb){
-				node_ucb = child.UCB();
+			if (child.move == best_move && child.score > node_score){
+				node_score = child.score;
 				best_node = &child;
 				break;
 			}
 		}
 	}
 
-	cout << "FINAL RESULT: " << best_move << " with UCB: " << best_avg_ucb <<"\n";
+	cout << "FINAL RESULT: " << best_move << " with score: " << best_avg_score <<"\n";
 	
-	return best_node;
+
+	//VERY IMPORTANT to copy the subtree over to the parent rather than returning the pointer.
+	//also in future maybe want to average out results from all subtrees? depends how much time it is to compute vs avg, but 
+	//very likely worth the trouble.
+	//StateNode* best_child;
+	int i=0;
+	for(auto& child : this->children){
+		if (best_move == child.move){
+			//child = *best_node;
+			//best_child = &(this->children[i]);
+			break;
+		}
+		i++;
+	}
+	//maybe clear best_node's children's children?
+	for (auto& child : best_node->children){
+		child.children.clear();
+	}
+	//takes a very long time, see why perhaps?
+	best_node->children.clear();
+	//output_tree_stats(best_node);
+	//best_node->print_node();
+
+	this->children[i] = *best_node;
+	this->children[i].fix_parent_references();
+
+	return i;
 }
 
 void best_move_worker(int id, StateNode* root){
@@ -136,7 +162,8 @@ void best_move_worker(int id, StateNode* root){
 
 			int index = rand() % max_list.size();
 			curr = max_list[index];
-			cout << "-";
+			
+			//cout << "-";
 		}
 
 		//we have reached a leaf node.
@@ -155,23 +182,24 @@ void best_move_worker(int id, StateNode* root){
 		curr->children[index].children.clear();
 	}
 
+	//while UCB is used to select move for playout, use score for best move selection
 	//find best UCB so far for root's direct children
 	vector<StateNode*> max_list;
-	double max_ucb = -1000, curr_ucb = 0;
+	double max_score = -1000, curr_score = 0;
 	//find highest UCB in group, random if tied, important to be able to break ties
 	for (int i = 0; i < root->children.size(); i++){
 		StateNode* currChild = &(root->children[i]);
-		curr_ucb = currChild->UCB();
-		if (max_ucb < curr_ucb){
-			if (max_ucb != curr_ucb)
+		curr_score = currChild->score;
+		if (max_score < curr_score){
+			if (max_score != curr_score)
 				max_list.clear();
-			max_ucb = curr_ucb;
+			max_score = curr_score;
 			max_list.push_back(currChild);
 		}
 	}
 
 	int index = rand() % max_list.size();
-	cout << "Worker " << id << " proposes " << max_list[index]->move << " with UCB: " << max_ucb <<"\n";
+	cout << "Worker " << id << " proposes " << max_list[index]->move << " with score: " << max_score <<"\n";
 	//max_list[index]->print_node();
 	output_tree_stats(root);
 
@@ -261,9 +289,10 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 
 	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
 	if (p1.numFences == 0 && p2.numFences == 0){
-		int difference;
 		vector<Move> myTurnMoves, theirTurnMoves;
-		difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		int difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		if (difference == -999)
+			std::cout << "PAWN BLOCKED" <<std::endl;
 		if (this->turn)
 			vmoves.push_back(myTurnMoves[0]);
 		else
@@ -282,7 +311,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
 				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col+1, false));
-				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left
+				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left //TOOK OUT -1 on the last index, ie currPLayer.col-1, not sure if significant
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col-1, false));
 			}
 		}
@@ -335,9 +364,8 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 StateNode* StateNode::play_out(){
 	int numChildren;
 	int choice;
-	bool found_move = true;
 	StateNode* currState = this;
-	int scoreModifier;
+	int scoreModifier = 0;
 
 	std::time_t start_time = std::time(0);
 	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
@@ -361,13 +389,13 @@ StateNode* StateNode::play_out(){
 		else if (numChildren != 0){
 			choice = rand() % numChildren;
 			std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
-			//currState = &(*it);
-			currState = &(currState->children[choice]);
+			currState = &(*it);
+			//currState = &(currState->children[choice]);
 		}
 		else {
 			//currState->visualize_gamestate();
 			//printf("No valid children during playout, or no valid pawn moves\n");
-			found_move = false;
+			
 			break;
 		}
 		
@@ -416,7 +444,7 @@ double StateNode::UCB() const{
 //else, adds state to the passed in state's children
 bool test_and_add_move(StateNode* state, Move move){
 	
-	int difference;
+	int difference = 0;
 	if (move.type == 'f')
 		difference = pathfinding(state, move);
 	if (difference != -999){
@@ -433,23 +461,23 @@ bool test_and_add_move(StateNode* state, Move move){
 //note that when a gamenode is created from other gamestates, its score is initialized as the 
 //difference between players' shortest path to respective goals. Do not call evaluate()
 //on the same node more than once to avoid problems.
-void StateNode::evaluate(){
-	Player currPlayer;
-	Player otherPlayer;
-	if (this->turn){
-		currPlayer = this->p1;
-		otherPlayer = this->p2;
-	}
-	else {
-		currPlayer = this->p2;
-		otherPlayer = this->p1;
-	}
+// void StateNode::evaluate(){
+// 	Player currPlayer;
+// 	Player otherPlayer;
+// 	if (this->turn){
+// 		currPlayer = this->p1;
+// 		otherPlayer = this->p2;
+// 	}
+// 	else {
+// 		currPlayer = this->p2;
+// 		otherPlayer = this->p1;
+// 	}
 
 
-	double distanceCoeff, fenceCoeff, fence2Coeff = 1.0;
+// 	double distanceCoeff, fenceCoeff, fence2Coeff = 1.0;
 
-	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
-}
+// 	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
+// }
 
 
 //DANGEROUS: deque will not preserve pointer validity when things are erased.
@@ -829,7 +857,6 @@ void StateNode::print_node(){
 	int index = 0;	
 	for(int i = 16; i >= 0; i--){
 		for(int j = 0; j < 9; j++){
-			char c = '\0';
 			if ( i % 2 == 0 ) {
 
 				if ( (p1.row == i/2 && p1.col == j) || (p2.row == i/2 && p2.col == j) )

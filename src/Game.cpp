@@ -32,7 +32,8 @@ void Game::run_game(){
 	while(!gameOver){
 		StateNode* next_state;
 		if(currState->turn){
-			next_state = currState->get_best_move();
+			int ret = currState->get_best_move();
+			next_state = &(currState->children[ret]);
 			if (next_state != nullptr){
 				next_state->print_node();
 				player_move = get_player_move(next_state);	
@@ -83,11 +84,13 @@ void Game::run_game(){
 Move Game::get_player_move(StateNode* currState){
 	Move player_move;
 	std::string viz_retval;
-	time_point<system_clock> t, now;
+	time_point<system_clock> start, end;
 	while( true ){ //input loop, gathers input from player until it receives a valid move
-		now = system_clock::now();
-		duration<double> length = now - t;
-		if (length.count() < 1.0){//trys to detect error state so it doesnt open python instances on loop
+		start = system_clock::now();
+		viz_retval = currState->visualize_gamestate();
+		end = system_clock::now();
+		duration<double> length = end - start;
+		if (length.count() < .3){//trys to detect error state so it doesnt open python instances on loop
 			std::cout << length.count() << " too short, loop detected, terminating" << std::endl;
 			//TERMINATE PROGRAM
 			//If this is short it means the python is erroring out and returning too quick
@@ -95,8 +98,6 @@ Move Game::get_player_move(StateNode* currState){
 			return Move();
 		}
 		
-		viz_retval = currState->visualize_gamestate();
-		t = system_clock::now();
 		if (viz_retval == "error"){
 			std::cout << "Viz gamestate returned error" << std::endl;
 			break;
@@ -122,6 +123,8 @@ Move Game::get_player_move(StateNode* currState){
 			std::cout << "Enter a valid move" << std::endl;
 		}
 	}
+	return Move();//bad state, should have returned earlier
+	
 }
 
 //recursive function for building the state tree
