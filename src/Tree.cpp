@@ -111,25 +111,45 @@ int StateNode::get_best_move(){
 	//very likely worth the trouble.
 	//StateNode* best_child;
 	int i=0;
+	bool found_match = false;
 	for(auto& child : this->children){
 		if (best_move == child.move){
 			//child = *best_node;
 			//best_child = &(this->children[i]);
+			found_match = true;
 			break;
 		}
 		i++;
 	}
-	//maybe clear best_node's children's children?
-	for (auto& child : best_node->children){
-		child.children.clear();
+	if (!found_match){
+		this->children.push_back(*best_node);
+		i = this->children.size()-1;
+	} else {
+		this->children[i] = *best_node;
 	}
+	std::cout << "adopted child stats: " ;
+	output_tree_stats(&this->children[i]);
+	//maybe clear best_node's children's children?
+	// for (auto& child : best_node->children){
+	// 	child.children.clear();
+	// }
 	//takes a very long time, see why perhaps?
-	best_node->children.clear();
+	//best_node->children.clear();
 	//output_tree_stats(best_node);
 	//best_node->print_node();
 
-	this->children[i] = *best_node;
 	this->children[i].fix_parent_references();
+
+	//try v shallow?
+	// this->children[i].score = best_node->score;
+	// this->children[i].visits = best_node->visits;
+	// this->children[i].move = best_node->move;
+	// this->children[i].p1 = best_node->p1;
+	// this->children[i].p2 = best_node->p2;
+	// this->children[i].ply = best_node->ply;
+	// this->children[i].turn = best_node->turn;
+	// //this->children[i].gamestate = best_node->gamestate;
+	// memcpy(this->children[i].gamestate, best_node->gamestate, (2*NUMROWS-1)*NUMCOLS * sizeof(bool));
 
 	return i;
 }
@@ -211,6 +231,7 @@ int StateNode::generate_valid_children(){
 	std::vector<Move> vmoves;
 	generate_valid_moves(vmoves);
 
+	this->children.reserve(vmoves.size());
 	for(auto it=vmoves.begin(); it != vmoves.end(); it++){
 		test_and_add_move(this, *it);
 	}
@@ -247,6 +268,9 @@ int StateNode::generate_random_child()
 	int numFenceMoves = generate_valid_moves(vmoves);
 	if (vmoves.size() == 0)
 		return 0;
+
+	//FOR NOW maybe never need if this is only called in playout and then dumped
+	//this->children.reserve(vmoves.size());
 
 	float random;
 	int rand_index = 0;
@@ -388,7 +412,7 @@ StateNode* StateNode::play_out(){
 		}
 		else if (numChildren != 0){
 			choice = rand() % numChildren;
-			std::deque<StateNode>::iterator it = std::next(currState->children.begin(), choice);
+			std::vector<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 			currState = &(*it);
 			//currState = &(currState->children[choice]);
 		}
@@ -486,7 +510,7 @@ int StateNode::prune_children(){
 	int dist_threshold = 1;
 	int count = 0;
 	//currently prunes fence moves too far away from either player, mostly to see effect on calc time
-	for(std::deque<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
+	for(std::vector<StateNode>::iterator it = this->children.begin(); it != this->children.end();) {
 			if(it->move.type == 'f' && l1_f_p(it->move, this->p1) > dist_threshold && l1_f_p(it->move, this->p2) > dist_threshold){
 				it = this->children.erase(it);
 				count++;

@@ -77,7 +77,7 @@ typedef struct Move{
 class StateNode
 {
 public:
-	std::deque<StateNode> children;
+	std::vector<StateNode> children;
 	StateNode* parent = nullptr;
 
 	
