@@ -66,7 +66,7 @@ void Game::run_game(){
 				}
 			}
 		}
-		std::cout << "AFTER playermove";
+		//std::cout << "AFTER playermove";
 		currState->print_node();
 
 		if (!move_exists){
@@ -125,6 +125,30 @@ Move Game::get_player_move(StateNode* currState){
 	}
 	return Move();//bad state, should have returned earlier
 	
+}
+
+void Game::self_play() {
+	bool gameOver = false;
+	StateNode* currState = this->root;
+
+	while(!gameOver){
+		StateNode* next_state;
+		int ret = currState->get_best_move();
+		next_state = &(currState->children[ret]);
+		if (next_state != nullptr){
+			next_state->print_node();
+		}else{
+			std::cout << "best_node is nullptr";
+			return;
+		}
+	
+
+
+		currState = next_state;
+		currState->print_node();
+		gameOver = currState->game_over();
+
+	}
 }
 
 //recursive function for building the state tree

@@ -464,6 +464,10 @@ double StateNode::UCB() const{
 	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
 }
 
+bool StateNode::game_over() const{
+	return (this->p1.row == 0 || this->p2.row == 8);
+}
+
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
 bool test_and_add_move(StateNode* state, Move move){

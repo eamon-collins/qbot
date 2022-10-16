@@ -39,8 +39,13 @@ hard to error check in move creation whether valid with gamestate, need to check
 
 
 
-PATHFINDING MAY BE SOURCE OF MEM INSTABILITY?
-
 ==13054== HEAP SUMMARY:
 ==13054==     in use at exit: 891,384 bytes in 3,690 blocks
 ==13054==   total heap usage: 1,692,116 allocs, 1,688,426 frees, 126,272,594 bytes allocated
+
+see if this is improved by vector/reserve usage ^
+
+TODO:
+self_play
+	need to make sure tree keeps building, not too much info is lost.
+		should make merge_tree method, that takes different trees simulating from the same gamestate and merges their scores/visits, could use for merging thread insights every move but really most useful when loading a pre-trained tree and doing additional work on it in both run_game and self_play

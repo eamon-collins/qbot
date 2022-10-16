@@ -117,6 +117,7 @@ public:
 	void update_vi(); //calculates average score for every node under this one.
 	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
 	std::string visualize_gamestate();
+	bool game_over() const; //tests whether the game is over at this state or not
 
 
 	void print_node(); //printfs a representation of the gamestate at this node

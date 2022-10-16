@@ -13,9 +13,11 @@ int num_threads = NUM_THREADS;
 int main(int argc, char *argv[]){
 	int player = 1;
 	std::string save_file = "database.txt";
+	std::string load_file;
+	bool train = false;
 	//
 	int c;
-	while ((c = getopt(argc, argv, "t:p:")) != -1) {
+	while ((c = getopt(argc, argv, "t:p:s:l:b")) != -1) {
 		switch (c) {
 			case 't':
 				num_threads = atoi(optarg); 
@@ -25,6 +27,10 @@ int main(int argc, char *argv[]){
 				break;
 			case 's':
 				save_file = optarg;
+			case 'b':
+				train = true;
+			case 'l':
+				load_file = optarg;
 			}
 		break;
 	}
@@ -33,11 +39,16 @@ int main(int argc, char *argv[]){
 	//seeds random number generation with time in seconds
 	std::srand(std::time(0));
 
+	//if we have a tree-file given, load the tree. Otherwise, create a new one.
 	StateNode* root;
-	if(player == 2)
-		root = new StateNode(false); //inits starting gamestate
-	else
-		root = new StateNode(true);
+	if (load_file.size() > 0){
+		root = load_tree(load_file);
+	} else {
+		if(player == 2)
+			root = new StateNode(false); //inits starting gamestate
+		else
+			root = new StateNode(true);
+	}
 
 
 	//TESTING PURPOSES ONLY< REMOVE THIS SEGMENT LATER
@@ -47,12 +58,14 @@ int main(int argc, char *argv[]){
 
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
-
 	//starts new game at gamestate specified by root
 	Game game = Game(root);
-
-	//uses generate_children and prune_children to generate state tree of moves from current root
-	game.run_game();
+	if ( train ) {
+		game.self_play();
+	} else {
+		//uses generate_children and prune_children to generate state tree of moves from current root
+		game.run_game();
+	}
 
 	// auto arbitrary = game.root->children.begin();
 	// std::advance(arbitrary,3);
