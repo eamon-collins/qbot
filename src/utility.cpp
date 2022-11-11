@@ -62,7 +62,7 @@ int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> 
 	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map, found);
 	if (pathLength == -1){ //
 		return -999;
-	}else if((state->p1.numFences == 0 && state->p2.numFences == 0) && state->turn && !found.empty()){
+	}else if((state->p1.numFences == 0 /*&& state->p2.numFences == 0*/) && state->turn && !found.empty()){
 		Move pawn_move = Move();
 		pawn_move.type = 'p';
 		for (SMII& square : found){
@@ -83,7 +83,7 @@ int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> 
 	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map, found);
 	if (p2pathLength == -1){ 
 		return -999;
-	}else if((state->p1.numFences == 0 && state->p2.numFences == 0) && !state->turn && !found.empty()){ //player2 turn
+	}else if((/*state->p1.numFences == 0 &&*/ state->p2.numFences == 0) && !state->turn && !found.empty()){ //player2 turn
 		Move pawn_move = Move();
 		pawn_move.type = 'p';
 		for (SMII& square : found){
