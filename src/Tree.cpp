@@ -79,6 +79,7 @@ int StateNode::get_best_move(){
 	vector<Move> best_moves;
 	Move best_move;
 	for (auto score : scores){
+		cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
 		float avg_score = score.second.second / score.second.first;
 		//cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
 		if (avg_score >= best_avg_score){
@@ -167,7 +168,7 @@ void best_move_worker(int id, StateNode* root){
 		//SELECTION
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
-			double max_ucb = 0, curr_ucb = 0;
+			double max_ucb = -999, curr_ucb = 0;
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
@@ -180,6 +181,9 @@ void best_move_worker(int id, StateNode* root){
 				}
 			}
 
+			if (max_list.size() == 0) {
+				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
+			}
 			int index = rand() % max_list.size();
 			curr = max_list[index];
 			

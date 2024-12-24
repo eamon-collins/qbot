@@ -72,9 +72,12 @@ void Game::run_game(){
 		if (!move_exists){
 			std::cout << "Could not produce player move state\n";
 			return;
+		} else if (currState->p1.row == 8) {
+			//check win condition
+			std::cout << "!!! Player1 Wins !!!" << std::endl;
+			gameOver = true;
 		}
 	
-		//gameOver = true;
 	}
 #ifndef NOVIZ
 	Py_Finalize();
