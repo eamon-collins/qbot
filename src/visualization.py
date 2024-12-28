@@ -1,5 +1,5 @@
 import sys
-sys.path.append('/home/eamon/repos/Quoridor-Online')
+sys.path.append('../Quoridor-Online')
 #viz = importlib.util.spec_from_file_location("visualize_gamestate", "../../Quoridor-Online/quoridor/client/__main__.py")
 from quoridor.client.bot_integration import visualize_gamestate
 

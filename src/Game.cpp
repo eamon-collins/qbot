@@ -25,7 +25,7 @@ void Game::run_game(){
 	Py_Initialize();
 	// Build the name object
 	PyObject* sysPath = PySys_GetObject("path");
-	PyList_Append(sysPath, PyUnicode_FromString("/home/eamon/repos/Quoridor-Online/quoridor/client"));
+	PyList_Append(sysPath, PyUnicode_FromString("../Quoridor-Online/quoridor/client"));
 #endif
 
 	Move player_move;
