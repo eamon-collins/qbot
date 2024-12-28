@@ -6,6 +6,7 @@ import pygame
 from quoridor.client.src.colors import Colors
 from quoridor.client.src.widgets import Text, Button
 from quoridor.client.src.coord import Coords
+import os
 
 os.environ['SDL_VIDEO_WINDOW_POS'] = "%d, %d" %(100, 100)
 

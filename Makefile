@@ -1,16 +1,23 @@
 # Makefile for qbot
 
+# Use current conda env for python
+CONDA_PREFIX = $(shell python -c "import sys; print(sys.prefix)")
+LDFLAGS = $(shell python3-config --ldflags)
+CONDINC = $(shell python3-config --includes)
+CONDLIB = $(shell python3-config --libs)
+
 # Compiler options
 CXX = g++ # use g++ compiler
 #FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
-FLAGS = -I/usr/include/python3.12 -I/usr/include/python3.12 -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
+FLAGS = -I$(CONDA_PREFIX)/include/python3.12 -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
+
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
-LDFLAGS = -L/usr/lib/lib/x86_64-linux-gnu
-LDLIBS = -lpython3.8
+
 #flags for python 3.6 compatibility
 WLDLIBS = -lpython3.6m
 WFLAGS = -I/usr/include/python3.6m -I/usr/lib/python3.6 -fstack-protector -Wformat -DNDEBUG -fwrapv
 WCXXFLAGS = $(WFLAGS) -lpthread -pthread -lstdc++fs -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
+
 #flags to compile without python integration and all c++ visualization/input
 VFLAGS = -fstack-protector -Wall -Wformat -Werror=format-security -DNDEBUG -fwrapv -DNOVIZ
 VCXXFLAGS = $(VFLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie
@@ -21,7 +28,8 @@ FCXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -D_GNU_SOURCE -DWITHOUT_NUMPY
 OFILES = src/QuoridorMain.o src/Tree.o src/utility.o src/Game.o src/storage.o
 
 qbot: $(OFILES)
-	$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.8 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	$(CXX) $(CONDINC) $(LDFLAGS) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	@echo Produced qbot executable 
 
 work: FLAGS = $(WFLAGS)

@@ -23,9 +23,15 @@ void Game::run_game(){
 #ifndef NOVIZ
 	//make it so all threads can use python interpreter. mutex to govern GIL
 	Py_Initialize();
+	    PyRun_SimpleString(R"(
+import sys
+import os
+sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
+		)");
 	// Build the name object
 	PyObject* sysPath = PySys_GetObject("path");
-	PyList_Append(sysPath, PyUnicode_FromString("../Quoridor-Online/quoridor/client"));
+	PyList_Append(sysPath, PyUnicode_FromString("Quoridor-Online/quoridor/client"));
+	PyList_Append(sysPath, PyUnicode_FromString("Quoridor-Online"));
 #endif
 
 	Move player_move;

@@ -5,6 +5,7 @@ import sys
 import os
 #sorry pygame, it's annoying
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+print(sys.prefix)
 import pygame
 from quoridor.client.src.network import Network
 from quoridor.client.src.window import Window, pos_in_rect

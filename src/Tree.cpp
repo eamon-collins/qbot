@@ -79,7 +79,7 @@ int StateNode::get_best_move(){
 	vector<Move> best_moves;
 	Move best_move;
 	for (auto score : scores){
-		cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
+		// cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
 		float avg_score = score.second.second / score.second.first;
 		//cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
 		if (avg_score >= best_avg_score){
