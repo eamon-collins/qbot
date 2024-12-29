@@ -806,6 +806,7 @@ string StateNode::visualize_gamestate(){
 			PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
 		}
 		PyErr_Print();
+		cout << "IndexError HERE" << std::endl;
 		PyObject *p1w, *p1x, *p1y, *p2w, *p2x, *p2y;
 		p1w = Py_BuildValue("i", p1.numFences);
 		p2w = Py_BuildValue("i", p2.numFences);
@@ -820,8 +821,11 @@ string StateNode::visualize_gamestate(){
 			PyObject *bytes = PyUnicode_AsUTF8String(presult);
 			retval = PyBytes_AsString(bytes);
 			Py_DECREF(bytes);
+			if (retval == "quit") {
+				cout << "GUI exited, game over" << std::endl;
+				exit(0);
+			}
 			cout << "Intaking move: " << retval << "\n";
-			cout << "of type "<<Py_TYPE(presult)->tp_name;
 		}
 
 		Py_DECREF(p1w);

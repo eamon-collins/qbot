@@ -49,7 +49,6 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
     
     # wx = [4,5]
     # wy = [2,2]
-    print("#H#$#")
 
     if len(wx) %2 == 0:
         arr_len = len(wx)
@@ -81,12 +80,14 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
                 if event.type == pygame.QUIT:
                     run = False
                     pygame.quit()
+                    return "quit"
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     pos = pygame.mouse.get_pos()
                     if win.button_quit.click(pos):
                         run = False
                         pygame.quit()
+                        return "quit"
                     else:    # Put a wall
                         for c in coords.coords:
                             wall_east = c.wall_east
