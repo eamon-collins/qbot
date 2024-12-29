@@ -27,10 +27,13 @@ int main(int argc, char *argv[]){
 				break;
 			case 's':
 				save_file = optarg;
+				break;
 			case 'b':
 				train = true;
+				break;
 			case 'l':
 				load_file = optarg;
+				break;
 			}
 		break;
 	}
