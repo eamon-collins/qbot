@@ -14,12 +14,12 @@ class Wall:
             self.coord3 = coord1.south
             self.coord4 = coord2.south
             self.orient = "e"
-            print("samerow")
+            # print("samerow")
         if coord1.same_column(coord2):
             self.coord3 = coord1.east
             self.coord4 = coord2.east
             self.orient = "s"
-            print("samecol")
+            # print("samecol")
 
         self.cross_wall = None
 

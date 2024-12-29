@@ -78,7 +78,7 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 		if (!move_exists){
 			std::cout << "Could not produce player move state\n";
 			return;
-		} else if (currState->p1.row == 8) {
+		} else if (currState->p1.row == 0) {
 			//check win condition
 			std::cout << "!!! Player1 Wins !!!" << std::endl;
 			gameOver = true;
