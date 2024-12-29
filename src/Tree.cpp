@@ -794,19 +794,19 @@ string StateNode::visualize_gamestate(){
 
 	if (PyCallable_Check(pFunc))
 	{
-		int num_wall_coords = x.size();
+		int num_wall_coords = x.size() > 0 ? x.size() : 1;
 		px=PyList_New(num_wall_coords);
 		py=PyList_New(num_wall_coords);
-		if (num_wall_coords == 0){
+		if (x.size() == 0){
 			PyList_SetItem(px, 0, Py_BuildValue("i",-1));
 			PyList_SetItem(py, 0, Py_BuildValue("i",-1));
-		}
-		for (int i =0; i < num_wall_coords; i++){
-			PyList_SetItem(px, i, Py_BuildValue("i",x[i]));
-			PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
+		} else {
+			for (int i =0; i < num_wall_coords; i++){
+				PyList_SetItem(px, i, Py_BuildValue("i",x[i]));
+				PyList_SetItem(py, i, Py_BuildValue("i",y[i]));
+			}
 		}
 		PyErr_Print();
-		cout << "IndexError HERE" << std::endl;
 		PyObject *p1w, *p1x, *p1y, *p2w, *p2x, *p2y;
 		p1w = Py_BuildValue("i", p1.numFences);
 		p2w = Py_BuildValue("i", p2.numFences);
