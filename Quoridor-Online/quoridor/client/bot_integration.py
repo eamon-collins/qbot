@@ -57,13 +57,16 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
     if wx and wx[0] != -1:
         for i in range(0, arr_len, 2):
             #y,x is row,col from down.
+            if wy[i] == -1:
+                wy[i] = 0
+            if wy[i+1] == -1:
+                wy[i+1] = 0
             print(f"{wy[i]},{wx[i]}   {wy[i+1]},{wx[i+1]}")
-            w = Wall(coords.find_coord(wx[i],wy[i]), coords.find_coord(wx[i+1],wy[i+1]), win)
-            #horizontal walls need to be flipped
-            # if wx[i] == wx[i+1]:
-            #   print("flipping")
-            #   w.make_cross_wall()
-            #   w = w.cross_wall
+            c1 = coords.find_coord(wx[i],wy[i])
+            c2 = coords.find_coord(wx[i+1],wy[i+1])
+            c1.link_coord()
+            c2.link_coord()
+            w = Wall(c1, c2, win)
             w.set_color(Colors.black)
             walls.add_wall(w)
 
