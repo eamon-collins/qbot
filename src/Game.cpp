@@ -2,6 +2,7 @@
 #include "Global.h"
 #include "Game.h"
 #include "utility.h"
+// #include "pathfinding.h"
 #include <chrono>
 
 
@@ -99,7 +100,7 @@ Move Game::get_player_move(StateNode* currState){
 		viz_retval = currState->visualize_gamestate();
 		end = system_clock::now();
 		duration<double> length = end - start;
-		if (length.count() < .3){//trys to detect error state so it doesnt open python instances on loop
+		if (length.count() < .2){//trys to detect error state so it doesnt open python instances on loop
 			std::cout << length.count() << " too short, loop detected, terminating" << std::endl;
 			//TERMINATE PROGRAM
 			//If this is short it means the python is erroring out and returning too quick
@@ -118,6 +119,8 @@ Move Game::get_player_move(StateNode* currState){
 			currState->generate_valid_moves(valid_moves);
 			for (auto move : valid_moves){
 				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
+					int pf = pathfinding(currState, move, true);
+					cout << "relative length to goal " << pf << std::endl;
 					if (player_move.type == 'f' && pathfinding(currState, move) == -999){
 						std::cout << "Attempted move blocks a player from their goal" << std::endl;	
 					}else{

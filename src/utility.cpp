@@ -98,14 +98,23 @@ int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> 
 	return score;
 }
 
-int pathfinding(StateNode* state, Move move){
-	
-	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
-	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
-	// if(fencesUsed < 3 || ((move.type == 'p') && fencesUsed < 4))
-	// 	return true;
+void print_map(std::map<Pos, SearchMapItem> map){
+	Pos p;
+	for (int r = 0; r < 2*NUMROWS-1; r++) {
+		for (int c = 0; c < 2*NUMCOLS-1; c++) {
+			p.y = r;
+			p.x = c;
+			if (map[p].traversble) {
+				cout << (map[p].goal ? "G" : "O");
+			} else {
+				cout << " ";
+			}
+		}
+		cout << "\n";
+	}
+}
 
-
+int pathfinding(StateNode* state, Move move, bool verbose){
 	bool gamestate[2*NUMROWS - 1][NUMCOLS];
 	//copy over the state in question's gamestate so we don't affect the state itself
 	memcpy(gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
@@ -126,23 +135,31 @@ int pathfinding(StateNode* state, Move move){
 	std::map<Pos, SearchMapItem> search_map;
 	std::vector<SMII> found;
 
-	MakeMap(gamestate, true, search_map); //fills search_map for player1
+	MakeMap(gamestate, false, search_map); //fills search_map for player1
+	if (verbose) {
+		print_map(search_map); 
+	}
 	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map, found);
 	if (pathLength == -1){ //
 		return -999;
 	}
 
 	//all that needs to be different for player 2 is the bottom row is the goal, then we can reuse the search_map
-	for(int i = 0; i < 2*NUMCOLS-1; i++){
-		search_map[Pos(0,i)].goal = false;
-		search_map[Pos(2*NUMROWS-1,i)].goal = true;
-	}
-	found.clear();
+	// for(int i = 0; i < 2*NUMCOLS-1; i++){
+	// 	search_map[Pos(0,i)].goal = true;
+	// 	search_map[Pos(2*NUMROWS-1,i)].goal = false;
+	// }
+	// found.clear();
 
-	//MakeMap(gamestate, false, search_map); //for player2 
+	MakeMap(gamestate, true, search_map); //for player2 
 	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map, found);
 	if (p2pathLength == -1){ 
 		return -999;
+	}
+
+	if (verbose) {
+		cout << "P1 distance: " << pathLength << std::endl;
+		cout << "P2 distance: " << p2pathLength << std::endl;
 	}
 
 	int score = p2pathLength/2 - pathLength/2;
@@ -150,73 +167,6 @@ int pathfinding(StateNode* state, Move move){
 	return score;
 }
 
-int pathfinding2(StateNode* state, Move move){
-	
-	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
-	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
-	// if(fencesUsed < 3 || ((move.type == 'p') && fencesUsed < 4))
-	// 	return true;
-
-	AStarSearch<SearchNode> astarsearch;
-
-	SearchNode startNode1 = SearchNode(state->p1.row, state->p1.col);
-	SearchNode startNode2 = SearchNode(state->p2.row, state->p2.col);
-
-	//copy over the state in question's gamestate so we don't affect the state itself
-	memcpy(astarsearch.gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
-
-	//apply the proposed move
-	if(move.type == 'f'){
-		if (move.horizontal){
-			astarsearch.gamestate[move.row][move.col] = true;
-			astarsearch.gamestate[move.row][move.col+1] = true;
-		}else{
-			astarsearch.gamestate[move.row][move.col] = true;
-			//gamestate[move.row+1][move.col] = true;
-			astarsearch.gamestate[move.row+2][move.col] = true;
-		}
-	}
-	else{
-		if (state->turn){
-			startNode1.row = move.row;
-			startNode1.col = move.col;
-		}else{
-			startNode2.row = move.row;
-			startNode2.col = move.col;
-		}
-	}
-
-	SearchNode goalNode;
-	//search player1's path, can't exit early though
-	for(int i = 0; i < NUMCOLS; i++){
-	}
-
-	return -1;
-}
-SearchNode::SearchNode(){}
-SearchNode::SearchNode(int row, int col){
-	this->row = row;
-	this->col = col;
-}
-
-float SearchNode::GoalDistanceEstimate( SearchNode &nodeGoal ){
-	return std::abs(nodeGoal.row - this->row) + std::abs(nodeGoal.col - this->col);
-}
-
-bool SearchNode::IsGoal( SearchNode &nodeGoal ){
-	return IsSameState( nodeGoal );
-}
-bool SearchNode::IsSameState(SearchNode &rhs){
-	if (rhs.row == this->row && rhs.col == this->col)
-		return true;
-	return false;
-}
-bool GetSuccessors( AStarSearch<SearchNode> *astarsearch ){
-	return false;
-}
-float GetCost( SearchNode *successor ){
-	return -1.0;
-}
 
 const char FLOOR = '1' ;
 const char WALL  = '0' ;
@@ -400,4 +350,72 @@ void fill_int(char ch[], int integer, int num_digits){
 	for (int i = num_digits-1; i >= 0; i--){
 		
 	}
+}
+
+int pathfinding2(StateNode* state, Move move){
+	
+	//heuristics to try and avoid needing to do pathfinding as much as possible //TAKEN OUT BECAUSE I NEED TO HAVE PATHLENGTH OF ALL VALID NODES, ONLY DISQUALIFYING HEURISTICS ALLOWED
+	// int fencesUsed = 2*NUMFENCES - state->p1.numFences - state->p2.numFences;
+	// if(fencesUsed < 3 || ((move.type == 'p') && fencesUsed < 4))
+	// 	return true;
+
+	AStarSearch<SearchNode> astarsearch;
+
+	SearchNode startNode1 = SearchNode(state->p1.row, state->p1.col);
+	SearchNode startNode2 = SearchNode(state->p2.row, state->p2.col);
+
+	//copy over the state in question's gamestate so we don't affect the state itself
+	memcpy(astarsearch.gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
+
+	//apply the proposed move
+	if(move.type == 'f'){
+		if (move.horizontal){
+			astarsearch.gamestate[move.row][move.col] = true;
+			astarsearch.gamestate[move.row][move.col+1] = true;
+		}else{
+			astarsearch.gamestate[move.row][move.col] = true;
+			//gamestate[move.row+1][move.col] = true;
+			astarsearch.gamestate[move.row+2][move.col] = true;
+		}
+	}
+	else{
+		if (state->turn){
+			startNode1.row = move.row;
+			startNode1.col = move.col;
+		}else{
+			startNode2.row = move.row;
+			startNode2.col = move.col;
+		}
+	}
+
+	SearchNode goalNode;
+	//search player1's path, can't exit early though
+	for(int i = 0; i < NUMCOLS; i++){
+	}
+
+	return -1;
+}
+SearchNode::SearchNode(){}
+SearchNode::SearchNode(int row, int col){
+	this->row = row;
+	this->col = col;
+}
+
+float SearchNode::GoalDistanceEstimate( SearchNode &nodeGoal ){
+	return std::abs(nodeGoal.row - this->row) + std::abs(nodeGoal.col - this->col);
+}
+
+bool SearchNode::IsGoal( SearchNode &nodeGoal ){
+	return IsSameState( nodeGoal );
+}
+bool SearchNode::IsSameState(SearchNode &rhs){
+	if (rhs.row == this->row && rhs.col == this->col)
+		return true;
+	return false;
+}
+bool GetSuccessors( AStarSearch<SearchNode> *astarsearch ){
+	return false;
+}
+float GetCost( SearchNode *successor ){
+	return -1.0;
 }
