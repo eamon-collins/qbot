@@ -39,7 +39,7 @@ Dir other(Dir d);
 
 struct SearchMapItem
 {
-    bool traversble;
+    bool traversable;
     bool goal;
     bool visited;
     int cost_here;
@@ -66,5 +66,6 @@ int pathfinding(StateNode* state, Move move, bool verbose=false);
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
 //returns length of the shortest path or -1 if there is no path
 int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map, std::vector<SMII>& found);
+int FindGoalFrom( const Pos& start, std::map<Pos,SearchMapItem>& search_map, bool verbose=false);
 
 void fill_int(char ch[], int integer, int num_digits);

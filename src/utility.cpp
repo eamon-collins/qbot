@@ -3,6 +3,7 @@
 #include "utility.h"
 #include <cstdlib>
 #include <vector>
+#include <queue>
 #include <iostream>
 #include <algorithm>
 #include <string>
@@ -98,13 +99,17 @@ int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> 
 	return score;
 }
 
-void print_map(std::map<Pos, SearchMapItem> map){
+void print_map(std::map<Pos, SearchMapItem> map, Player p1, Player p2){
 	Pos p;
 	for (int r = 0; r < 2*NUMROWS-1; r++) {
 		for (int c = 0; c < 2*NUMCOLS-1; c++) {
 			p.y = r;
 			p.x = c;
-			if (map[p].traversble) {
+			if (2*p1.row == r && 2*p1.col == c) {
+				cout << "p";
+			} else if (2*p2.row == r && 2*p2.col == c) {
+				cout << "q";
+			} else if (map[p].traversable) {
 				cout << (map[p].goal ? "G" : "O");
 			} else {
 				cout << " ";
@@ -120,6 +125,8 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	memcpy(gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
 
 	//apply the proposed move
+	Player p1 = state->turn ? state->p1 : state->p2;
+	Player p2 = !state->turn ? state->p1 : state->p2;
 	if (move.type == 'f'){
 		if (move.horizontal){
 			gamestate[move.row][move.col] = true;
@@ -129,6 +136,9 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 			//gamestate[move.row+1][move.col] = true;
 			gamestate[move.row+2][move.col] = true;
 		}
+	} else if (move.type == 'p'){
+		p1.row = move.row;
+		p1.col = move.col;
 	}
 
 
@@ -137,27 +147,30 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 
 	MakeMap(gamestate, false, search_map); //fills search_map for player1
 	if (verbose) {
-		print_map(search_map); 
+		print_map(search_map, p1, p2); 
 	}
-	int pathLength = FindGoalFrom(Pos(2*(state->p1.row), 2*(state->p1.col)), search_map, found);
+	// int pathLength = FindGoalFrom(Pos(2*(p1.row), 2*(p1.col)), search_map, found);
+	int pathLength = FindGoalFrom(Pos(2*(p1.col), 2*(p1.row)), search_map, verbose);
 	if (pathLength == -1){ //
 		return -999;
 	}
 
-	//all that needs to be different for player 2 is the bottom row is the goal, then we can reuse the search_map
-	// for(int i = 0; i < 2*NUMCOLS-1; i++){
-	// 	search_map[Pos(0,i)].goal = true;
-	// 	search_map[Pos(2*NUMROWS-1,i)].goal = false;
-	// }
+	//all that needs to be different for player 2 is switching the goal, then we can reuse the search_map
+	for(int i = 0; i < 2*NUMCOLS-1; i+=2){
+		search_map[Pos(i,0)].goal = true;
+		search_map[Pos(i,2*NUMROWS-2)].goal = false;
+	}
 	// found.clear();
 
-	MakeMap(gamestate, true, search_map); //for player2 
-	int p2pathLength = FindGoalFrom(Pos(2*(state->p2.row), 2*(state->p2.col)), search_map, found);
+	// MakeMap(gamestate, true, search_map); //for player2 
+	// int p2pathLength = FindGoalFrom(Pos(2*(p2.row), 2*(p2.col)), search_map, found);
+	int p2pathLength = FindGoalFrom(Pos(2*(p2.col), 2*(p2.row)), search_map, verbose);
 	if (p2pathLength == -1){ 
 		return -999;
 	}
 
 	if (verbose) {
+		print_map(search_map, p1, p2); 
 		cout << "P1 distance: " << pathLength << std::endl;
 		cout << "P2 distance: " << p2pathLength << std::endl;
 	}
@@ -259,16 +272,16 @@ void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem
 	        smi.came_from = d_end;
 	        if( Map[p.y][p.x] == WALL )
 	        {
-	            smi.traversble = false;
+	            smi.traversable = false;
 	        }
 	        else if( Map[p.y][p.x] == GOAL )
 	        {
-	            smi.traversble = true;
+	            smi.traversable = true;
 	            smi.goal = true;
 	        }
 	        else if( Map[p.y][p.x] == FLOOR )
 	        {
-	            smi.traversble = true;
+	            smi.traversable = true;
 	            smi.goal = false;
 	            for( Dir d = d_beg; d != d_end; ++d )
 	            {
@@ -284,66 +297,69 @@ void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem
 
 }
 
-//places path in found
-int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map, std::vector<SMII>& found)
-{
+int heuristic(const Pos &current, const std::vector<Pos> &goals) {
+    int min_dist = std::numeric_limits<int>::max();
+    for (const auto &goal : goals) {
+        int dist = std::abs(current.x - goal.x) + std::abs(current.y - goal.y);
+        min_dist = std::min(min_dist, dist);
+    }
+    return min_dist;
+}
 
-    //std::vector<SMII> found;
-
-    {
-        SMII smii = search_map.find(start);
-
-        if(smii==search_map.end()) { std::cout << "starting outside map\n"; 
-        return false; }
-        if(smii->second.goal) {return true; }
-        if(!smii->second.traversble) { std::cout << "starting in a wall\n"; return false; }
-
-        smii->second.visited = true;
-        smii->second.cost_here = 0;
-        found.push_back(smii);
+int FindGoalFrom(const Pos &start, std::map<Pos, SearchMapItem> &search_map, bool verbose) {
+    // Identify all goal positions
+    std::vector<Pos> goals;
+    for (const auto &[pos, item] : search_map) {
+        if (item.goal) {
+            goals.push_back(pos);
+        }
     }
 
-	int cost_so_far = 0;	
-	bool did_find = false;
+    // If there are no goals, return -1
+    if (goals.empty()) {
+        return -1;
+    }
 
-    while(!did_find)
-    {
+    // Priority queue for A* search with f-score
+    std::priority_queue<std::pair<int, Pos>, std::vector<std::pair<int, Pos>>, std::greater<>> pq;
+    std::map<Pos, int> g_cost;
 
-        std::vector<SMII> candidates;
+    // Initialize the search
+    pq.push({heuristic(start, goals), start});
+    g_cost[start] = 0;
 
-        for( SMII smii : found )
-        {
-            for( Dir d = d_beg; d != d_end; ++d )
-            {
-                if( ! smii->second.paths[d] ) continue;
-                Pos p = smii->first + deltas[d];
-                if(!valid(p)) continue;
-                SMII cand = search_map.find(p);
-                if(cand==search_map.end()) continue;
-                if(cand->second.visited) continue;
-                cand->second.came_from=d;
-                candidates.push_back(cand);
+    while (!pq.empty()) {
+        auto [f_score, current] = pq.top();
+        pq.pop();
+
+        // Check if the current position is a goal
+        if (search_map[current].goal) {
+			if(verbose)
+				cout << "start: "<<start.x<<","<<start.y<<" end: "<<current.x<<","<<current.y<<std::endl;
+            return g_cost[current];  // Return shortest path to the nearest goal
+        }
+
+        // Explore neighboring positions
+        for (const auto &dir : deltas) {
+            Pos neighbor = Pos(current.x + dir.x, current.y + dir.y);
+
+            // Check if the position is in the map and is traversable
+            if (search_map.find(neighbor) == search_map.end() || !search_map[neighbor].traversable) {
+                continue;
+            }
+
+            int new_cost = g_cost[current] + 1;  // Each move costs 1
+
+            if (g_cost.find(neighbor) == g_cost.end() || new_cost < g_cost[neighbor]) {
+                g_cost[neighbor] = new_cost;
+                int f_score = new_cost + heuristic(neighbor, goals);
+                pq.push({f_score, neighbor});
             }
         }
-
-        ++cost_so_far;
-
-        if( candidates.empty() ) break;
-
-        for( SMII smii : candidates )
-        {
-            smii->second.visited = true;
-            smii->second.cost_here = cost_so_far;
-            found.push_back(smii);
-            if( smii->second.goal ) { did_find = true; break; }
-        }
-
     }
 
-	if( ! did_find ) 
-		return -1; 
-	else 
-		return cost_so_far;
+    // No path to any goal found
+    return -1;
 }
 
 void fill_int(char ch[], int integer, int num_digits){
@@ -394,6 +410,68 @@ int pathfinding2(StateNode* state, Move move){
 	}
 
 	return -1;
+}
+
+//places path in found
+int FindGoalFrom( Pos start , std::map<Pos,SearchMapItem> &search_map, std::vector<SMII>& found)
+{
+
+    //std::vector<SMII> found;
+
+    {
+        SMII smii = search_map.find(start);
+
+        if(smii==search_map.end()) { std::cout << "starting outside map\n"; 
+        return -1; }
+        if(smii->second.goal) {return 0; }
+        if(!smii->second.traversable) { std::cout << "starting in a wall\n"; return -1; }
+
+        smii->second.visited = true;
+        smii->second.cost_here = 0;
+        found.push_back(smii);
+    }
+
+	int cost_so_far = 0;	
+	bool did_find = false;
+
+    while(!did_find)
+    {
+
+        std::vector<SMII> candidates;
+
+        for( SMII smii : found )
+        {
+            for( Dir d = d_beg; d != d_end; ++d )
+            {
+                if( ! smii->second.paths[d] ) continue;
+                Pos p = smii->first + deltas[d];
+                if(!valid(p)) continue;
+                SMII cand = search_map.find(p);
+                if(cand==search_map.end()) continue;
+                if(cand->second.visited) continue;
+                cand->second.came_from=d;
+                candidates.push_back(cand);
+            }
+        }
+
+        ++cost_so_far;
+
+        if( candidates.empty() ) break;
+
+        for( SMII smii : candidates )
+        {
+            smii->second.visited = true;
+            smii->second.cost_here = cost_so_far;
+            found.push_back(smii);
+            if( smii->second.goal ) { did_find = true; break; }
+        }
+
+    }
+
+	if( ! did_find ) 
+		return -1; 
+	else 
+		return cost_so_far;
 }
 SearchNode::SearchNode(){}
 SearchNode::SearchNode(int row, int col){
