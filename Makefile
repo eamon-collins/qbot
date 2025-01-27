@@ -9,8 +9,8 @@ CONDLIB = $(shell python3-config --libs)
 # Compiler options
 CXX = g++ # use g++ compiler
 #FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
-FLAGS = -I$(CONDA_PREFIX)/include/python3.12 -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
-
+FLAGS = -I$(CONDA_PREFIX)/include/python3.12 -fstack-protector -DNDEBUG -fwrapv -L$(CONDA_PREFIX)/lib
+HOLD=-specs=/usr/share/dpkg/no-pie-compile.specs 
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 
 #flags for python 3.6 compatibility
@@ -28,7 +28,7 @@ FCXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -D_GNU_SOURCE -DWITHOUT_NUMPY
 OFILES = src/QuoridorMain.o src/Tree.o src/utility.o src/Game.o src/storage.o
 
 qbot: $(OFILES)
-	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.8 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	$(CXX) $(CONDINC) $(LDFLAGS) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	@echo Produced qbot executable 
 

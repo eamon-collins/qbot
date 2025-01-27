@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <limits>
 
 
 // L_1 norm (manhattan distance)
