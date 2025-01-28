@@ -7,7 +7,7 @@
 
 
 //number of fences per player
-#define NUMFENCES 10
+#define NUMFENCES 3
 
 #define MAXDEPTH 3
 #define MAXTIME 2 //seconds it will take maximum building the state tree

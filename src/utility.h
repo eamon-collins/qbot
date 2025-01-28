@@ -60,12 +60,15 @@ int l1_f_p(Move move1,  Player p1);
 
 //checks shortest path of each pawn to goal to make sure a proposed move is valid, but also returns p2pathlength-p1pathlength in move.row to help with scoring
 int pathfinding(StateNode* state, Move move, vector<Move> p1Moves, vector<Move> p2Moves);
+//Annoying how little redundancy b/w applying move and not, but perf was odd. Have to prio move passed in speed, as it's more common
 int pathfinding(StateNode* state, Move move, bool verbose=false);
+int pathfinding(StateNode* state, bool verbose=false);
+int pathfinding(StateNode* state, vector<Move>& path, bool verbose=false);
 
 //pathfinding helpers
 void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem> &search_map);
 //returns length of the shortest path or -1 if there is no path
 int FindGoalFrom( Pos start, std::map<Pos,SearchMapItem>& search_map, std::vector<SMII>& found);
-int FindGoalFrom( const Pos& start, std::map<Pos,SearchMapItem>& search_map, bool verbose=false);
+int FindGoalFrom( const Pos& start, std::map<Pos,SearchMapItem>& search_map, std::vector<Pos>& path, bool fill_path = false, bool verbose=false);
 
 void fill_int(char ch[], int integer, int num_digits);

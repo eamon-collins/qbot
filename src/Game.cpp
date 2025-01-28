@@ -119,6 +119,8 @@ Move Game::get_player_move(StateNode* currState){
 			currState->generate_valid_moves(valid_moves);
 			for (auto move : valid_moves){
 				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
+					// vector<Move> path; // just to debug pathfinding
+					// pathfinding(currState, path, true);
 					int pf = pathfinding(currState, move);
 					cout << "Relative length to goal " << pf << std::endl;
 					if (player_move.type == 'f' &&  pf == -999){

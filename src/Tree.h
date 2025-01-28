@@ -66,7 +66,12 @@ typedef struct Move{
 	}
 
 	bool operator==(const Move& m){
-		if (type == m.type && row == m.row && col == m.col && horizontal == m.horizontal)
+		if (type != m.type || row != m.row || col != m.col || horizontal != m.horizontal)
+			return false;
+		return true;
+	}
+	bool operator!=(const Move& m){
+		if (type != m.type || row != m.row || col != m.col || horizontal != m.horizontal)
 			return true;
 		return false;
 	}

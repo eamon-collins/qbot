@@ -317,15 +317,15 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 
 	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
 	if (p1.numFences == 0 && p2.numFences == 0){
-		vector<Move> myTurnMoves, theirTurnMoves;
-		int difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		// vector<Move> myTurnMoves, theirTurnMoves;
+		// int difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+		vector<Move> path;
+		int difference = pathfinding(this, path);
 		if (difference == -999)
 			std::cout << "PAWN BLOCKED" <<std::endl;
-		if (this->turn)
-			vmoves.push_back(myTurnMoves[0]);
-		else
-			vmoves.push_back(theirTurnMoves[0]);
-		return 0;
+		//path[0] is current location
+		vmoves.push_back(path[1]);
+		return 1;
 	}
 
 	//PAWN MOVES
@@ -400,7 +400,7 @@ StateNode* StateNode::play_out(){
 
 		//if there are no more fences this game is over
 		if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
-			scoreModifier = pathfinding(currState, currState->move );
+			scoreModifier = pathfinding(currState);
 			//cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
 			break;
 		}
@@ -474,11 +474,11 @@ bool StateNode::game_over() const{
 
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
 //else, adds state to the passed in state's children
-bool test_and_add_move(StateNode* state, Move move){
-	
-	int difference = 0;
-	if (move.type == 'f')
-		difference = pathfinding(state, move);
+bool test_and_add_move(StateNode* state, Move move){	
+	// more computation to pathfind on pawn moves too, but if we input to score need to know
+	int difference = pathfinding(state, move);
+	// if (move.type == 'f')
+	// 	difference = pathfinding(state, move);
 	if (difference != -999){
 		//StateNode snode = StateNode(state, move, difference);
 		//snode.evaluate(); //perhaps should just let score be set as difference
