@@ -260,28 +260,13 @@ void MakeMap(bool gamestate[][NUMCOLS], bool player1, std::map<Pos,SearchMapItem
 
 }
 
-int heuristic(const Pos &current, const std::vector<Pos> &goals) {
-    int min_dist = std::numeric_limits<int>::max();
-    for (const auto &goal : goals) {
-        int dist = std::abs(current.x - goal.x) + std::abs(current.y - goal.y);
-        min_dist = std::min(min_dist, dist);
-    }
-    return min_dist;
+int heuristic(const Pos &current, const int goal_y) {
+    return std::abs(current.y - goal_y);
 }
 
 int FindGoalFrom(const Pos &start, std::map<Pos, SearchMapItem> &search_map, std::vector<Pos>& path, bool fill_path, bool verbose) {
-    // Identify all goal positions
-    std::vector<Pos> goals;
-    for (const auto &[pos, item] : search_map) {
-        if (item.goal) {
-            goals.push_back(pos);
-        }
-    }
-
-    // If there are no goals, return -1
-    if (goals.empty()) {
-        return -1;
-    }
+    // only really need a single y coord to inform heuristic
+	int goal_y = search_map[Pos(0,0)].goal ? 0 : (2*NUMROWS-2);
 
     // Priority queue for A* search with f-score
     std::priority_queue<std::pair<int, Pos>, std::vector<std::pair<int, Pos>>, std::greater<>> pq;
@@ -289,7 +274,7 @@ int FindGoalFrom(const Pos &start, std::map<Pos, SearchMapItem> &search_map, std
 	std::map<Pos, Pos> came_from; // stores path
 
     // Initialize the search
-    pq.push({heuristic(start, goals), start});
+    pq.push({heuristic(start, goal_y), start});
     g_cost[start] = 0;
 
     while (!pq.empty()) {
@@ -327,7 +312,7 @@ int FindGoalFrom(const Pos &start, std::map<Pos, SearchMapItem> &search_map, std
 				if (fill_path) {
 					came_from[neighbor] = current;
 				}
-                int f_score = new_cost + heuristic(neighbor, goals);
+                int f_score = new_cost + heuristic(neighbor, goal_y);
                 pq.push({f_score, neighbor});
             }
         }
