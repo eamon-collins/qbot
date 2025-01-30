@@ -7,6 +7,8 @@
 using std::cout;
 using std::vector;
 
+
+
 struct Pos
 {
     short x,y;

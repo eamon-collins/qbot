@@ -266,6 +266,7 @@ int StateNode::generate_random_child()
 		otherPlayer = this->p1;
 	}
 	//THIS MAY NEED TO BE MODIFIED, maybe adjusted according to other metrics?
+	std::uniform_real_distribution<> float_gen(0.0, 1.0);
 	float chance_to_choose_fence = currPlayer.numFences > 0 ? .3 : 0;
 
 	vector<Move> vmoves;
@@ -284,15 +285,17 @@ int StateNode::generate_random_child()
 			//cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
 			return 0;
 		}
-		random = (float)rand() / RAND_MAX;
+		random = float_gen(rng);
 		if( random > chance_to_choose_fence){
-			rand_index = rand() % (vmoves.size()-numFenceMoves);
+			std::uniform_int_distribution<> int_gen(0,vmoves.size()-numFenceMoves-1);
+			rand_index = int_gen(rng);
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
 			//remove invalid moves so no infinite loop
 			if(!valid_move)
 				vmoves.erase(vmoves.begin() + rand_index);
 		}else{//choose a fence move, relies on fences being at back of the vector
-			rand_index = rand() % numFenceMoves;
+			std::uniform_int_distribution<> int_gen(0,numFenceMoves-1);
+			rand_index = int_gen(rng);
 			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
 			if (!valid_move){
 				vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
