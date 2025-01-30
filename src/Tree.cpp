@@ -480,8 +480,6 @@ bool test_and_add_move(StateNode* state, Move move){
 	// if (move.type == 'f')
 	// 	difference = pathfinding(state, move);
 	if (difference != -999){
-		//StateNode snode = StateNode(state, move, difference);
-		//snode.evaluate(); //perhaps should just let score be set as difference
 		state->children.push_back(StateNode(state, move, difference));
 		state->children.back().parent = state;
 		return true;
