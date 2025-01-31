@@ -42,9 +42,6 @@ int main(int argc, char *argv[]){
 	}
 
 
-	//seeds random number generation with time in seconds
-	std::srand(std::time(0));
-
 	//if we have a tree-file given, load the tree. Otherwise, create a new one.
 	StateNode* root;
 	if (load_file.size() > 0){

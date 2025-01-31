@@ -89,7 +89,8 @@ int StateNode::get_best_move(){
 			best_moves.push_back(Move(score.first));
 		}
 	}
-	best_move = best_moves[rand() % best_moves.size()];
+	std::uniform_int_distribution<> int_gen(0, best_moves.size()-1);
+	best_move = best_moves[int_gen(rng)];
 	//now with the best move, get the node of the best UCB example of that move from across the copies
 	//maybe not finding bestnode is problem with horizontal bool, or with conversion
 	StateNode* best_node = nullptr;
@@ -184,7 +185,8 @@ void best_move_worker(int id, StateNode* root){
 			if (max_list.size() == 0) {
 				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
 			}
-			int index = rand() % max_list.size();
+			std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
+			int index = int_gen(rng);
 			curr = max_list[index];
 			
 			//cout << "-";
@@ -199,7 +201,8 @@ void best_move_worker(int id, StateNode* root){
 		}
 
 		//SIMULATION/BACKPROPAGATION stage begins
-		int index = rand() % curr->children.size();	
+		std::uniform_int_distribution<> int_gen(0, curr->children.size()-1);
+		int index = int_gen(rng);
 		//after playing out, score all the way up should be updated accordingly.
 		//this means we can immediately delete them.
 		curr->children[index].play_out();
@@ -222,7 +225,8 @@ void best_move_worker(int id, StateNode* root){
 		}
 	}
 
-	int index = rand() % max_list.size();
+	std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
+	int index = int_gen(rng);
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with score: " << max_score <<"\n";
 	//max_list[index]->print_node();
 	output_tree_stats(root);
@@ -418,7 +422,8 @@ StateNode* StateNode::play_out(){
 			currState = &(currState->children.front());
 		}
 		else if (numChildren != 0){
-			choice = rand() % numChildren;
+			std::uniform_int_distribution<> int_gen(0, numChildren-1);
+			choice = int_gen(rng);
 			std::vector<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 			currState = &(*it);
 			//currState = &(currState->children[choice]);
