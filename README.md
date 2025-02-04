@@ -14,9 +14,9 @@ environment.yml specifies the python3.12 conda/mamba env required to run the cur
 cd qbot
 conda env create --name qenv --file=environment.yml
 make qbot
-./qbot -p 2
+./qbot
 ```
-The `-p 2` starts it such that it is the players turn first. Otherwise the computer will play first.
+Use `-p 2` to start it such that it is the computer's turn first.
 
 If you don't have python3.12 installed outside of the env, you may need to add the `conda_env_base/lib` to your LD_LIBRARY_PATH when starting the binary.
 

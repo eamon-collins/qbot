@@ -451,14 +451,12 @@ StateNode* StateNode::play_out(){
 	scoreModifier = pathfinding(currState);
 
 	StateNode* winState = currState;
-	int negation = currState->turn ? 1 : -1;
 	while (currState->parent != nullptr){
-		currState->score += negation * scoreModifier;
+		currState->score += scoreModifier;
 		currState->visits += 1;
 		currState = currState->parent;
-		negation = currState->turn ? 1 : -1;
 	}
-	currState->score += negation * scoreModifier;
+	currState->score += scoreModifier;
 	currState->visits += 1; //propagate to root MIGHT BE BAD IDEA
 
 	return winState;

@@ -42,6 +42,11 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 			next_state = &(currState->children[ret]);
 			if (next_state != nullptr){
 				next_state->print_node();
+				if (next_state->game_over()){
+					std::cout << "!!! qbot Wins !!!" << std::endl;
+					gameOver = true;
+					break;
+				}
 				player_move = get_player_move(next_state);	
 			}else{
 				std::cout << "best_node is nullptr";
@@ -78,7 +83,7 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 		if (!move_exists){
 			std::cout << "Could not produce player move state\n";
 			return;
-		} else if (currState->p1.row == NUMROWS - 1) {
+		} else if (currState->game_over()) {
 			//check win condition
 			std::cout << "!!! Player1 Wins !!!" << std::endl;
 			gameOver = true;
@@ -122,7 +127,7 @@ Move Game::get_player_move(StateNode* currState){
 				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
 					// vector<Move> path; // just to debug pathfinding
 					// pathfinding(currState, path, true);
-					int pf = pathfinding(currState, move);
+					int pf = pathfinding(currState, move, true);
 					cout << "Relative length to goal " << pf << std::endl;
 					if (player_move.type == 'f' &&  pf == -999){
 						std::cout << "Attempted move blocks a player from their goal" << std::endl;	

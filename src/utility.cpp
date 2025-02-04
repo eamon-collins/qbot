@@ -25,7 +25,7 @@ int l1_f_p(Move move1,  Player player) {
 
 void print_map(std::map<Pos, SearchMapItem> map, Player p1, Player p2){
 	Pos p;
-	for (int r = 0; r < 2*NUMROWS-1; r++) {
+	for (int r = 2*NUMROWS-2; r >= 0; r--) {
 		for (int c = 0; c < 2*NUMCOLS-1; c++) {
 			p.y = r;
 			p.x = c;
@@ -90,8 +90,11 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	static bool gamestate[2*NUMROWS - 1][NUMCOLS];
 	memcpy(gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
 
-	Player p1 = state->turn ? state->p1 : state->p2;
-	Player p2 = !state->turn ? state->p1 : state->p2;
+	
+	// Player p1 = state->turn ? state->p1 : state->p2;
+	// Player p2 = !state->turn ? state->p1 : state->p2;
+	Player p1 = state->p1;
+	Player p2 = state->p2;
 	if (move != state->move) {
 		//apply the proposed move
 		if (move.type == 'f') {
@@ -113,7 +116,7 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	// static because we aren't actually filling it for this pathfind
 	static vector<Pos> path;
 
-	MakeMap(gamestate, true, search_map); //fills search_map for player1
+	MakeMap(gamestate, false, search_map); //fills search_map for player1
 	if (verbose) {
 		print_map(search_map, p1, p2); 
 	}
@@ -124,12 +127,12 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 
 	//all that needs to be different for player 2 is switching the goal, then we can reuse the search_map
 	for(int i = 0; i < 2*NUMCOLS-1; i+=2){
-		search_map[Pos(i,0)].goal = false;
-		search_map[Pos(i,2*NUMROWS-2)].goal = true;
+		search_map[Pos(i,0)].goal = true;
+		search_map[Pos(i,2*NUMROWS-2)].goal = false;
 	}
 
 	int p2pathLength = FindGoalFrom(Pos(2*(p2.col), 2*(p2.row)), search_map, path, false, verbose);
-	if (p2pathLength == -1){ 
+	if (p2pathLength == -1) { 
 		return -999;
 	}
 
@@ -139,9 +142,7 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 		cout << "P2 distance: " << p2pathLength << std::endl;
 	}
 
-	int score = p2pathLength/2 - pathLength/2;
-
-	return score;
+	return p2pathLength/2 - pathLength/2;
 }
 
 
