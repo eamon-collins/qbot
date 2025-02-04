@@ -54,7 +54,7 @@ int pathfinding(StateNode* state, vector<Move>& path, bool verbose) {
 	std::vector<SMII> found;
 	std::vector<Pos> pos_path;
 
-	MakeMap(state->gamestate, false, search_map); //fills search_map for player1
+	MakeMap(state->gamestate, !state->turn, search_map);
 	if (verbose) {
 		print_map(search_map, p1, p2); 
 	}

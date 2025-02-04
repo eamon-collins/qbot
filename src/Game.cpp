@@ -38,6 +38,10 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 	while(!gameOver){
 		StateNode* next_state;
 		if(!currState->turn){
+			if(currState->p1.numFences == 0 && currState->p2.numFences == 0){
+				vector<Move> testpath;
+				int diff = pathfinding(currState, testpath, true);
+			}
 			int ret = currState->get_best_move();
 			next_state = &(currState->children[ret]);
 			if (next_state != nullptr){
@@ -127,7 +131,7 @@ Move Game::get_player_move(StateNode* currState){
 				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
 					// vector<Move> path; // just to debug pathfinding
 					// pathfinding(currState, path, true);
-					int pf = pathfinding(currState, move, true);
+					int pf = pathfinding(currState, move);
 					cout << "Relative length to goal " << pf << std::endl;
 					if (player_move.type == 'f' &&  pf == -999){
 						std::cout << "Attempted move blocks a player from their goal" << std::endl;	
