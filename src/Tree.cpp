@@ -240,8 +240,8 @@ int StateNode::generate_valid_children(){
 	generate_valid_moves(vmoves);
 
 	this->children.reserve(vmoves.size());
-	for(auto it=vmoves.begin(); it != vmoves.end(); it++){
-		test_and_add_move(this, *it);
+	for(auto& m : vmoves){
+		test_and_add_move(this, m);
 	}
 
 	//evaluate will error with empty list
@@ -403,11 +403,10 @@ StateNode* StateNode::play_out(){
 	int scoreModifier = 0;
 
 	std::time_t start_time = std::time(0);
-	while (currState->p1.row != 0 && currState->p2.row != NUMROWS-1){
-
-		//if there are no more fences this game is over
+	while (!currState->game_over()){
+		//if there are no more fences this game is effectively over with pathfinding
 		if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
-			scoreModifier = pathfinding(currState);
+			// scoreModifier = pathfinding(currState);
 			//cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
 			break;
 		}
@@ -449,13 +448,7 @@ StateNode* StateNode::play_out(){
 	//now that we have an end state check who wins and backpropagate that info
 	//value of terminal state is based on how far the opponent is from winning, 
 	//so the further they are from the end the better the game
-	if (scoreModifier == 0){
-		if (currState->p1.row == 0){
-			scoreModifier = NUMROWS - currState->p2.row;
-		}else{
-			scoreModifier = -currState->p1.row - 1;
-		}
-	}
+	scoreModifier = pathfinding(currState);
 
 	StateNode* winState = currState;
 	int negation = currState->turn ? 1 : -1;
@@ -476,8 +469,14 @@ double StateNode::UCB() const{
 	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
 }
 
-bool StateNode::game_over() const{
-	return (this->p1.row == 0 || this->p2.row == 8);
+int StateNode::game_over() const{
+	if (this->p1.row == 8) {
+		return 1;
+	} else if (this->p2.row == 0) {
+		return 2;
+	} else {
+		return 0;
+	}
 }
 
 //if a fence move, tests whether it will block either player from being able to reach the goal and doesn't add it if so
@@ -559,10 +558,10 @@ StateNode::StateNode(bool turn){
 	// this->visits = 12121;
 	// this->ply = 699;
 
-	this->p1.row = NUMROWS - 1;
+	this->p1.row = 0;
 	this->p1.col = NUMCOLS/2;
 	this->p1.numFences = NUMFENCES;
-	this->p2.row = 0;
+	this->p2.row = NUMROWS - 1;
 	this->p2.col = NUMCOLS/2;
 	this->p2.numFences = NUMFENCES;
 
@@ -573,9 +572,6 @@ StateNode::StateNode(bool turn){
 			this->gamestate[i][j] = false;
 		}
 	}
-	//starting pawn locations not notated, just fences
-	// gamestate[0][4] = true;
-	// gamestate[17][4] = true;
 }
 
 //copy constructor, should create a deep copy of the subtree inclusive of the passed in root
@@ -747,6 +743,8 @@ string StateNode::visualize_gamestate(){
 
 				y.push_back(7-(i+1)/2);
 				y.push_back(7-(i+1)/2);
+				// y.push_back((i+1)/2+1);
+				// y.push_back((i+1)/2+1);
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i+2][j] = false;
 			}else if (i % 2 == 1 && copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
@@ -756,6 +754,8 @@ string StateNode::visualize_gamestate(){
 				// y.push_back(i/2);
 				x.push_back(j);
 				x.push_back(j);
+				// y.push_back((i+1)/2);
+				// y.push_back((i+1)/2);
 				y.push_back(8-(i+1)/2);
 				y.push_back(8-(i+1)/2);
 				copy_gamestate[i][j] = false;
@@ -811,12 +811,14 @@ string StateNode::visualize_gamestate(){
 		}
 		PyErr_Print();
 		PyObject *p1w, *p1x, *p1y, *p2w, *p2x, *p2y;
-		p1w = Py_BuildValue("i", p1.numFences);
-		p2w = Py_BuildValue("i", p2.numFences);
-		p1x = Py_BuildValue("i", p1.col);
-		p1y = Py_BuildValue("i", p1.row);
-		p2x = Py_BuildValue("i", p2.col);
-		p2y = Py_BuildValue("i", p2.row);
+		Player& currPlayer = this->turn ? p1 : p2;
+		Player& otherPlayer = !this->turn ? p2 : p2;
+		p1w = Py_BuildValue("i", currPlayer.numFences);
+		p2w = Py_BuildValue("i", otherPlayer.numFences);
+		p1x = Py_BuildValue("i", currPlayer.col);
+		p1y = Py_BuildValue("i", currPlayer.row);
+		p2x = Py_BuildValue("i", otherPlayer.col);
+		p2y = Py_BuildValue("i", otherPlayer.row);
 
 		//Actually call the method to visualize the gamestate.
 		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);

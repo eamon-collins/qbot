@@ -36,19 +36,11 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
     players = Players(2, coords)
     p1y = 8-p1y
     p2y = 8-p2y
-    # print(f"players {p1y}, {p1x}")
-    # print(f"players {p2y}, {p2x}")
-    players.players = [Player(0, p1w, "north", Colors.red, coords.find_coord(p1x, p1y)),
-                        Player(1, p2w, "south", Colors.green, coords.find_coord(p2x, p2y))]
-    players.set_names(["qbot", "Player"])
+    players.players = [Player(0, p1w, "south", Colors.green, coords.find_coord(p1x, p1y)),
+                    Player(1, p2w, "north", Colors.red, coords.find_coord(p2x, p2y))]
+    players.set_names(["player", "qbot"])
     walls = Walls()
     pf = PathFinder()
-
-    # wx = [0, 1]
-    # wy = [0,0]
-    
-    # wx = [4,5]
-    # wy = [2,2]
 
     if len(wx) %2 == 0:
         arr_len = len(wx)
@@ -61,7 +53,7 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
                 wy[i] = 0
             if wy[i+1] == -1:
                 wy[i+1] = 0
-            print(f"{wy[i]},{wx[i]}   {wy[i+1]},{wx[i+1]}")
+            # print(f"{wy[i]},{wx[i]}   {wy[i+1]},{wx[i+1]}")
             c1 = coords.find_coord(wx[i],wy[i])
             c2 = coords.find_coord(wx[i+1],wy[i+1])
             c1.link_coord()
@@ -105,8 +97,8 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
                                         else:
                                             horiz = 0
                                         pygame.quit()
-                                        print(f"c.y {c.y} horiz {horiz}")
-                                        print("playermove: "+ f"f{horiz}{(7-c.y)*2+horiz} {c.x}")
+                                        # print(f"c.y {c.y} horiz {horiz}")
+                                        # print("playermove: "+ f"f{horiz}{(7-c.y)*2+horiz} {c.x}")
                                         return str(f"f{horiz}{(7-c.y)*2+horiz} {c.x}")
                         # mes = player.play_put_wall(
                         #   pos, coords, walls, n, pf, players)
@@ -114,21 +106,19 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
                         #   win.update_info(mes)
 
                 elif event.type == pygame.KEYDOWN:  # Move pawn
-                    # if player.can_play(game):
-                    #   player.play_move(walls, n)
-                    x = p2x
-                    y = 8-p2y
-                    if event.key == pygame.K_LEFT and p2x > 0:
-                        c = coords.find_coord(p2x - 1, 8-p2y)
+                    x = p1x
+                    y = 8-p1y
+                    if event.key == pygame.K_LEFT and p1x > 0:
+                        c = coords.find_coord(p1x - 1, 8-p1y)
                         x-=1
-                    elif event.key == pygame.K_RIGHT and p2x < 8:
-                        c = coords.find_coord(p2x + 1, 8-p2y)
+                    elif event.key == pygame.K_RIGHT and p1x < 8:
+                        c = coords.find_coord(p1x + 1, 8-p1y)
                         x+=1
-                    elif event.key == pygame.K_UP and 8-p2y < 8 :
-                        c = coords.find_coord(p2x, 8-p2y + 1)
+                    elif event.key == pygame.K_UP and 8-p1y < 8 :
+                        c = coords.find_coord(p1x, 8-p1y + 1)
                         y+=1
-                    elif event.key == pygame.K_DOWN and 8-p2y > 0:
-                        c = coords.find_coord(p2x, 8-p2y - 1)
+                    elif event.key == pygame.K_DOWN and 8-p1y > 0:
+                        c = coords.find_coord(p1x, 8-p1y - 1)
                         y-=1    
                     else:
                         continue

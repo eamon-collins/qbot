@@ -47,10 +47,12 @@ int main(int argc, char *argv[]){
 	if (load_file.size() > 0){
 		root = load_tree(load_file);
 	} else {
-		if(player == 2)
+		if(player == 2) {
 			root = new StateNode(false); //inits starting gamestate
-		else
+			root->print_node();
+		} else {
 			root = new StateNode(true);
+		}
 	}
 
 

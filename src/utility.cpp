@@ -1,5 +1,5 @@
-
-
+//Eamon Collins 
+//A* pathfinding implementation and distance
 #include "utility.h"
 #include <cstdlib>
 #include <vector>
@@ -113,7 +113,7 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	// static because we aren't actually filling it for this pathfind
 	static vector<Pos> path;
 
-	MakeMap(gamestate, false, search_map); //fills search_map for player1
+	MakeMap(gamestate, true, search_map); //fills search_map for player1
 	if (verbose) {
 		print_map(search_map, p1, p2); 
 	}
@@ -124,8 +124,8 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 
 	//all that needs to be different for player 2 is switching the goal, then we can reuse the search_map
 	for(int i = 0; i < 2*NUMCOLS-1; i+=2){
-		search_map[Pos(i,0)].goal = true;
-		search_map[Pos(i,2*NUMROWS-2)].goal = false;
+		search_map[Pos(i,0)].goal = false;
+		search_map[Pos(i,2*NUMROWS-2)].goal = true;
 	}
 
 	int p2pathLength = FindGoalFrom(Pos(2*(p2.col), 2*(p2.row)), search_map, path, false, verbose);

@@ -37,7 +37,7 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 	Move player_move;
 	while(!gameOver){
 		StateNode* next_state;
-		if(currState->turn){
+		if(!currState->turn){
 			int ret = currState->get_best_move();
 			next_state = &(currState->children[ret]);
 			if (next_state != nullptr){
@@ -78,7 +78,7 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 		if (!move_exists){
 			std::cout << "Could not produce player move state\n";
 			return;
-		} else if (currState->p1.row == 0) {
+		} else if (currState->p1.row == NUMROWS - 1) {
 			//check win condition
 			std::cout << "!!! Player1 Wins !!!" << std::endl;
 			gameOver = true;
@@ -117,6 +117,8 @@ Move Game::get_player_move(StateNode* currState){
 			std::vector<Move> valid_moves;
 			currState->generate_valid_moves(valid_moves);
 			for (auto move : valid_moves){
+				if (move.type == 'p')
+					cout << move  << std::endl;
 				if (move == player_move){//gen_valid_moves doesn't check pathfinding so we still need that
 					// vector<Move> path; // just to debug pathfinding
 					// pathfinding(currState, path, true);
