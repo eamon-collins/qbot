@@ -9,6 +9,7 @@ class Game
 public:
 	StateNode* root; //the root statenode at any given time, not the gameroot but basically state of game currently.
 	int ply;
+	bool humanGame{};
 
 	//
 	Game(StateNode* start);

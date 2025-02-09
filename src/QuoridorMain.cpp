@@ -65,10 +65,13 @@ int main(int argc, char *argv[]){
 	//std::cout << sizeof(*root) << "\n";
 	//starts new game at gamestate specified by root
 	Game game = Game(root);
+	StateNode::game = &game;
 	if ( train ) {
+		game.humanGame = false;
 		game.self_play();
 	} else {
 		//uses generate_children and prune_children to generate state tree of moves from current root
+		game.humanGame = true;
 		game.run_game();
 	}
 

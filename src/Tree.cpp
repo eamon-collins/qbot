@@ -3,6 +3,7 @@ Functions for building/managing the state-tree
 */
 
 #include "Tree.h"
+#include "Game.h"
 #include "utility.h"
 #include "storage.h"
 #include <cstring>
@@ -22,6 +23,7 @@ Functions for building/managing the state-tree
 bool debugs = true;
 
 int fenceRows = 2*NUMROWS - 1;
+Game* StateNode::game = nullptr;
 
 using std::vector;
 using std::rand;
@@ -323,9 +325,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	}
 
 	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
-	if (p1.numFences == 0 && p2.numFences == 0){
-		// vector<Move> myTurnMoves, theirTurnMoves;
-		// int difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+	if (p1.numFences == 0 && p2.numFences == 0 && !game->humanGame){
 		vector<Move> path;
 		int difference = pathfinding(this, path);
 		if (difference == -999)
@@ -464,7 +464,7 @@ StateNode* StateNode::play_out(){
 
 double StateNode::UCB() const{
 	//return this->vi + 2* sqrt(log(this->parent->visits) / this->visits);
-	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
+	return (this->score / this->visits) + EXPLORATION_C * sqrt(log(this->parent->visits) / this->visits);
 }
 
 int StateNode::game_over() const{
@@ -532,6 +532,7 @@ int StateNode::prune_children(){
 	return count;
 }
 
+//Two methods below traverse whole tree. Maybe make a more general traversal that accepts functions to perform on nodes?
 void StateNode::fix_parent_references() {
 	if (children.size() == 0)
 		return;

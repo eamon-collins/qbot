@@ -44,6 +44,7 @@ int save_tree(StateNode* root, std::string database_name){
 		}
 	}
 	bytes_written += fwrite((const void*)file_buffer, bytes_per_node, (size_t)(nodes_written % nodes_per_write), save_file);
+	std::cout << "Writing " << nodes_written <<" nodes to " << database_name << std::endl;
 
 
 	fclose(save_file);

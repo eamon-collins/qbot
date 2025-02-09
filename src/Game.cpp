@@ -151,27 +151,31 @@ Move Game::get_player_move(StateNode* currState){
 	
 }
 
-void Game::self_play() {
+void Game::self_play(const int timeout) {
 	bool gameOver = false;
-	StateNode* currState = this->root;
+	StateNode* nextState, currState = this->root;
+	std::time_t startTime = std::time(0);
+	std::time_t currTime = startTime;
 
-	while(!gameOver){
-		StateNode* next_state;
-		int ret = currState->get_best_move();
-		next_state = &(currState->children[ret]);
-		if (next_state != nullptr){
-			next_state->print_node();
-		}else{
-			std::cout << "best_node is nullptr";
-			return;
+
+	while(!(currTime - startTime > timeout)) {
+		while(!gameOver) {
+			int ret = currState->get_best_move();
+			nextState = &(currState->children[ret]);
+			if (nextState != nullptr){
+				nextState->print_node();
+			}else{
+				std::cout << "best_node is nullptr";
+				return;
+			}
+		
+			currState = nextState;
+			// currState->print_node();
+			gameOver = currState->game_over();
 		}
-	
 
-
-		currState = next_state;
-		currState->print_node();
-		gameOver = currState->game_over();
-
+		gameOver = false;
+		currTime = std::time(0);
 	}
 }
 
