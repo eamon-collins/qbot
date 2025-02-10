@@ -1,6 +1,7 @@
 
 #include "Global.h"
 #include "Game.h"
+#include "storage.h"
 #include "utility.h"
 #include <chrono>
 
@@ -153,7 +154,7 @@ Move Game::get_player_move(StateNode* currState){
 
 void Game::self_play(const int timeout) {
 	bool gameOver = false;
-	StateNode* nextState, currState = this->root;
+	StateNode* nextState, *currState = this->root;
 	std::time_t startTime = std::time(0);
 	std::time_t currTime = startTime;
 
@@ -177,6 +178,53 @@ void Game::self_play(const int timeout) {
 		gameOver = false;
 		currTime = std::time(0);
 	}
+}
+
+void Game::self_play(const std::string& checkpoint_file, const int games_per_checkpoint) {
+    StateNode* currState = nullptr;
+    int games_played = 0;
+    std::time_t startTime = std::time(0);
+
+    while (true) { // Run indefinitely
+        // Start new game from root
+        currState = this->root;
+        bool gameOver = false;
+
+        // Play a single game
+        while (!gameOver) {
+            int ret = currState->get_best_move();
+            StateNode* nextState = &(currState->children[ret]);
+            
+            if (nextState != nullptr) {
+                nextState->print_node(); // Keep this for debugging/monitoring
+                gameOver = nextState->game_over();
+                currState = nextState;
+            } else {
+                std::cout << "best_node is nullptr" << std::endl;
+                break;
+            }
+        }
+
+        games_played++;
+
+        // Checkpoint the tree periodically
+        if (games_played % games_per_checkpoint == 0) {
+            int nodes_saved = save_tree(root, checkpoint_file);
+            std::cout << "Checkpoint after " << games_played << " games. Saved " 
+                     << nodes_saved << " nodes to " << checkpoint_file << std::endl;
+            
+            // Output some statistics
+            std::time_t currentTime = std::time(0);
+            double minutes = difftime(currentTime, startTime) / 60.0;
+            std::cout << "Training stats after " << minutes << " minutes:" << std::endl;
+            std::cout << "Games played: " << games_played << std::endl;
+            std::cout << "Games per hour: " << games_played / minutes << std::endl;
+            // output_tree_stats(root);
+        }
+
+        // Optional: Break if some training target is met
+        // if (some_condition) break;
+    }
 }
 
 //recursive function for building the state tree

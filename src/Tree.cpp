@@ -175,7 +175,7 @@ void best_move_worker(int id, StateNode* root){
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
-				curr_ucb = currChild->UCB();
+				curr_ucb = currChild->UCB(curr->turn);
 				if (max_ucb <= curr_ucb){
 					if (max_ucb != curr_ucb)
 						max_list.clear();
@@ -190,8 +190,6 @@ void best_move_worker(int id, StateNode* root){
 			std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
 			int index = int_gen(rng);
 			curr = max_list[index];
-			
-			//cout << "-";
 		}
 
 		//we have reached a leaf node.
@@ -249,6 +247,9 @@ int StateNode::generate_valid_children(){
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
 		printf("EMPTY CHILDREN VECTOR");
+        this->print_node();
+        exit(-1);
+
 		return 0;
 	}
 
@@ -462,9 +463,14 @@ StateNode* StateNode::play_out(){
 	return winState;
 }
 
-double StateNode::UCB() const{
-	//return this->vi + 2* sqrt(log(this->parent->visits) / this->visits);
-	return (this->score / this->visits) + EXPLORATION_C * sqrt(log(this->parent->visits) / this->visits);
+//turn perspective is necessary as positive score is good for p1, negative for p2, UCB is always positive = good.
+//So we need to know whose perspective we are choosing this node based on:
+//most common case is choosing a child node from the perspective of the parent (choosing best move for me) so we will pass in parent->turn
+//sometimes we may want to know our own UCB from our perspective, in that case turn_perspective should be == this->turn
+double StateNode::UCB(const bool turn_perspective) const {
+    const double exploit = this->score / this->visits;
+    const double explore = EXPLORATION_C * sqrt(log(this->parent->visits) / this->visits);
+	return turn_perspective ? exploit + explore : -exploit + explore;
 }
 
 int StateNode::game_over() const{

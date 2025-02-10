@@ -8,14 +8,14 @@
 
 
 //number of fences per player
-#define NUMFENCES 1
+#define NUMFENCES 10
 
 #define MAXDEPTH 3
 #define MAXTIME 2 //seconds it will take maximum building the state tree
 #define NUM_THREADS 4
 
 //exploration parameter, higher means trying less visited nodes
-#define EXPLORATION_C 2
+#define EXPLORATION_C 2.0
 
 extern int num_threads;
 //Set up rng

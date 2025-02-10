@@ -122,7 +122,7 @@ public:
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state
-	double UCB() const; //simple 
+	double UCB(const bool turn_perspective) const;
 	void update_vi(); //calculates average score for every node under this one.
 	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
 	// void StateNode::set_game_pointer(const Game* game);
