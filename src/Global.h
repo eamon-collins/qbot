@@ -19,8 +19,8 @@
 
 extern int num_threads;
 //Set up rng
-extern std::random_device rd; //obtains seed
-extern std::mt19937 rng; 
+extern thread_local std::random_device rd; //obtains seed
+extern thread_local std::mt19937 rng; 
 
 /* ex: if MAXDEPTH = 3 you have:
 	1		r

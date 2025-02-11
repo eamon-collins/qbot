@@ -10,8 +10,8 @@
 
 //as seen in Global.h
 int num_threads = NUM_THREADS;
-std::random_device rd;
-std::mt19937 rng(rd()); 
+thread_local std::random_device rd;
+thread_local std::mt19937 rng(rd()); 
 
 int main(int argc, char *argv[]){
 	int player = 1;
