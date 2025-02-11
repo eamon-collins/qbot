@@ -75,7 +75,7 @@ int pathfinding(StateNode* state, vector<Move>& path, bool verbose) {
 	}
 
 
-	return pathLength;
+	return path.size() - 1;
 }
 
 // Checks distance to goal for each player and returns dist_p1 - dist_p2.
@@ -106,8 +106,13 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 				gamestate[move.row+2][move.col] = true;
 			}
 		} else if (move.type == 'p'){
-			p1.row = move.row;
-			p1.col = move.col;
+			if (state->turn) {
+				p1.row = move.row;
+				p1.col = move.col;
+			} else {
+				p2.row = move.row;
+				p2.col = move.col;
+			}
 		}
 	}
 

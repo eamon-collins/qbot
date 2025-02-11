@@ -195,8 +195,13 @@ void best_move_worker(int id, StateNode* root){
 		//we have reached a leaf node.
 		//EXPANSION stage begins
 		//expand the node fully so it's not a leaf, and choose one of the new children for simulation
-		if (curr->generate_valid_children() == 0){
-			std::cout << "No valid children during playout";
+		if (curr->game_over()) {
+			//One cause of a terminal leaf node is if the game is over. Playout will see this and backpropagate winner
+			curr->play_out();
+			curr->children.clear();
+			continue;
+		} else if (curr->generate_valid_children() == 0){
+			std::cout << "ERROR: No valid children during playout";
 			continue;
 		}
 
@@ -236,6 +241,9 @@ void best_move_worker(int id, StateNode* root){
 
 //generates all valid moves from this state, places them in this->children, and evaluates them.
 int StateNode::generate_valid_children(){
+	if (this->game_over()) {
+		return 0;
+	}
 	std::vector<Move> vmoves;
 	generate_valid_moves(vmoves);
 
@@ -246,9 +254,17 @@ int StateNode::generate_valid_children(){
 
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
-		printf("EMPTY CHILDREN VECTOR");
+		cout << "EMPTY CHILDREN VECTOR " << "#validmoves " << vmoves.size() << endl;
+		for (auto& move : vmoves){
+			cout << move << " , ";
+		}
+		cout << endl;
+		cout << pathfinding(this, vmoves, true) << endl;
+		cout << pathfinding(this);
+
         this->print_node();
         exit(-1);
+
 
 		return 0;
 	}
@@ -314,6 +330,7 @@ int StateNode::generate_random_child()
 	return this->children.size();
 }
 
+// returns number of fence moves in vmoves. Pawn moves should come first, then fence moves.
 int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	Player currPlayer;
 	Player otherPlayer;
@@ -333,7 +350,7 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 			std::cout << "PAWN BLOCKED" <<std::endl;
 		//path[0] is current location
 		vmoves.push_back(path[1]);
-		return 1;
+		return 0;
 	}
 
 	//PAWN MOVES
@@ -488,8 +505,6 @@ int StateNode::game_over() const{
 bool test_and_add_move(StateNode* state, Move move){	
 	// more computation to pathfind on pawn moves too, but if we input to score need to know
 	int difference = pathfinding(state, move);
-	// if (move.type == 'f')
-	// 	difference = pathfinding(state, move);
 	if (difference != -999){
 		state->children.push_back(StateNode(state, move, difference));
 		state->children.back().parent = state;
