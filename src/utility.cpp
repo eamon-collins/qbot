@@ -87,7 +87,7 @@ int pathfinding(StateNode* state, bool verbose){
 
 int pathfinding(StateNode* state, Move move, bool verbose){
 	//copy over the state in question's gamestate so we don't affect the state itself
-	static bool gamestate[2*NUMROWS - 1][NUMCOLS];
+	thread_local bool gamestate[2*NUMROWS - 1][NUMCOLS];
 	memcpy(gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
 
 	
@@ -119,13 +119,13 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	std::map<Pos, SearchMapItem> search_map;
 	std::vector<SMII> found;
 	// static because we aren't actually filling it for this pathfind
-	static vector<Pos> path;
+	static vector<Pos> pathhold;
 
 	MakeMap(gamestate, false, search_map); //fills search_map for player1
 	if (verbose) {
 		print_map(search_map, p1, p2); 
 	}
-	int pathLength = FindGoalFrom(Pos(2*(p1.col), 2*(p1.row)), search_map, path, false, verbose);
+	int pathLength = FindGoalFrom(Pos(2*(p1.col), 2*(p1.row)), search_map, pathhold, false, verbose);
 	if (pathLength == -1){ //
 		return -999;
 	}
@@ -136,7 +136,7 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 		search_map[Pos(i,2*NUMROWS-2)].goal = false;
 	}
 
-	int p2pathLength = FindGoalFrom(Pos(2*(p2.col), 2*(p2.row)), search_map, path, false, verbose);
+	int p2pathLength = FindGoalFrom(Pos(2*(p2.col), 2*(p2.row)), search_map, pathhold, false, verbose);
 	if (p2pathLength == -1) { 
 		return -999;
 	}

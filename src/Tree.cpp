@@ -184,12 +184,15 @@ void best_move_worker(int id, StateNode* root){
 				}
 			}
 
-			if (max_list.size() == 0) {
+			if (max_list.size() == 1) {
+				curr = max_list[0];
+			} else if (max_list.size() > 1) {
+				std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
+				int index = int_gen(rng);
+				curr = max_list[index];
+			} else if (max_list.size() == 0) {
 				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
 			}
-			std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
-			int index = int_gen(rng);
-			curr = max_list[index];
 		}
 
 		//we have reached a leaf node.
@@ -255,17 +258,6 @@ int StateNode::generate_valid_children(){
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
 		cout << "EMPTY CHILDREN VECTOR " << "#validmoves " << vmoves.size() << endl;
-		for (auto& move : vmoves){
-			cout << move << " , ";
-		}
-		cout << endl;
-		cout << pathfinding(this, vmoves, true) << endl;
-		cout << pathfinding(this);
-
-        this->print_node();
-        exit(-1);
-
-
 		return 0;
 	}
 
@@ -487,7 +479,7 @@ StateNode* StateNode::play_out(){
 double StateNode::UCB(const bool turn_perspective) const {
     const double exploit = this->score / this->visits;
     const double explore = EXPLORATION_C * sqrt(log(this->parent->visits) / this->visits);
-	return turn_perspective ? exploit + explore : -exploit + explore;
+	return turn_perspective ? (explore + exploit) : (explore - exploit);
 }
 
 int StateNode::game_over() const{
@@ -509,8 +501,9 @@ bool test_and_add_move(StateNode* state, Move move){
 		state->children.push_back(StateNode(state, move, difference));
 		state->children.back().parent = state;
 		return true;
+	} else {
+		return false;
 	}
-	else return false;
 }
 
 //attempts to evaluate the score of a gamestate
@@ -666,7 +659,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 	
 	sscanf((char*)c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
 	c += 0x003; //moves array pointer up 3 bytes
-	sscanf((char*)c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
+	sscanf((char*)c, "%1d%1d%1d", &p2.row, &p2.col, &p2.numFences);
 	if(node_buffer[7] == 't') p1.numFences = 10;
 	if(node_buffer[10] == 't') p2.numFences = 10;
 	this->p1 = p1;

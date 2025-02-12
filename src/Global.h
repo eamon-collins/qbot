@@ -11,7 +11,7 @@
 #define NUMFENCES 10
 
 #define MAXDEPTH 3
-#define MAXTIME 1 //seconds it will take maximum building the state tree
+#define MAXTIME 20 //seconds it will take maximum building the state tree
 #define NUM_THREADS 4
 
 //exploration parameter, higher means trying less visited nodes

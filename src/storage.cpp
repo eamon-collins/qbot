@@ -92,6 +92,7 @@ StateNode* load_tree(std::string database_name){
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
 	std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
 	std::cout <<"LOAD:\n";
+	std::cout << "# nodes expected: " << nodes_left << std::endl;
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
 	// if(DEBUG){
@@ -293,7 +294,6 @@ int fill_move(unsigned char ch[], int offset, Move m){
 	ch[offset+4] = (m.horizontal ? '1' : '0');
 
 	return offset+5;
-
 }
 
 //also takes responsibility for turn as it fits in the extra space 

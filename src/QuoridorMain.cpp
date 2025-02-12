@@ -38,7 +38,6 @@ int main(int argc, char *argv[]){
 				load_file = optarg;
 				break;
 			}
-		break;
 	}
 
 
