@@ -3,6 +3,7 @@ Functions for building/managing the state-tree
 */
 
 #include "Tree.h"
+#include "Game.h"
 #include "utility.h"
 #include "storage.h"
 #include <cstring>
@@ -22,6 +23,7 @@ Functions for building/managing the state-tree
 bool debugs = true;
 
 int fenceRows = 2*NUMROWS - 1;
+Game* StateNode::game = nullptr;
 
 using std::vector;
 using std::rand;
@@ -173,7 +175,7 @@ void best_move_worker(int id, StateNode* root){
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
-				curr_ucb = currChild->UCB();
+				curr_ucb = currChild->UCB(curr->turn);
 				if (max_ucb <= curr_ucb){
 					if (max_ucb != curr_ucb)
 						max_list.clear();
@@ -182,21 +184,27 @@ void best_move_worker(int id, StateNode* root){
 				}
 			}
 
-			if (max_list.size() == 0) {
+			if (max_list.size() == 1) {
+				curr = max_list[0];
+			} else if (max_list.size() > 1) {
+				std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
+				int index = int_gen(rng);
+				curr = max_list[index];
+			} else if (max_list.size() == 0) {
 				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
 			}
-			std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
-			int index = int_gen(rng);
-			curr = max_list[index];
-			
-			//cout << "-";
 		}
 
 		//we have reached a leaf node.
 		//EXPANSION stage begins
 		//expand the node fully so it's not a leaf, and choose one of the new children for simulation
-		if (curr->generate_valid_children() == 0){
-			std::cout << "No valid children during playout";
+		if (curr->game_over()) {
+			//One cause of a terminal leaf node is if the game is over. Playout will see this and backpropagate winner
+			curr->play_out();
+			curr->children.clear();
+			continue;
+		} else if (curr->generate_valid_children() == 0){
+			std::cout << "ERROR: No valid children during playout";
 			continue;
 		}
 
@@ -236,6 +244,9 @@ void best_move_worker(int id, StateNode* root){
 
 //generates all valid moves from this state, places them in this->children, and evaluates them.
 int StateNode::generate_valid_children(){
+	if (this->game_over()) {
+		return 0;
+	}
 	std::vector<Move> vmoves;
 	generate_valid_moves(vmoves);
 
@@ -246,7 +257,7 @@ int StateNode::generate_valid_children(){
 
 	//evaluate will error with empty list
 	if (this->children.size() == 0){
-		printf("EMPTY CHILDREN VECTOR");
+		cout << "EMPTY CHILDREN VECTOR " << "#validmoves " << vmoves.size() << endl;
 		return 0;
 	}
 
@@ -311,6 +322,7 @@ int StateNode::generate_random_child()
 	return this->children.size();
 }
 
+// returns number of fence moves in vmoves. Pawn moves should come first, then fence moves.
 int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	Player currPlayer;
 	Player otherPlayer;
@@ -323,16 +335,14 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	}
 
 	//If there are no more fences to be placed, playing out is a courtesy. Should be able to speed it up.
-	if (p1.numFences == 0 && p2.numFences == 0){
-		// vector<Move> myTurnMoves, theirTurnMoves;
-		// int difference = pathfinding(this, move, myTurnMoves, theirTurnMoves);
+	if (p1.numFences == 0 && p2.numFences == 0 && !game->humanGame){
 		vector<Move> path;
 		int difference = pathfinding(this, path);
 		if (difference == -999)
 			std::cout << "PAWN BLOCKED" <<std::endl;
 		//path[0] is current location
 		vmoves.push_back(path[1]);
-		return 1;
+		return 0;
 	}
 
 	//PAWN MOVES
@@ -462,9 +472,14 @@ StateNode* StateNode::play_out(){
 	return winState;
 }
 
-double StateNode::UCB() const{
-	//return this->vi + 2* sqrt(log(this->parent->visits) / this->visits);
-	return (this->score / this->visits) + 2* sqrt(log(this->parent->visits) / this->visits);
+//turn perspective is necessary as positive score is good for p1, negative for p2, UCB is always positive = good.
+//So we need to know whose perspective we are choosing this node based on:
+//most common case is choosing a child node from the perspective of the parent (choosing best move for me) so we will pass in parent->turn
+//sometimes we may want to know our own UCB from our perspective, in that case turn_perspective should be == this->turn
+double StateNode::UCB(const bool turn_perspective) const {
+    const double exploit = this->score / this->visits;
+    const double explore = EXPLORATION_C * sqrt(log(this->parent->visits) / this->visits);
+	return turn_perspective ? (explore + exploit) : (explore - exploit);
 }
 
 int StateNode::game_over() const{
@@ -482,14 +497,13 @@ int StateNode::game_over() const{
 bool test_and_add_move(StateNode* state, Move move){	
 	// more computation to pathfind on pawn moves too, but if we input to score need to know
 	int difference = pathfinding(state, move);
-	// if (move.type == 'f')
-	// 	difference = pathfinding(state, move);
 	if (difference != -999){
 		state->children.push_back(StateNode(state, move, difference));
 		state->children.back().parent = state;
 		return true;
+	} else {
+		return false;
 	}
-	else return false;
 }
 
 //attempts to evaluate the score of a gamestate
@@ -532,6 +546,7 @@ int StateNode::prune_children(){
 	return count;
 }
 
+//Two methods below traverse whole tree. Maybe make a more general traversal that accepts functions to perform on nodes?
 void StateNode::fix_parent_references() {
 	if (children.size() == 0)
 		return;
@@ -644,7 +659,7 @@ StateNode::StateNode(unsigned char* node_buffer){
 	
 	sscanf((char*)c, "%1d%1d%1d", &p1.row, &p1.col, &p1.numFences);
 	c += 0x003; //moves array pointer up 3 bytes
-	sscanf((char*)c, "%1d%1d%1d", &p2.row, &p2.row, &p2.numFences);
+	sscanf((char*)c, "%1d%1d%1d", &p2.row, &p2.col, &p2.numFences);
 	if(node_buffer[7] == 't') p1.numFences = 10;
 	if(node_buffer[10] == 't') p2.numFences = 10;
 	this->p1 = p1;

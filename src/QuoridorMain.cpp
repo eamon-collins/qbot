@@ -10,8 +10,8 @@
 
 //as seen in Global.h
 int num_threads = NUM_THREADS;
-std::random_device rd;
-std::mt19937 rng(rd()); 
+thread_local std::random_device rd;
+thread_local std::mt19937 rng(rd()); 
 
 int main(int argc, char *argv[]){
 	int player = 1;
@@ -38,7 +38,6 @@ int main(int argc, char *argv[]){
 				load_file = optarg;
 				break;
 			}
-		break;
 	}
 
 
@@ -65,10 +64,13 @@ int main(int argc, char *argv[]){
 	//std::cout << sizeof(*root) << "\n";
 	//starts new game at gamestate specified by root
 	Game game = Game(root);
+	StateNode::game = &game;
 	if ( train ) {
-		game.self_play();
+		game.humanGame = false;
+		game.self_play(save_file, 10);
 	} else {
 		//uses generate_children and prune_children to generate state tree of moves from current root
+		game.humanGame = true;
 		game.run_game();
 	}
 

@@ -8,6 +8,9 @@
 #include <deque>
 #include <exception>
 
+//forward declare Game
+class Game;
+
 struct InvalidMoveException : public std::exception {
    const char * what () const throw () {
       return "Error: Invalid Move String";
@@ -82,9 +85,10 @@ typedef struct Move{
 class StateNode
 {
 public:
+	static Game* game;
+
 	std::vector<StateNode> children;
 	StateNode* parent = nullptr;
-
 	
 	Move move; //the move directly prior to this state
 	Player p1; //player 1, at the bottom of the screen
@@ -118,9 +122,10 @@ public:
 	bool good_shrub(); //attempts to pick gamestates to be pruned as a heuristic
 	int prune_children(); //uses me-defined heuristics to prune children of this node
 	StateNode* play_out(); //simulates by random choice to determine a winner from this state
-	double UCB() const; //simple 
+	double UCB(const bool turn_perspective) const;
 	void update_vi(); //calculates average score for every node under this one.
 	void fix_parent_references(); //changes all parent references in subtree below this node to correct pointers
+	// void StateNode::set_game_pointer(const Game* game);
 	std::string visualize_gamestate();
 	int game_over() const; //tests whether the game is over at this state or not. 0 for no, 1 for p1 win, 2 for p2 win
 
