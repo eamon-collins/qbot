@@ -11,16 +11,13 @@
 #define NUMFENCES 10
 
 #define MAXDEPTH 3
-#define MAXTIME 20 //seconds it will take maximum building the state tree
+#define MAXTIME 2 //seconds it will take maximum building the state tree
 #define NUM_THREADS 4
 
 //exploration parameter, higher means trying less visited nodes
 #define EXPLORATION_C 2.0
 
 extern int num_threads;
-//Set up rng
-extern thread_local std::random_device rd; //obtains seed
-extern thread_local std::mt19937 rng; 
 
 /* ex: if MAXDEPTH = 3 you have:
 	1		r

@@ -11,6 +11,17 @@
 #include <limits>
 
 
+//Thread-safe getter for random number generation
+std::mt19937& get_rng() {
+    thread_local std::random_device rd;
+    thread_local std::mt19937 rng(rd()); 
+    return rng;
+}
+
+
+//Pathfinding below this
+//
+
 // L_1 norm (manhattan distance)
 int l1_norm(int i0, int j0, int i1, int j1) {
   return std::abs(i0 - i1) + std::abs(j0 - j1);
