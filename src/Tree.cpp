@@ -15,6 +15,7 @@ Functions for building/managing the state-tree
 #include <thread>
 #include <mutex>
 #include <unordered_map>
+#include <limits>
 
 #ifndef NOVIZ
 #include "Python.h"
@@ -90,6 +91,11 @@ int StateNode::get_best_move(){
 			best_avg_score = avg_score;
 			best_moves.push_back(Move(score.first));
 		}
+	}
+	if (best_moves.size() == 0) {
+		cout << "ERROR: no moves elected by best_move_workers." << endl;
+		this->print_node();
+		return -1;
 	}
 	std::uniform_int_distribution<> int_gen(0, best_moves.size()-1);
 	best_move = best_moves[int_gen(get_rng())];
@@ -171,7 +177,7 @@ void best_move_worker(int id, StateNode* root){
 		//SELECTION
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
-			double max_ucb = -999, curr_ucb = 0;
+			double max_ucb = -std::numeric_limits<double>::max(), curr_ucb = 0;
 			//find highest UCB in group, random if tied, important to be able to break ties
 			for (int i = 0; i < curr->children.size(); i++){
 				StateNode* currChild = &(curr->children[i]);
@@ -192,6 +198,7 @@ void best_move_worker(int id, StateNode* root){
 				curr = max_list[index];
 			} else if (max_list.size() == 0) {
 				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
+				break;
 			}
 		}
 
@@ -203,7 +210,7 @@ void best_move_worker(int id, StateNode* root){
 			curr->play_out();
 			curr->children.clear();
 			continue;
-		} else if (curr->generate_valid_children() == 0){
+		} else if (curr->children.size() == 0 && curr->generate_valid_children() == 0){
 			std::cout << "ERROR: No valid children during playout";
 			continue;
 		}
@@ -220,7 +227,7 @@ void best_move_worker(int id, StateNode* root){
 	//while UCB is used to select move for playout, use score for best move selection
 	//find best UCB so far for root's direct children
 	vector<StateNode*> max_list;
-	double max_score = -1000, curr_score = 0;
+	double max_score = -std::numeric_limits<double>::max(), curr_score = 0;
 	//find highest UCB in group, random if tied, important to be able to break ties
 	for (int i = 0; i < root->children.size(); i++){
 		StateNode* currChild = &(root->children[i]);
@@ -233,9 +240,13 @@ void best_move_worker(int id, StateNode* root){
 		}
 	}
 
-	std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
-	int index = int_gen(get_rng());
-	cout << "Worker " << id << " proposes " << max_list[index]->move << " with score: " << max_score <<"\n";
+	if (max_list.size() == 0) {
+		cout << "Worker " << id << " failed to find a move." << endl;
+	} else {
+		std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
+		int index = int_gen(get_rng());
+		cout << "Worker " << id << " proposes " << max_list[index]->move << " with score: " << max_score <<"\n";
+	}
 	//max_list[index]->print_node();
 	output_tree_stats(root);
 
@@ -299,9 +310,12 @@ int StateNode::generate_random_child()
 		if (vmoves.size() == numFenceMoves){
 			//cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
 			return 0;
+		} else if (currPlayer.numFences && numFenceMoves == 0) {
+			cout << "numFenceMoves shouldn't be zero here" << endl;
+			return 0;
 		}
 		random = float_gen(get_rng());
-		if( random > chance_to_choose_fence){
+		if( random >= chance_to_choose_fence){
 			std::uniform_int_distribution<> int_gen(0,vmoves.size()-numFenceMoves-1);
 			rand_index = int_gen(get_rng());
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
