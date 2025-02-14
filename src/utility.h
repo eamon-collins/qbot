@@ -9,6 +9,9 @@ using std::endl;
 using std::vector;
 
 
+//returns thread_local randomness engine
+std::mt19937& get_rng();
+
 
 struct Pos
 {

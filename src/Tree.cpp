@@ -92,7 +92,7 @@ int StateNode::get_best_move(){
 		}
 	}
 	std::uniform_int_distribution<> int_gen(0, best_moves.size()-1);
-	best_move = best_moves[int_gen(rng)];
+	best_move = best_moves[int_gen(get_rng())];
 	//now with the best move, get the node of the best UCB example of that move from across the copies
 	//maybe not finding bestnode is problem with horizontal bool, or with conversion
 	StateNode* best_node = nullptr;
@@ -188,7 +188,7 @@ void best_move_worker(int id, StateNode* root){
 				curr = max_list[0];
 			} else if (max_list.size() > 1) {
 				std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
-				int index = int_gen(rng);
+				int index = int_gen(get_rng());
 				curr = max_list[index];
 			} else if (max_list.size() == 0) {
 				std::cout << "No max node currchildren: " << curr->children.size() << " max_ucb " << max_ucb << std::endl;
@@ -210,7 +210,7 @@ void best_move_worker(int id, StateNode* root){
 
 		//SIMULATION/BACKPROPAGATION stage begins
 		std::uniform_int_distribution<> int_gen(0, curr->children.size()-1);
-		int index = int_gen(rng);
+		int index = int_gen(get_rng());
 		//after playing out, score all the way up should be updated accordingly.
 		//this means we can immediately delete them.
 		curr->children[index].play_out();
@@ -234,7 +234,7 @@ void best_move_worker(int id, StateNode* root){
 	}
 
 	std::uniform_int_distribution<> int_gen(0, max_list.size()-1);
-	int index = int_gen(rng);
+	int index = int_gen(get_rng());
 	cout << "Worker " << id << " proposes " << max_list[index]->move << " with score: " << max_score <<"\n";
 	//max_list[index]->print_node();
 	output_tree_stats(root);
@@ -300,17 +300,17 @@ int StateNode::generate_random_child()
 			//cout << currPlayer.row << ","<<currPlayer.col << "\n" <<std::flush;
 			return 0;
 		}
-		random = float_gen(rng);
+		random = float_gen(get_rng());
 		if( random > chance_to_choose_fence){
 			std::uniform_int_distribution<> int_gen(0,vmoves.size()-numFenceMoves-1);
-			rand_index = int_gen(rng);
+			rand_index = int_gen(get_rng());
 			valid_move = test_and_add_move(this, vmoves[rand_index]);
 			//remove invalid moves so no infinite loop
 			if(!valid_move)
 				vmoves.erase(vmoves.begin() + rand_index);
 		}else{//choose a fence move, relies on fences being at back of the vector
 			std::uniform_int_distribution<> int_gen(0,numFenceMoves-1);
-			rand_index = int_gen(rng);
+			rand_index = int_gen(get_rng());
 			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
 			if (!valid_move){
 				vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
@@ -432,7 +432,7 @@ StateNode* StateNode::play_out(){
 		}
 		else if (numChildren != 0){
 			std::uniform_int_distribution<> int_gen(0, numChildren-1);
-			choice = int_gen(rng);
+			choice = int_gen(get_rng());
 			std::vector<StateNode>::iterator it = std::next(currState->children.begin(), choice);
 			currState = &(*it);
 			//currState = &(currState->children[choice]);
