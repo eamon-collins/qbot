@@ -882,8 +882,8 @@ std::ostream& operator<<(std::ostream &os, const StateNode &sn) {
     // Write gamestate
     os.write(reinterpret_cast<const char*>(sn.gamestate), 17 * 9 * sizeof(bool));
 	//PADDING, HACKY
-	char pad[3];
-	os.write(reinterpret_cast<const char*>(pad), 3 * sizeof(char));
+	char pad[2];
+	os.write(reinterpret_cast<const char*>(pad), 2 * sizeof(char));
     
     // Write score, visits, ply
     os.write(reinterpret_cast<const char*>(&sn.score), sizeof(double));

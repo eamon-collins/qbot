@@ -145,7 +145,8 @@ def train(model, dataset: QuoridorDataset, num_epochs: int):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
     
-    model.cuda()
+    if torch.cuda.is_available():
+        model.cuda()
     
     for epoch in range(num_epochs):
         epoch_loss = 0

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from typing import Optional
 import logging
+from io import BufferedReader
 
 
 # Mirror the C++ StateNode structure
@@ -33,10 +34,8 @@ class QuoridorDataset:
         
         self.process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=1,
-            universal_newlines=True
+            stdout=subprocess.PIPE
+            # stderr=subprocess.PIPE,
         )
         return self
         
@@ -56,7 +55,7 @@ class QuoridorDataset:
         pawn[1, state.p2[0], state.p2[1]] = 1
         
         # Wall positions
-        wall = gamestate_to_wall_tensor(state.gamestate)
+        wall = _gamestate_to_wall_tensor(state.gamestate)
         
         # Meta features
         meta = np.array([state.p1[2], state.p2[2]], dtype=np.float32)
@@ -71,7 +70,7 @@ class QuoridorDataset:
             torch.from_numpy(target)
         )
 
-    def gamestate_to_wall_tensor(gamestate) -> np.ndarray:
+    def _gamestate_to_wall_tensor(gamestate) -> np.ndarray:
         """
         Convert 17x9 gamestate matrix into 2x8x8 wall tensor.
         Returns numpy array with shape (2,8,8) where:
@@ -105,23 +104,47 @@ class QuoridorDataset:
             
         pawns, metas, targets = [], [], []
         
+        # Set up buffers for quick ctypes reading
         node_size = ctypes.sizeof(StateNode)
+        read_chunk_size = 1024 * 16
+        data_buf = bytearray(read_chunk_size)
+        mview = memoryview(data_buf)
+        buf_addr = ctypes.addressof((ctypes.c_ubyte).from_buffer(mview))
+        offset = 0
+        reader = BufferedReader(self.process.stdout)
+        read_data = reader.read(read_chunk_size)
+        mview[:len(read_data)] = read_data
+        print(len(read_data))
         while True:
-            # Read binary data for one StateNode
             try:
-                raw_data = self.process.stdout.buffer.read(node_size)
-                print(len(raw_data))
-                print(raw_data)
-                if not raw_data:
-                    break
+                remaining_data = len(read_data) - offset
+                if remaining_data < node_size:
+                    next_chunk = reader.read(offset)
+                    if not next_chunk:
+                        if remaining_data:
+                            logging.error("Tree file ended with incomplete node")
+                        break
+                    read_data = read_data[offset:] + next_chunk
+                    mview[:len(read_data)] = read_data
+                    offset = 0
+                    continue
+
+                # print(len(read_data))
+                # print(read_data[offset:ctypes.sizeof(StateNode)])
                     
-                state = StateNode.from_buffer_copy(raw_data)
+                state = StateNode.from_address(buf_addr + offset)
+                print(state.p1[0])
+                print(state.p1[2])
+                print(state.score)
+                print("###")
                 pawn, wall, meta, target = self._state_to_tensors(state)
                 
                 pawns.append(pawn)
                 walls.append(wall)
                 metas.append(meta)
                 targets.append(target)
+
+                offset += node_size
                 
                 if len(pawns) == self.batch_size:
                     yield (
@@ -134,7 +157,8 @@ class QuoridorDataset:
                     
             except Exception as e:
                 logging.error(f"Error processing state: {e}")
-                continue
+                # continue
+                raise e
                 
         # Yield remaining samples
         if pawns:
