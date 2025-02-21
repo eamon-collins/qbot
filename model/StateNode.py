@@ -1,4 +1,10 @@
 import ctypes
+import subprocess
+import numpy as np
+import torch
+from typing import Optional
+import logging
+
 
 # Mirror the C++ StateNode structure
 class StateNode(ctypes.Structure):
@@ -21,9 +27,9 @@ class QuoridorDataset:
         self.process = None
         
     def __enter__(self):
-        cmd = ["leopard"]
+        cmd = ["./leopard"]
         if self.load_model:
-            cmd.extend(["-l", self.load_model])
+            cmd.extend([self.load_model])
         
         self.process = subprocess.Popen(
             cmd,
@@ -40,20 +46,17 @@ class QuoridorDataset:
             self.process.wait()
 
     def _state_to_tensors(self, state: StateNode):
-        # Create board state tensor (3 x 9 x 9)
-        board = np.zeros((3, 9, 9), dtype=np.float32)
+        # Create pawn state tensor (2 x 9 x 9)
+        pawn = np.zeros((2, 9, 9), dtype=np.float32)
         
         # P1 pawn position
-        board[0, state.p1[0], state.p1[1]] = 1
+        pawn[0, state.p1[0], state.p1[1]] = 1
         
         # P2 pawn position
-        board[1, state.p2[0], state.p2[1]] = 1
+        pawn[1, state.p2[0], state.p2[1]] = 1
         
         # Wall positions
-        for i in range(17):
-            for j in range(9):
-                if state.gamestate[i][j]:
-                    board[2, i//2, j] = 1
+        wall = gamestate_to_wall_tensor(state.gamestate)
         
         # Meta features
         meta = np.array([state.p1[2], state.p2[2]], dtype=np.float32)
@@ -62,47 +65,82 @@ class QuoridorDataset:
         target = np.array([np.tanh(state.score)], dtype=np.float32)
         
         return (
-            torch.from_numpy(board),
+            torch.from_numpy(pawn),
+            torch.from_numpy(wall),
             torch.from_numpy(meta),
             torch.from_numpy(target)
         )
+
+    def gamestate_to_wall_tensor(gamestate) -> np.ndarray:
+        """
+        Convert 17x9 gamestate matrix into 2x8x8 wall tensor.
+        Returns numpy array with shape (2,8,8) where:
+            - First channel (0) contains horizontal walls 
+            - Second channel (1) contains vertical walls
+        Values are 1 where a wall exists, 0 otherwise
+        """
+        wall_tensor = np.zeros((2, 8, 8), dtype=np.float32)
+        
+        # Horizontal walls come from odd rows in gamestate
+        # A horizontal wall exists if two adjacent cells in an odd row are True
+        for i in range(8):  # 8 possible horizontal wall rows
+            row = 2*i + 1  # odd rows contain horizontal walls
+            for j in range(8):  # 8 possible horizontal wall positions per row
+                if gamestate[row][j] and gamestate[row][j+1]:
+                    wall_tensor[0, i, j] = 1
+                    
+        # Vertical walls come from even rows in gamestate
+        # A vertical wall exists if two adjacent even rows have True in same column
+        for i in range(8):  # 8 possible vertical wall rows
+            row = 2*i  # even rows contain vertical walls
+            for j in range(8):  # 8 possible vertical wall positions per row
+                if gamestate[row][j] and gamestate[row+2][j]:
+                    wall_tensor[1, i, j] = 1
+                    
+        return wall_tensor
 
     def generate_batches(self):
         if not self.process:
             raise RuntimeError("Dataset not initialized with context manager")
             
-        boards, metas, targets = [], [], []
+        pawns, metas, targets = [], [], []
         
+        node_size = ctypes.sizeof(StateNode)
         while True:
             # Read binary data for one StateNode
             try:
-                raw_data = self.process.stdout.buffer.read(ctypes.sizeof(StateNode))
+                raw_data = self.process.stdout.buffer.read(node_size)
+                print(len(raw_data))
+                print(raw_data)
                 if not raw_data:
                     break
                     
                 state = StateNode.from_buffer_copy(raw_data)
-                board, meta, target = self._state_to_tensors(state)
+                pawn, wall, meta, target = self._state_to_tensors(state)
                 
-                boards.append(board)
+                pawns.append(pawn)
+                walls.append(wall)
                 metas.append(meta)
                 targets.append(target)
                 
-                if len(boards) == self.batch_size:
+                if len(pawns) == self.batch_size:
                     yield (
-                        torch.stack(boards),
+                        torch.stack(pawns),
+                        torch.stack(walls),
                         torch.stack(metas),
                         torch.stack(targets)
                     )
-                    boards, metas, targets = [], [], []
+                    pawns, walls, metas, targets = [], [], []
                     
             except Exception as e:
                 logging.error(f"Error processing state: {e}")
                 continue
                 
         # Yield remaining samples
-        if boards:
+        if pawns:
             yield (
-                torch.stack(boards),
+                torch.stack(pawns),
+                torch.stack(walls),
                 torch.stack(metas),
                 torch.stack(targets)
             )

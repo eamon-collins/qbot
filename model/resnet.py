@@ -1,6 +1,10 @@
 #Eamon's resnet for valuing a gamestate of Quoridor
+import logging
+import argparse
 import torch
 import torch.nn as nn
+
+from StateNode import QuoridorDataset
 
 class QuoridorValueNet(nn.Module):
     def __init__(self):
@@ -120,15 +124,16 @@ class QuoridorValueNet(nn.Module):
 
 def train_step(model, optimizer, data_batch):
     model.train()
-    board_states, meta_states, target_values = data_batch
+    pawn_states, wall_states, meta_states, target_values = data_batch
     
     if torch.cuda.is_available():
-            board_states = board_states.cuda()
+            pawn_states = pawn_states.cuda()
+            wall_states = wall_states.cuda()
             meta_states = meta_states.cuda()
             target_values = target_values.cuda()
 
     optimizer.zero_grad()
-    predicted_values = model(board_states, meta_states)
+    predicted_values = model(pawn_states, wall_states, meta_states)
     loss = nn.MSELoss()(predicted_values, target_values)
     
     loss.backward()
@@ -153,7 +158,10 @@ def train(model, dataset: QuoridorDataset, num_epochs: int):
             
             if num_batches % 100 == 0:
                 logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
-        
+
+        if num_batches == 0:
+            logging.error("Num batches is 0, not training")
+            return
         avg_loss = epoch_loss / num_batches
         scheduler.step(avg_loss)
         
@@ -172,6 +180,7 @@ def main():
     args = parser.parse_args()
     
     logging.basicConfig(level=getattr(logging, args.log_level))
+    logging.info(f"Loading {args.load_tree}")
     
     model = QuoridorValueNet()
     if args.load_model:

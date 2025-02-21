@@ -5,24 +5,13 @@
 
 int num_threads = 1;
 
-struct BinaryNode {
-    Move move;
-    Player p1;
-    Player p2;
-    bool turn;
-    bool gamestate[2*NUMROWS - 1][NUMCOLS];
-    double score;
-    int visits;
-    int ply;
-};
-
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: leopard <tree_file>\n";
         return 1;
     }
 
-    StateNode* root = load_tree(argv[1]);
+    StateNode* root = load_tree(argv[1], false);
     if (!root) {
         std::cerr << "Failed to load tree from " << argv[1] << "\n";
         return 1;
@@ -36,8 +25,6 @@ int main(int argc, char* argv[]) {
         StateNode* node = queue.front();
         queue.pop_front();
 
-        // Convert to binary format
-        // Write binary node to stdout
         std::cout << *node;
 
         // Add children to queue

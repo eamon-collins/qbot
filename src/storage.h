@@ -4,7 +4,7 @@
 #include <cstring>
 
 int save_tree(StateNode* root, std::string database_name);
-StateNode* load_tree(std::string database_name);
+StateNode* load_tree(std::string database_name, bool verbose = true);
 
 bool write_node(StateNode* node, unsigned char file_buffer[], int buffer_index);
 int fill_player(unsigned char ch[], int offset, Player p);

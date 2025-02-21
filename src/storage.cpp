@@ -73,7 +73,7 @@ void output_tree_stats(StateNode* root){
 	std::cout << "Num nodes: " << num_nodes <<"\n";
 }
 
-StateNode* load_tree(std::string database_name){
+StateNode* load_tree(std::string database_name, bool verbose){
 	unsigned char file_buffer[nodes_per_write * bytes_per_node];
 	std::filesystem::path p{database_name.c_str()};
 	unsigned long long nodes_left = std::filesystem::file_size(p) / bytes_per_node; //total number of nodes
@@ -90,9 +90,11 @@ StateNode* load_tree(std::string database_name){
 	// memset(node_buffer, '\0', (bytes_per_node+1)*nodes_per_write);
 	// memset(curr_node_buffer, '\0', bytes_per_node+1);
 	//fscanf(load_file, "%" S(BYTES_PER_READ) "c", node_buffer);
-	std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
-	std::cout <<"LOAD:\n";
-	std::cout << "# nodes expected: " << nodes_left << std::endl;
+	if (verbose) {
+		std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
+		std::cout <<"LOAD:\n";
+		std::cout << "# nodes expected: " << nodes_left << std::endl;
+	}
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
 	// if(DEBUG){
@@ -137,7 +139,9 @@ StateNode* load_tree(std::string database_name){
 			curr->children.push_back(newNode);
 			curr = &(curr->children.back());
 		}else{
-			std::cout << "\nUNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
+			if (verbose) {
+				std::cout << "\nUNEXPECTED SERIAL TYPE: " << curr->serial_type << "\n";
+			}
 		}
 		//the student becomes the master
 		//curr = newNode;
@@ -152,7 +156,9 @@ StateNode* load_tree(std::string database_name){
 		}
 	}
 
-	std::cout << "root children: " << root->children.size() << "\n";
+	if (verbose) {
+		std::cout << "root children: " << root->children.size() << "\n";
+	}
 
 	free (node_buffer);
 	free(curr_node_buffer);
