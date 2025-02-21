@@ -54,9 +54,10 @@ int main(int argc, char *argv[]){
 
 
 	//TESTING PURPOSES ONLY< REMOVE THIS SEGMENT LATER
-	// int num_no = save_tree(root, save_file);
-	// StateNode* root3 = load_tree(save_file);
-	// return 0;
+    root->generate_valid_children();
+	int num_no = save_tree(root, save_file);
+	StateNode* root3 = load_tree(save_file);
+	return 0;
 
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";

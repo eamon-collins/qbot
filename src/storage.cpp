@@ -94,7 +94,9 @@ StateNode* load_tree(std::string database_name, bool verbose){
 		std::cout << fscanf(load_file, "%4088c", node_buffer) << "\n";
 		std::cout <<"LOAD:\n";
 		std::cout << "# nodes expected: " << nodes_left << std::endl;
-	}
+	} else {
+        fscanf(load_file, "%4088c", node_buffer);
+    }
 	memcpy(curr_node_buffer, node_buffer, bytes_per_node);
 	StateNode* root = new StateNode(curr_node_buffer);
 	// if(DEBUG){

@@ -55,7 +55,7 @@ class QuoridorDataset:
         pawn[1, state.p2[0], state.p2[1]] = 1
         
         # Wall positions
-        wall = _gamestate_to_wall_tensor(state.gamestate)
+        wall = self._gamestate_to_wall_tensor(state.gamestate)
         
         # Meta features
         meta = np.array([state.p1[2], state.p2[2]], dtype=np.float32)
@@ -70,7 +70,7 @@ class QuoridorDataset:
             torch.from_numpy(target)
         )
 
-    def _gamestate_to_wall_tensor(gamestate) -> np.ndarray:
+    def _gamestate_to_wall_tensor(self, gamestate) -> np.ndarray:
         """
         Convert 17x9 gamestate matrix into 2x8x8 wall tensor.
         Returns numpy array with shape (2,8,8) where:
@@ -102,7 +102,7 @@ class QuoridorDataset:
         if not self.process:
             raise RuntimeError("Dataset not initialized with context manager")
             
-        pawns, metas, targets = [], [], []
+        pawns, walls, metas, targets = [], [], [], []
         
         # Set up buffers for quick ctypes reading
         node_size = ctypes.sizeof(StateNode)
@@ -114,7 +114,6 @@ class QuoridorDataset:
         reader = BufferedReader(self.process.stdout)
         read_data = reader.read(read_chunk_size)
         mview[:len(read_data)] = read_data
-        print(len(read_data))
         while True:
             try:
                 remaining_data = len(read_data) - offset
@@ -133,10 +132,6 @@ class QuoridorDataset:
                 # print(read_data[offset:ctypes.sizeof(StateNode)])
                     
                 state = StateNode.from_address(buf_addr + offset)
-                print(state.p1[0])
-                print(state.p1[2])
-                print(state.score)
-                print("###")
                 pawn, wall, meta, target = self._state_to_tensors(state)
                 
                 pawns.append(pawn)
@@ -153,7 +148,8 @@ class QuoridorDataset:
                         torch.stack(metas),
                         torch.stack(targets)
                     )
-                    pawns, walls, metas, targets = [], [], []
+                    pawns, walls, metas, targets = [], [], [], []
+                    print(".")
                     
             except Exception as e:
                 logging.error(f"Error processing state: {e}")

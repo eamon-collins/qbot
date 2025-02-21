@@ -12,7 +12,6 @@ int main(int argc, char* argv[]) {
     }
 
     StateNode* root = load_tree(argv[1], false);
-    root->print_node();
     if (!root) {
         std::cerr << "Failed to load tree from " << argv[1] << "\n";
         return 1;
@@ -26,8 +25,7 @@ int main(int argc, char* argv[]) {
         StateNode* node = queue.front();
         queue.pop_front();
 
-        // std::cout << *node;
-        std::cout << node->p1.row << "," << node->p1.col << std::endl;
+        std::cout << *node;
 
         // Add children to queue
         for (auto& child : node->children) {
