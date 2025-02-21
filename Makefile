@@ -6,6 +6,8 @@ LDFLAGS = $(shell python3-config --ldflags)
 CONDINC = $(shell python3-config --includes)
 CONDLIB = $(shell python3-config --libs)
 
+BUILD_DIR = build
+
 # Compiler options
 CXX = g++ # use g++ compiler
 #FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
@@ -24,8 +26,9 @@ VCXXFLAGS = $(VFLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie
 
 FCXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie -O3
 
-.SUFFIXES: .o .cpp
-OFILES = src/QuoridorMain.o src/Tree.o src/utility.o src/Game.o src/storage.o
+# .SUFFIXES: .o .cpp
+OFILES = $(BUILD_DIR)/QuoridorMain.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/Game.o $(BUILD_DIR)/storage.o
+LEOPARD_OFILES = $(BUILD_DIR)/leopard.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/storage.o
 
 qbot: $(OFILES)
 	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
@@ -49,6 +52,12 @@ fast: CXXFLAGS = $(FCXXFLAGS)
 fast: $(OFILES)
 	$(CXX) $(FCXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	@echo Produced fast qbot executable 
+
+leopard: $(LEOPARD_OFILES)
+	$(CXX) $(FCXXFLAGS) $(LEOPARD_OFILES) -lpython3.12 -o leopard
+
+$(BUILD_DIR)/%.o: src/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean: 
 	$(RM) $(OFILES)
