@@ -733,56 +733,22 @@ string StateNode::visualize_gamestate(){
 	const int FILL_FENCE = 2;
 	const int PLAYER1 = 3;
 	const int PLAYER2 = 4;
-	// int square_color;
-	// for (int i = 0; i < 2*NUMROWS -1; i++){
-	// 	for (int j = 0; j < 2*NUMCOLS -1; j++){
-	// 		square_color = -1;
-	// 		x.push_back(j);
-	// 		y.push_back(i);
-	// 		if(i % 2 == 0 && j % 2 == 0){
-	// 			square_color = EMPTY_TILE;
-	// 		}
-	// 		else if (i % 2 == 1 && j % 2 == 1){
-	// 			square_color = FILL_FENCE;
-	// 		}else if (i % 2 != j % 2){
-	// 			if (i % 2 == 0) // vertical fence
-	// 				square_color = gamestate[2*NUMROWS-1 - i][j/2 + 1] ? FILL_FENCE : EMPTY_FENCE;
-	// 			else
-	// 				square_color = gamestate[2*NUMROWS-1 - i][j/2] ? FILL_FENCE : EMPTY_FENCE;
-	// 		}
-	// 		// gamestate[p1.row*2][p1.col] = PLAYER1;
-	// 		// gamestate[p2.row*2][p2.col] = PLAYER2;
-
-	// 		color.push_back(square_color);
-
-	// 	}
-	// }
 	//copy gamestate so we can remove walls as we add them to python list
 	bool copy_gamestate[2*NUMROWS - 1][NUMCOLS];
 	memcpy(copy_gamestate, this->gamestate, (2*NUMROWS-1)*NUMCOLS * sizeof(bool));
 	for (int i = 2*NUMROWS-2; i >= 0; i--){
 		for (int j = 0; j < NUMCOLS; j++){
 			if (i % 2 == 0 && copy_gamestate[i][j] && copy_gamestate[i+2][j]){ //vert wall
-				// if (j==8)
-				// 	continue;
 				x.push_back(j);
 				x.push_back(j+1);
 
 				y.push_back(7-(i+1)/2);
 				y.push_back(7-(i+1)/2);
-				// y.push_back((i+1)/2+1);
-				// y.push_back((i+1)/2+1);
 				copy_gamestate[i][j] = false;
 				copy_gamestate[i+2][j] = false;
 			}else if (i % 2 == 1 && copy_gamestate[i][j] && copy_gamestate[i][j+1]){ //horizontal wall
-				// x.push_back(j);
-				// x.push_back(j+1);
-				// y.push_back(i/2);
-				// y.push_back(i/2);
 				x.push_back(j);
 				x.push_back(j);
-				// y.push_back((i+1)/2);
-				// y.push_back((i+1)/2);
 				y.push_back(8-(i+1)/2);
 				y.push_back(8-(i+1)/2);
 				copy_gamestate[i][j] = false;
@@ -800,8 +766,6 @@ string StateNode::visualize_gamestate(){
 	PyObject *pName, *pModule, *pDict, *pFunc, *px, *py, *pcolor, *presult;
 	string retval;
 	// Initialize the Python Interpreter
-	//Py_SetProgramName("visualization");
-	// Py_Initialize();
 
 	// // Build the name object
 	// PyObject* sysPath = PySys_GetObject("path");
