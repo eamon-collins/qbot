@@ -3,8 +3,6 @@ import ctypes
 # Mirror the C++ StateNode structure
 class StateNode(ctypes.Structure):
     _fields_ = [
-        ("parent", ctypes.c_void_p),
-        ("children", ctypes.c_void_p),  # vector<StateNode>
         ("move", ctypes.c_int * 3),     # type, row, col
         ("p1", ctypes.c_int * 3),       # row, col, numFences
         ("p2", ctypes.c_int * 3),       # row, col, numFences

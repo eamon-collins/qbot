@@ -5,46 +5,72 @@ import torch.nn as nn
 class QuoridorValueNet(nn.Module):
     def __init__(self):
         super().__init__()
-        # Input: 9x9x3 tensor 
-        # Channel 1: P1 pawn location (binary)
-        # Channel 2: P2 pawn location (binary)  
-        # Channel 3: Wall locations (binary)
+        # Input structure:
+        # Channel 1: 9x9 - P1 pawn location (binary)
+        # Channel 2: 9x9 - P2 pawn location (binary)
+        # Channel 3: 8x8 - Horizontal walls (binary) 
+        # Channel 4: 8x8 - Vertical walls (binary)
 
-        self.conv_block = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+        #pawn positions
+        self.pawn_conv = nn.Sequential(
+            nn.Conv2d(2, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
-            nn.ReLU(),
+            nn.ReLU()
         )
-
-        self.residual_tower = nn.ModuleList([
+        
+        # Process wall positions (8x8)
+        self.wall_conv = nn.Sequential(
+            nn.Conv2d(2, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
+        )
+        
+        # Residual tower for pawn features
+        self.pawn_residual = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(32, 32, kernel_size=3, padding=1),
                 nn.BatchNorm2d(32),
                 nn.ReLU(),
                 nn.Conv2d(32, 32, kernel_size=3, padding=1),
                 nn.BatchNorm2d(32)
-            ) for _ in range(4)  # 4 residual blocks should be sufficient for Quoridor
+            ) for _ in range(3)
+        ])
+        
+        # Residual tower for wall features
+        self.wall_residual = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(32, 32, kernel_size=3, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.Conv2d(32, 32, kernel_size=3, padding=1),
+                nn.BatchNorm2d(32)
+            ) for _ in range(3)
         ])
 
+        # Feature combination layer
+        self.combine_features = nn.Sequential(
+            nn.Conv2d(64, 32, kernel_size=1),  # 1x1 conv to merge channels
+            nn.BatchNorm2d(32),
+            nn.ReLU()
+        )
+        
         # Value head
         self.value_head = nn.Sequential(
             nn.Conv2d(32, 1, kernel_size=1),
             nn.BatchNorm2d(1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(81, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
-            nn.Tanh()  # Output in [-1, 1]
-        )
-
-        # Additional meta features
-        self.meta_features = nn.Sequential(
-            nn.Linear(2, 8),  # Input: [p1_walls, p2_walls]
+            nn.Linear(64, 256),  # 8x8 = 64 features after flattening
             nn.ReLU()
         )
-
-        # Combine board evaluation with meta features
+        
+        # Meta features processing (walls remaining)
+        self.meta_features = nn.Sequential(
+            nn.Linear(2, 8),
+            nn.ReLU()
+        )
+        
+        # Final evaluation combining all features
         self.final_evaluation = nn.Sequential(
             nn.Linear(256 + 8, 64),
             nn.ReLU(),
@@ -52,26 +78,41 @@ class QuoridorValueNet(nn.Module):
             nn.Tanh()
         )
 
-    def forward(self, board_state, meta_state):
-        # board_state: batch x 3 x 9 x 9
+    def forward(self, pawn_state, wall_state, meta_state):
+        # pawn_state: batch x 2 x 9 x 9
+        # wall_state: batch x 2 x 8 x 8 (horizontal and vertical walls)
         # meta_state: batch x 2 (walls remaining for each player)
         
-        x = self.conv_block(board_state)
+        # Process pawn positions
+        x_pawns = self.pawn_conv(pawn_state)
+        for res_block in self.pawn_residual:
+            identity = x_pawns
+            x_pawns = res_block(x_pawns)
+            x_pawns += identity
+            x_pawns = torch.relu(x_pawns)
         
-        # Residual connections
-        for res_block in self.residual_tower:
-            identity = x
-            x = res_block(x)
-            x += identity
-            x = torch.relu(x)
-
-        # Process value head
-        value_features = self.value_head[:-1](x)  # Everything except final tanh
+        # Process wall positions
+        x_walls = self.wall_conv(wall_state)
+        for res_block in self.wall_residual:
+            identity = x_walls
+            x_walls = res_block(x_walls)
+            x_walls += identity
+            x_walls = torch.relu(x_walls)
+            
+        # Downsample pawn features to 8x8 to match wall features
+        x_pawns = nn.functional.interpolate(x_pawns, size=(8, 8), mode='bilinear')
+        
+        # Combine pawn and wall features
+        x_combined = torch.cat([x_pawns, x_walls], dim=1)
+        x_combined = self.combine_features(x_combined)
+        
+        # Process through value head
+        value_features = self.value_head(x_combined)
         
         # Process meta features
         meta_features = self.meta_features(meta_state)
         
-        # Combine features
+        # Combine all features for final evaluation
         combined = torch.cat([value_features, meta_features], dim=1)
         final_value = self.final_evaluation(combined)
 

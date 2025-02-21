@@ -894,9 +894,36 @@ string StateNode::visualize_gamestate(){
 }
 #endif
 
-std::ostream& operator<<(std::ostream &strm, const StateNode &sn) {
-	return strm << (sn.turn ? "player2" : "player1") << "\t"<< (sn.move.type=='f' && sn.move.horizontal ? "h " : "v ") << sn.move.type << " -> (" << sn.move.row << "," << sn.move.col <<")\n";
-	//print out opposite of what turn says, because we want the player who made the move resulting in this gamestate
+//output binary data such that it can be ingested by python for model
+std::ostream& operator<<(std::ostream &os, const StateNode &sn) {
+	// Write move as 3 integers
+    int move_data[3] = {
+        static_cast<int>(sn.move.type),
+        sn.move.row,
+        sn.move.col
+    };
+    os.write(reinterpret_cast<const char*>(move_data), 3 * sizeof(int));
+    
+    // Write p1 data
+    int p1_data[3] = {sn.p1.row, sn.p1.col, sn.p1.numFences};
+    os.write(reinterpret_cast<const char*>(p1_data), 3 * sizeof(int));
+    
+    // Write p2 data
+    int p2_data[3] = {sn.p2.row, sn.p2.col, sn.p2.numFences};
+    os.write(reinterpret_cast<const char*>(p2_data), 3 * sizeof(int));
+    
+    // Write turn
+    os.write(reinterpret_cast<const char*>(&sn.turn), sizeof(bool));
+    
+    // Write gamestate
+    os.write(reinterpret_cast<const char*>(sn.gamestate), 17 * 9 * sizeof(bool));
+    
+    // Write score, visits, ply
+    os.write(reinterpret_cast<const char*>(&sn.score), sizeof(double));
+    os.write(reinterpret_cast<const char*>(&sn.visits), sizeof(int));
+    os.write(reinterpret_cast<const char*>(&sn.ply), sizeof(int));
+    
+    return os;
 }
 
 bool StateNode::operator==(const StateNode& node) {

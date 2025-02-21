@@ -37,18 +37,8 @@ int main(int argc, char* argv[]) {
         queue.pop_front();
 
         // Convert to binary format
-        BinaryNode bnode;
-        bnode.move = node->move;
-        bnode.p1 = node->p1;
-        bnode.p2 = node->p2;
-        bnode.turn = node->turn;
-        memcpy(bnode.gamestate, node->gamestate, sizeof(bnode.gamestate));
-        bnode.score = node->score; 
-        bnode.visits = node->visits;
-        bnode.ply = node->ply;
-
         // Write binary node to stdout
-        std::cout.write(reinterpret_cast<char*>(&bnode), sizeof(BinaryNode));
+        std::cout << *node;
 
         // Add children to queue
         for (auto& child : node->children) {

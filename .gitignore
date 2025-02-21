@@ -2,6 +2,7 @@
 
 *.o
 qbot
+leopard
 gmon.out
 TODO
 database*
