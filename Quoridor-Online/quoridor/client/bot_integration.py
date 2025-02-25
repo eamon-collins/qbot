@@ -16,11 +16,10 @@ from quoridor.client.src.sounds import Sounds
 from quoridor.client.src.colors import Colors
 
 
-
 #wx and wy are list of coordinates that have walls next to them
 #p1w is player1 numfences
 #p1x and p1y are player 1 coords
-def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
+def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y, pscore, pvisits):
     # Init pygame
     #place where the pygame window opens
     os.environ['SDL_VIDEO_WINDOW_POS'] = "%d, %d" %(1990, 1200)
@@ -68,7 +67,7 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
 
         pos = pygame.mouse.get_pos()
         try:
-            win.redraw_window(None, players, walls, pos)
+            win.redraw_window(None, players, walls, pos, pscore)
         
 
             for event in pygame.event.get():
@@ -133,3 +132,4 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y):
             tb = traceback.extract_tb(e.__traceback__)
             print(tb)
             return "error"
+

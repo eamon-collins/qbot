@@ -109,13 +109,49 @@ class Window:
             if b.show:
                 b.draw(self.win)
 
-    def redraw_window(self, game, players, walls, pos):
+    def draw_score_bar(self, score):
+        SCORE_BAR_HEIGHT = 20
+        SCORE_BAR_WIDTH = 200
+        SCORE_BAR_Y = self.side_board - 40  # Place above quit button
+        SCORE_BAR_X = (self.side_board - SCORE_BAR_WIDTH) // 2
+        surface = self.win
+
+        # Draw background bar
+        pygame.draw.rect(surface, Colors.grey, 
+                        (SCORE_BAR_X, SCORE_BAR_Y, SCORE_BAR_WIDTH, SCORE_BAR_HEIGHT))
+        
+        # Draw score fill
+        fill_width = int(abs(score) * SCORE_BAR_WIDTH)
+        if score > 0:
+            color = Colors.green
+            x_pos = SCORE_BAR_X + SCORE_BAR_WIDTH//2
+        else:
+            color = Colors.red
+            x_pos = SCORE_BAR_X + SCORE_BAR_WIDTH//2 - fill_width
+            
+        if fill_width > 0:
+            pygame.draw.rect(surface, color,
+                           (x_pos, SCORE_BAR_Y, fill_width, SCORE_BAR_HEIGHT))
+            
+        # Draw center line
+        pygame.draw.line(surface, Colors.black,
+                        (SCORE_BAR_X, SCORE_BAR_Y),
+                        (SCORE_BAR_X + SCORE_BAR_WIDTH//2, SCORE_BAR_Y + SCORE_BAR_HEIGHT))
+        
+        # Draw score text
+        font = pygame.font.SysFont(None, 24)
+        text = font.render(f"Score: {score:.2f}", True, Colors.black)
+        text_rect = text.get_rect(center=(self.width//2, SCORE_BAR_Y - 15))
+        surface.blit(text, text_rect)
+
+    def redraw_window(self, game, players, walls, pos, score):
         """Redraw the full window"""
         self.win.fill(self.bgcolor)
         self.draw_game_board(pos)
         self.draw_finish_lines(players)
         self.draw_right_panel(game, players)
         self.draw_buttons()
+        self.draw_score_bar(score)
         players.draw(self)
         walls.draw()
         self.info.draw(self.win, (self.top_left[0], self.height - 50))

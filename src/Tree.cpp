@@ -811,8 +811,13 @@ string StateNode::visualize_gamestate(){
 		p2x = Py_BuildValue("i", otherPlayer.col);
 		p2y = Py_BuildValue("i", otherPlayer.row);
 
+        //Add score and visits to GUI
+        double normalized_score = std::tanh(this->score);
+        PyObject *pscore = Py_BuildValue("d", normalized_score);
+        PyObject *pvisits = Py_BuildValue("i", this->visits);
+
 		//Actually call the method to visualize the gamestate.
-		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, NULL);
+		presult=PyObject_CallFunctionObjArgs(pFunc,px,py, p1w, p1x, p1y, p2w, p2x, p2y, pscore, pvisits, NULL);
 		if (presult != NULL){
 			PyObject *bytes = PyUnicode_AsUTF8String(presult);
 			retval = PyBytes_AsString(bytes);
