@@ -111,17 +111,17 @@ class Window:
 
     def draw_score_bar(self, score):
         SCORE_BAR_HEIGHT = 20
-        SCORE_BAR_WIDTH = 200
-        SCORE_BAR_Y = self.side_board - 40  # Place above quit button
-        SCORE_BAR_X = (self.side_board - SCORE_BAR_WIDTH) // 2
+        SCORE_BAR_WIDTH = 160
+        SCORE_BAR_Y = self.side_board - 100  # Place above quit button
+        SCORE_BAR_X = self.side_board + 50# + ((self.width - self.side_board) // 2)
         surface = self.win
 
         # Draw background bar
-        pygame.draw.rect(surface, Colors.grey, 
+        pygame.draw.rect(surface, Colors.grey,
                         (SCORE_BAR_X, SCORE_BAR_Y, SCORE_BAR_WIDTH, SCORE_BAR_HEIGHT))
         
         # Draw score fill
-        fill_width = int(abs(score) * SCORE_BAR_WIDTH)
+        fill_width = int(abs(score) * SCORE_BAR_WIDTH//2)
         if score > 0:
             color = Colors.green
             x_pos = SCORE_BAR_X + SCORE_BAR_WIDTH//2
@@ -135,13 +135,13 @@ class Window:
             
         # Draw center line
         pygame.draw.line(surface, Colors.black,
-                        (SCORE_BAR_X, SCORE_BAR_Y),
+                        (SCORE_BAR_X + SCORE_BAR_WIDTH//2, SCORE_BAR_Y),
                         (SCORE_BAR_X + SCORE_BAR_WIDTH//2, SCORE_BAR_Y + SCORE_BAR_HEIGHT))
         
         # Draw score text
         font = pygame.font.SysFont(None, 24)
         text = font.render(f"Score: {score:.2f}", True, Colors.black)
-        text_rect = text.get_rect(center=(self.width//2, SCORE_BAR_Y - 15))
+        text_rect = text.get_rect(center=(SCORE_BAR_X + SCORE_BAR_WIDTH//2, SCORE_BAR_Y - 15))
         surface.blit(text, text_rect)
 
     def redraw_window(self, game, players, walls, pos, score):
