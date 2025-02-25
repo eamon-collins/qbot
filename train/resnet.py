@@ -1,7 +1,6 @@
 #Eamon's resnet for valuing a gamestate of Quoridor
 import logging
 import argparse
-import sys
 import torch
 import torch.nn as nn
 
@@ -188,22 +187,6 @@ def main():
     model = QuoridorValueNet()
     if args.load_model:
         model.load_state_dict(torch.load(args.load_model))
-        
-        if args.export_model:
-            model.eval()
-
-            # Create example inputs for tracing
-            example_pawn_state = torch.zeros(1, 2, 9, 9)
-            example_wall_state = torch.zeros(1, 2, 8, 8)
-            example_meta_state = torch.zeros(1, 2)
-
-            # Use TorchScript to create a serializable version
-            traced_script_module = torch.jit.trace(model, (example_pawn_state, example_wall_state, example_meta_state))
-
-            # Save the model
-            traced_script_module.save(args.save_model)
-            sys.exit(0)
-
     
     train(model, args.load_tree, args.batch_size, args.epochs)
     
