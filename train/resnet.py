@@ -1,6 +1,7 @@
 #Eamon's resnet for valuing a gamestate of Quoridor
 import logging
 import argparse
+import sys
 import torch
 import torch.nn as nn
 
@@ -174,6 +175,7 @@ def main():
     parser.add_argument('--load-tree', type=str, dest="load_tree", help='Path to load search tree')
     parser.add_argument('--load-model', type=str, dest="load_model", help='Path to load model weights')
     parser.add_argument('--save-model', type=str, dest="save_model", help='Path to save model weights')
+    parser.add_argument('--export', dest="export", help='Will save inferencable version of model and exit', action='store_true', default=False)
     parser.add_argument('--batch-size', type=int, dest="batch_size", default=64, help='Training batch size')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--log-level', dest="log_level", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
@@ -182,11 +184,27 @@ def main():
     args = parser.parse_args()
     
     logging.basicConfig(level=getattr(logging, args.log_level))
-    logging.info(f"Loading {args.load_tree}")
     
     model = QuoridorValueNet()
     if args.load_model:
+        logging.info(f"Loading {args.load_tree}")
         model.load_state_dict(torch.load(args.load_model))
+        
+        if args.export:
+            model.eval()
+
+            # Create example inputs for tracing
+            example_pawn_state = torch.zeros(1, 2, 9, 9)
+            example_wall_state = torch.zeros(1, 2, 8, 8)
+            example_meta_state = torch.zeros(1, 2)
+
+            # Use TorchScript to create a serializable version
+            traced_script_module = torch.jit.trace(model, (example_pawn_state, example_wall_state, example_meta_state))
+
+            # Save the model
+            traced_script_module.save(args.save_model)
+            sys.exit(0)
+
     
     train(model, args.load_tree, args.batch_size, args.epochs)
     
