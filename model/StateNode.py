@@ -149,7 +149,6 @@ class QuoridorDataset:
                         torch.stack(targets)
                     )
                     pawns, walls, metas, targets = [], [], [], []
-                    print(".")
                     
             except Exception as e:
                 logging.error(f"Error processing state: {e}")

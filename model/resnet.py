@@ -141,7 +141,7 @@ def train_step(model, optimizer, data_batch):
     
     return loss.item()
 
-def train(model, dataset: QuoridorDataset, num_epochs: int):
+def train(model, tree_file : str, batch_size : int, num_epochs: int):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
     
@@ -152,13 +152,14 @@ def train(model, dataset: QuoridorDataset, num_epochs: int):
         epoch_loss = 0
         num_batches = 0
         
-        for batch in dataset.generate_batches():
-            loss = train_step(model, optimizer, batch)
-            epoch_loss += loss
-            num_batches += 1
-            
-            if num_batches % 100 == 0:
-                logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
+        with QuoridorDataset(tree_file, batch_size) as dataset:
+            for batch in dataset.generate_batches():
+                loss = train_step(model, optimizer, batch)
+                epoch_loss += loss
+                num_batches += 1
+
+                if num_batches % 100 == 0:
+                    logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
 
         if num_batches == 0:
             logging.error("Num batches is 0, not training")
@@ -187,8 +188,7 @@ def main():
     if args.load_model:
         model.load_state_dict(torch.load(args.load_model))
     
-    with QuoridorDataset(args.load_tree, args.batch_size) as dataset:
-        train(model, dataset, args.epochs)
+    train(model, args.load_tree, args.batch_size, args.epochs)
     
     if args.save_model:
         torch.save(model.state_dict(), args.save_model)
