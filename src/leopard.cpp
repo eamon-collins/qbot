@@ -3,8 +3,6 @@
 #include <cstring>
 #include <iostream>
 
-int num_threads = 1;
-
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: leopard <tree_file>\n";

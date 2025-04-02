@@ -9,10 +9,11 @@ class Game
 public:
 	StateNode* root; //the root statenode at any given time, not the gameroot but basically state of game currently.
 	int ply;
+	int num_threads;
 	bool humanGame{};
 
 	//
-	Game(StateNode* start);
+	Game(StateNode* start, int num_threads=4);
 
 	//starts playing from root
 	//this method organizes most of the bot's activities at a high level

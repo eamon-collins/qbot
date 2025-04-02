@@ -259,7 +259,8 @@ bool Game::play_move(){
 	return false;
 }
 
-Game::Game(StateNode* start){
+Game::Game(StateNode* start, int num_threads){
 	this->root = start;
 	this->ply = start->ply;
+	this->num_threads = num_threads;
 }

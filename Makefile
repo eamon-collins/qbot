@@ -6,12 +6,20 @@ LDFLAGS = $(shell python3-config --ldflags)
 CONDINC = $(shell python3-config --includes)
 CONDLIB = $(shell python3-config --libs)
 
+# libtorch install location
+# maybe LIBTORCH should be conda_prefix/lib/python3.12/site-packages/torch as it seems to have approx same files but matches with python torch versions? idk
+LIBTORCH = /usr/local/libtorch
+LIBTORCH_INCLUDE = $(LIBTORCH)/include
+LIBTORCH_INCLUDE_CUDA = $(LIBTORCH)/include/torch/csrc/api/include
+LIBTORCH_LIB = $(LIBTORCH)/lib
+TORCH_LIBS = -L$(LIBTORCH_LIB) -ltorch -ltorch_cpu -ltorch_cuda -lc10
+
 BUILD_DIR = build
 
 # Compiler options
 CXX = g++ # use g++ compiler
 #FLAGS = -I/usr/include/python3.8 -I/usr/include/python3.8 -fdebug-prefix-map=/build/python3.8-4wuY7n/python3.8-3.8.10=. -specs=/usr/share/dpkg/no-pie-compile.specs -fstack-protector  -DNDEBUG -fwrapv
-FLAGS = -I$(CONDA_PREFIX)/include/python3.12 -fstack-protector -DNDEBUG -fwrapv -L$(CONDA_PREFIX)/lib
+FLAGS = -I$(CONDA_PREFIX)/include/python3.12 -fstack-protector -DNDEBUG -fwrapv -L$(CONDA_PREFIX)/lib -I$(LIBTORCH_INCLUDE) -I$(LIBTORCH_INCLUDE_CUDA)
 HOLD=-specs=/usr/share/dpkg/no-pie-compile.specs 
 CXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie #-Xlinker -export-dynamic # openmp and pthread, g for debugging
 
@@ -27,8 +35,9 @@ VCXXFLAGS = $(VFLAGS) -lpthread -pthread -std=c++17 -g -D_GNU_SOURCE -no-pie
 FCXXFLAGS = $(FLAGS) -lpthread -pthread -std=c++17 -D_GNU_SOURCE -DWITHOUT_NUMPY -no-pie -O3
 
 # .SUFFIXES: .o .cpp
-OFILES = $(BUILD_DIR)/QuoridorMain.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/Game.o $(BUILD_DIR)/storage.o
+OFILES = $(BUILD_DIR)/QuoridorMain.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/Game.o $(BUILD_DIR)/storage.o $(BUILD_DIR)/inference.o
 LEOPARD_OFILES = $(BUILD_DIR)/leopard.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/storage.o
+INFERENCE_OFILES = $(BUILD_DIR)/inference.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/storage.o
 
 qbot: $(OFILES)
 	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
@@ -56,11 +65,22 @@ fast: $(OFILES)
 leopard: $(LEOPARD_OFILES)
 	$(CXX) $(FCXXFLAGS) $(LEOPARD_OFILES) -lpython3.12 -o leopard
 
+inference: $(BUILD_DIR)/Tree.o $(BUILD_DIR)/utility.o $(BUILD_DIR)/storage.o $(BUILD_DIR)/inference_main.o
+	$(CXX) $(CXXFLAGS) $^ $(TORCH_LIBS) -lpython3.12 -o inference
+	@echo Produced inference test executable with LibTorch
+
 $(BUILD_DIR)/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/inference.o: src/inference.cpp
+	$(CXX) $(CXXFLAGS) $(TORCH_LIBS) -c $< -o $@
+
+# Special rule for inference main version of the file
+$(BUILD_DIR)/inference_main.o: src/inference.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -DINFERENCE_MAIN -c $< -o $@
+
 clean: 
-	$(RM) $(OFILES)
+	$(RM) $(OFILES) $(LEOPARD_OFILES) $(INFERENCE_OFILES)
 
 # Dependency rules for *.o files
 src/Tree.o: src/Tree.cpp src/Tree.h src/Global.h

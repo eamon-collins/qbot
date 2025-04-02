@@ -8,14 +8,13 @@
 #include <iostream>
 #include <ctime>
 
-//as seen in Global.h
-int num_threads = NUM_THREADS;
 
 int main(int argc, char *argv[]){
 	int player = 1;
 	std::string save_file = "database.txt";
 	std::string load_file;
 	bool train = false;
+	int num_threads = 4;
 	//
 	int c;
 	while ((c = getopt(argc, argv, "t:p:s:l:b")) != -1) {
@@ -62,7 +61,7 @@ int main(int argc, char *argv[]){
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
 	//starts new game at gamestate specified by root
-	Game game = Game(root);
+	Game game = Game(root, num_threads);
 	StateNode::game = &game;
 	if ( train ) {
 		game.humanGame = false;

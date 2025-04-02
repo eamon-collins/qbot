@@ -187,7 +187,7 @@ def main():
     
     model = QuoridorValueNet()
     if args.load_model:
-        logging.info(f"Loading {args.load_tree}")
+        logging.info(f"Loading {args.load_model}")
         model.load_state_dict(torch.load(args.load_model))
         
         if args.export:

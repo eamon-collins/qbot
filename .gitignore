@@ -3,6 +3,7 @@
 *.o
 qbot
 leopard
+inference
 gmon.out
 TODO
 database*

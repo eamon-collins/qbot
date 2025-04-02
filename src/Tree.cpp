@@ -41,6 +41,13 @@ mutex viz_mutex;
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
 int StateNode::get_best_move(){
 	StateNode* root = this;		
+	int num_threads;
+	if (StateNode::game != nullptr) { 
+		num_threads = StateNode::game->num_threads;
+	} else {
+		num_threads = 1;
+		cout << "ERROR: should not be calling get_best_move without a valid Game" << endl;
+	}
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
