@@ -11,3 +11,4 @@ Session.vim
 build
 __pycache__
 *.model
+model/

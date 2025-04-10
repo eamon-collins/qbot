@@ -8,11 +8,14 @@ CONDLIB = $(shell python3-config --libs)
 
 # libtorch install location
 # maybe LIBTORCH should be conda_prefix/lib/python3.12/site-packages/torch as it seems to have approx same files but matches with python torch versions? idk
-LIBTORCH = /usr/local/libtorch
+
+# LIBTORCH = /usr/local/libtorch
+LIBTORCH=$(CONDA_PREFIX)
 LIBTORCH_INCLUDE = $(LIBTORCH)/include
 LIBTORCH_INCLUDE_CUDA = $(LIBTORCH)/include/torch/csrc/api/include
 LIBTORCH_LIB = $(LIBTORCH)/lib
-TORCH_LIBS = -L$(LIBTORCH_LIB) -ltorch -ltorch_cpu -ltorch_cuda -lc10
+# -Wl,--no-as-needed is required to include cuda libtorch libs even when not directly referenced
+TORCH_LIBS = -Wl,--no-as-needed -L$(LIBTORCH_LIB) -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda
 
 BUILD_DIR = build
 
@@ -77,7 +80,7 @@ $(BUILD_DIR)/inference.o: src/inference.cpp
 
 # Special rule for inference main version of the file
 $(BUILD_DIR)/inference_main.o: src/inference.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -DINFERENCE_MAIN -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_LIBS) -DINFERENCE_MAIN -c $< -o $@
 
 clean: 
 	$(RM) $(OFILES) $(LEOPARD_OFILES) $(INFERENCE_OFILES)

@@ -18,7 +18,8 @@ public:
         : batch_size(batch_size), device(torch::kCUDA, 0) {
         try {
             // Load the TorchScript model
-            model = torch::jit::load(model_path);
+            model = torch::jit::load(model_path, torch::kCPU);
+            std::cout << "Model loaded successfully to CPU\n";
             model.to(device);
             std::cout << "Model loaded successfully to CUDA device\n";
         }
@@ -168,6 +169,12 @@ public:
     }
 };
 
+void diagnostics() {
+	std::cout << "LibTorch version: " << TORCH_VERSION << std::endl;
+	std::cout << "CUDA available: " << torch::cuda::is_available() << std::endl;
+	std::cout << "CUDA device count: " << torch::cuda::device_count() << std::endl;
+}
+
 #ifdef INFERENCE_MAIN
 // Simple main function to test the inference functionality
 int main(int argc, char* argv[]) {
@@ -175,6 +182,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: ./inference <model_path>\n";
         return 1;
     }
+
+	diagnostics();
     
     std::string model_path = argv[1];
     
