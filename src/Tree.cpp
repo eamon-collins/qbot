@@ -369,15 +369,20 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 	//PAWN MOVES
 	//check up/down
 	for(int i = -1; i < 2; i+=2){
-		if(currPlayer.row +i >= 0 && currPlayer.row +i < NUMROWS && !this->gamestate[2*currPlayer.row + i][currPlayer.col] && (otherPlayer.row != currPlayer.row +i || otherPlayer.col != currPlayer.col))
+		if (currPlayer.row + i < 0 || currPlayer.row + i >= NUMROWS || this->gamestate[2*currPlayer.row + i][currPlayer.col]) { // if out of bounds or wall is there, can't move
+			continue;
+		}
+		if(otherPlayer.row != currPlayer.row +i || otherPlayer.col != currPlayer.col) //non-adjacent to other player
 			vmoves.push_back(Move('p',currPlayer.row+i, currPlayer.col, false));
-		else if(otherPlayer.row == currPlayer.row +i && otherPlayer.col == currPlayer.col && !this->gamestate[2*currPlayer.row + i][currPlayer.col]){
-			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col])//jump the other player
+		else if(otherPlayer.row == currPlayer.row +i && otherPlayer.col == currPlayer.col
+				&& 2*currPlayer.row + 3*i >= 0 && 2*currPlayer.row + 3*i < 2*NUMROWS-1){ //improperly excludes jumping to the last row, but prevents segfaults.
+			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 3*i][currPlayer.col])//jump the other player
 				vmoves.push_back(Move('p', currPlayer.row+2*i, currPlayer.col, false));
-			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
-				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + i][currPlayer.col]) //right
+			else if(this->gamestate[2*currPlayer.row + 3*i][currPlayer.col]){ //if other player has wall behind them
+				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col+1, false));
-				if (currPlayer.col-1 >= 0 && !this->gamestate[2*currPlayer.row + i][currPlayer.col-1]) //left //TOOK OUT -1 on the last index, ie currPLayer.col-1, not sure if significant
+					// cout << "type1 " << i << " " << currPLayer << " ||| " << otherPlayer << "\n" << this->gamestate[
+				if (currPlayer.col-1 >= 0 && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col-1, false));
 			}
 		}
