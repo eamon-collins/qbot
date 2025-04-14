@@ -12,12 +12,12 @@
 int main(int argc, char *argv[]){
 	int player = 1;
 	std::string save_file = "database.txt";
-	std::string load_file;
+	std::string load_file, load_model;
 	bool train = false;
 	int num_threads = 4;
 	//
 	int c;
-	while ((c = getopt(argc, argv, "t:p:s:l:b")) != -1) {
+	while ((c = getopt(argc, argv, "t:p:s:l:m:b")) != -1) {
 		switch (c) {
 			case 't':
 				num_threads = atoi(optarg); 
@@ -33,6 +33,9 @@ int main(int argc, char *argv[]){
 				break;
 			case 'l':
 				load_file = optarg;
+				break;
+			case 'm':
+				load_model = optarg;
 				break;
 			}
 	}

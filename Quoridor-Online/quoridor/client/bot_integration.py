@@ -68,7 +68,6 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y, pscore, pvisits):
         pos = pygame.mouse.get_pos()
         try:
             win.redraw_window(None, players, walls, pos, pscore)
-        
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -82,8 +81,12 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y, pscore, pvisits):
                         run = False
                         pygame.quit()
                         return "quit"
-                    else:    # Put a wall
+                    else:
                         for c in coords.coords:
+                            if pos_in_rect(c.rect, pos): #Pawn move via click
+                                pygame.quit()
+                                return str(f"p0{8-c.y} {c.x}")
+                            #if here, placing a wall
                             wall_east = c.wall_east
                             wall_south = c.wall_south
                             for w in [wall_east, wall_south]:
@@ -107,16 +110,16 @@ def visualize_gamestate(wx, wy, p1w, p1x, p1y, p2w, p2x, p2y, pscore, pvisits):
                 elif event.type == pygame.KEYDOWN:  # Move pawn
                     x = p1x
                     y = 8-p1y
-                    if event.key == pygame.K_LEFT and p1x > 0:
+                    if (event.key == pygame.K_LEFT or event.key == pygame.K_a) and p1x > 0:
                         c = coords.find_coord(p1x - 1, 8-p1y)
                         x-=1
-                    elif event.key == pygame.K_RIGHT and p1x < 8:
+                    elif (event.key == pygame.K_RIGHT or event.key == pygame.K_d) and p1x < 8:
                         c = coords.find_coord(p1x + 1, 8-p1y)
                         x+=1
-                    elif event.key == pygame.K_UP and 8-p1y < 8 :
+                    elif (event.key == pygame.K_UP or event.key == pygame.K_w) and 8-p1y < 8 :
                         c = coords.find_coord(p1x, 8-p1y + 1)
                         y+=1
-                    elif event.key == pygame.K_DOWN and 8-p1y > 0:
+                    elif (event.key == pygame.K_DOWN or event.key == pygame.K_s) and 8-p1y > 0:
                         c = coords.find_coord(p1x, 8-p1y - 1)
                         y-=1    
                     else:

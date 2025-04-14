@@ -62,7 +62,7 @@ noviz: $(OFILES)
 
 fast: CXXFLAGS = $(FCXXFLAGS)
 fast: $(OFILES)
-	$(CXX) $(FCXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	$(CXX) $(FCXXFLAGS) $(TORCH_LIBS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	@echo Produced fast qbot executable 
 
 leopard: $(LEOPARD_OFILES)

@@ -375,9 +375,9 @@ int StateNode::generate_valid_moves(vector<Move>& vmoves){
 			if(currPlayer.row+2*i >= 0 && currPlayer.row+2*i < NUMROWS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col])//jump the other player
 				vmoves.push_back(Move('p', currPlayer.row+2*i, currPlayer.col, false));
 			else if(this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]){ //if other player has wall behind them
-				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col]) //right
+				if (currPlayer.col+1 < NUMCOLS && !this->gamestate[2*currPlayer.row + i][currPlayer.col]) //right
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col+1, false));
-				if (currPlayer.col-1 >= NUMCOLS && !this->gamestate[2*currPlayer.row + 2*i][currPlayer.col-1]) //left //TOOK OUT -1 on the last index, ie currPLayer.col-1, not sure if significant
+				if (currPlayer.col-1 >= 0 && !this->gamestate[2*currPlayer.row + i][currPlayer.col-1]) //left //TOOK OUT -1 on the last index, ie currPLayer.col-1, not sure if significant
 					vmoves.push_back(Move('p', currPlayer.row+i, currPlayer.col-1, false));
 			}
 		}
@@ -476,10 +476,13 @@ StateNode* StateNode::play_out(){
 		//currState->print_node();
 	}
 
-	//now that we have an end state check who wins and backpropagate that info
-	//value of terminal state is based on how far the opponent is from winning, 
-	//so the further they are from the end the better the game
-	scoreModifier = pathfinding(currState);
+	// //now that we have an end state check who wins and backpropagate that info
+	// //value of terminal state is based on how far the opponent is from winning, 
+	// //so the further they are from the end the better the game
+	// scoreModifier = pathfinding(currState);
+	// ACTUALLY
+	//Take simple +1 for p1, -1 for p2
+	scoreModifier = currState->game_over();
 
 	StateNode* winState = currState;
 	while (currState->parent != nullptr){
@@ -507,7 +510,7 @@ int StateNode::game_over() const{
 	if (this->p1.row == 8) {
 		return 1;
 	} else if (this->p2.row == 0) {
-		return 2;
+		return -1;
 	} else {
 		return 0;
 	}
