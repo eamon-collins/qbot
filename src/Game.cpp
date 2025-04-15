@@ -218,7 +218,7 @@ void Game::self_play(const std::string& checkpoint_file, const int games_per_che
             double minutes = difftime(currentTime, startTime) / 60.0;
             std::cout << "Training stats after " << minutes << " minutes:" << std::endl;
             std::cout << "Games played: " << games_played << std::endl;
-            std::cout << "Games per hour: " << games_played / minutes << std::endl;
+            std::cout << "Games per hour: " << (float)(games_played) / minutes << std::endl;
             // output_tree_stats(root);
         }
 
@@ -259,8 +259,13 @@ bool Game::play_move(){
 	return false;
 }
 
-Game::Game(StateNode* start, int num_threads){
+Game::Game(StateNode* start, int num_threads, std::string model_file){
 	this->root = start;
 	this->ply = start->ply;
 	this->num_threads = num_threads;
+
+	if (!model_file.empty()) {
+        this->model = ModelInference(model_file);
+		this->model_loaded = true;
+	}
 }

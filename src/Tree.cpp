@@ -934,7 +934,8 @@ bool StateNode::operator==(const StateNode& node) {
 
 void StateNode::print_node(){
 	std::ostringstream sstream; 
-	sstream << "Last move: " << this->move << "\n" << "Score: " << this->score << "\n";
+	std::string nn_score = this->model_loaded() ? "\t\tNN score: " + std::to_string(StateNode::game->model.evaluate_node(this)) : "";
+	sstream << "Last move: " << this->move << "\n" << "Score: " << this->score << nn_score << "\n";
 	sstream << "Visits: " << this->visits << "   Ply: " << this->ply << "    Turn: " << this->turn << "\n";
 	int index = 0;	
 	for(int i = 16; i >= 0; i--){
@@ -965,6 +966,10 @@ void StateNode::print_node(){
 	sstream << "\n\n";
 
 	std::cout << sstream.str();
+}
+
+bool StateNode::model_loaded() const {
+	return StateNode::game != nullptr && StateNode::game->model_loaded;
 }
 	
 

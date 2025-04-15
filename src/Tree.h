@@ -86,6 +86,7 @@ class StateNode
 {
 public:
 	static Game* game;
+	bool model_loaded() const;
 
 	std::vector<StateNode> children;
 	StateNode* parent = nullptr;

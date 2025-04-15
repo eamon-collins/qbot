@@ -44,7 +44,7 @@ INFERENCE_OFILES = $(BUILD_DIR)/inference.o $(BUILD_DIR)/Tree.o $(BUILD_DIR)/uti
 
 qbot: $(OFILES)
 	#$(CXX) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
-	$(CXX) $(CONDINC) $(LDFLAGS) $(CXXFLAGS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
+	$(CXX) $(CONDINC) $(LDFLAGS) $(CXXFLAGS) $(TORCH_LIBS) $(OFILES) -lpython3.12 -lcrypt -lpthread -ldl  -lutil -lm -lm -o qbot
 	@echo Produced qbot executable 
 
 work: FLAGS = $(WFLAGS)

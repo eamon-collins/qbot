@@ -64,7 +64,7 @@ int main(int argc, char *argv[]){
 	//keep an eye on this to make sure large trees don't take up prohibitive amounts of mem
 	//std::cout << sizeof(*root) << "\n";
 	//starts new game at gamestate specified by root
-	Game game = Game(root, num_threads);
+	Game game = Game(root, num_threads, load_model);
 	StateNode::game = &game;
 	if ( train ) {
 		game.humanGame = false;

@@ -2,7 +2,9 @@
 #pragma once
 
 #include "Tree.h"
+#include "inference.h"
 #include <ctime>
+
 
 class Game
 {
@@ -11,9 +13,11 @@ public:
 	int ply;
 	int num_threads;
 	bool humanGame{};
+	bool model_loaded{};
+	ModelInference model;
 
 	//
-	Game(StateNode* start, int num_threads=4);
+	Game(StateNode* start, int num_threads=4, std::string model_file="");
 
 	//starts playing from root
 	//this method organizes most of the bot's activities at a high level
