@@ -149,11 +149,11 @@ def train(model, tree_file : str, batch_size : int, num_epochs: int):
     if torch.cuda.is_available():
         model.cuda()
     
-    for epoch in range(num_epochs):
-        epoch_loss = 0
-        num_batches = 0
-        
-        with QuoridorDataset(tree_file, batch_size) as dataset:
+    with QuoridorDataset(tree_file, batch_size) as dataset:
+        for epoch in range(num_epochs):
+            epoch_loss = 0
+            num_batches = 0
+            
             for batch in dataset.generate_batches():
                 loss = train_step(model, optimizer, batch)
                 epoch_loss += loss
@@ -162,13 +162,13 @@ def train(model, tree_file : str, batch_size : int, num_epochs: int):
                 if num_batches % 100 == 0:
                     logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
 
-        if num_batches == 0:
-            logging.error("Num batches is 0, not training")
-            return
-        avg_loss = epoch_loss / num_batches
-        scheduler.step(avg_loss)
-        
-        logging.info(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
+            if num_batches == 0:
+                logging.error("Num batches is 0, not training")
+                return
+            avg_loss = epoch_loss / num_batches
+            scheduler.step(avg_loss)
+            
+            logging.info(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
 
 def main():
     parser = argparse.ArgumentParser(description='Train Quoridor Value Network')

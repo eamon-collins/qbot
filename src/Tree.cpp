@@ -41,6 +41,36 @@ mutex viz_mutex;
 //compare number of children to the number of valid moves possible from a position and expand if inequal. Need some way to select b/w unexpanded and expanded nodes tho
 int StateNode::get_best_move(){
 	StateNode* root = this;		
+	StateNode* best_node = nullptr;
+	Move best_move;
+
+
+	//If we don't have any fences left, unnecessary to try on it
+	bool found_move = false;
+	if (p1.numFences == 0 && p2.numFences == 0) {
+		// if (!game->humanGame) {
+		// 	this->play_out();
+		// }
+		if (root->children.size() == 0)
+			root->generate_valid_children();
+		vector<Move> path;
+		int difference = pathfinding(this, path);
+		if (difference == -999)
+			std::cout << "PAWN BLOCKED" <<std::endl;
+		//path[0] is current location
+		for (int m = 1; m < path.size(); m++) {
+			for (int i = 0; i < this->children.size(); i++) {
+				if (this->children[i].move == path[m]) {
+					best_node = &(this->children[i]);
+					best_move = this->children[i].move;
+					found_move = true;
+					cout << "PATHFIND: " << best_move << endl;
+					return i;
+				}
+			}
+		}
+	}
+
 	int num_threads;
 	if (StateNode::game != nullptr) { 
 		num_threads = StateNode::game->num_threads;
@@ -48,6 +78,7 @@ int StateNode::get_best_move(){
 		num_threads = 1;
 		cout << "ERROR: should not be calling get_best_move without a valid Game" << endl;
 	}
+
 	//copying node so can generate trees in parallel.
 	//might be expensive to copy if we are handed a precomputed tree, maybe benchmark this
 	vector<thread> workers;
@@ -87,7 +118,6 @@ int StateNode::get_best_move(){
 	//if multiple are tied, chooses among them at random
 	float best_avg_score = -1000;
 	vector<Move> best_moves;
-	Move best_move;
 	for (auto score : scores){
 		// cout << score.first << " : " << score.second.second << " " << score.second.first << "\n";
 		float avg_score = score.second.second / score.second.first;
@@ -108,7 +138,6 @@ int StateNode::get_best_move(){
 	best_move = best_moves[int_gen(get_rng())];
 	//now with the best move, get the node of the best UCB example of that move from across the copies
 	//maybe not finding bestnode is problem with horizontal bool, or with conversion
-	StateNode* best_node = nullptr;
 	float node_score = -1000;
 	for (auto &copy : copies){
 		for (StateNode &child : copy.children){
@@ -181,6 +210,7 @@ void best_move_worker(int id, StateNode* root){
 	std::time_t start_time = std::time(0);
 	while( std::time(0) - start_time < MAXTIME){
 		curr = root;
+
 		//SELECTION
 		while(curr->children.size() != 0){
 			vector<StateNode*> max_list;
@@ -438,56 +468,63 @@ StateNode* StateNode::play_out(){
 	StateNode* currState = this;
 	int scoreModifier = 0;
 
-	std::time_t start_time = std::time(0);
-	while (!currState->game_over()){
-		//if there are no more fences this game is effectively over with pathfinding
-		if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
-			// scoreModifier = pathfinding(currState);
-			//cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
-			break;
+	if (model_loaded()) {
+		double score = game->model.evaluate_node(currState);
+		scoreModifier = score >= 0 ? 1 : -1;
+	} else {
+		std::time_t start_time = std::time(0);
+		while (!currState->game_over()){
+			//if there are no more fences this game is effectively over with pathfinding
+			if (currState->p1.numFences == 0 && currState->p2.numFences == 0){
+				// scoreModifier = pathfinding(currState);
+				//cout << "ENDING PLAYOUT WITH SCORE " << scoreModifier << std::endl;
+				break;
+			}
+
+			if (currState->children.size() == 0)
+				numChildren = currState->generate_random_child();
+				
+			else
+				numChildren = currState->children.size();
+
+			if ( numChildren == 1){
+				currState = &(currState->children.front());
+			}
+			else if (numChildren != 0){
+				std::uniform_int_distribution<> int_gen(0, numChildren-1);
+				choice = int_gen(get_rng());
+				std::vector<StateNode>::iterator it = std::next(currState->children.begin(), choice);
+				currState = &(*it);
+				//currState = &(currState->children[choice]);
+			}
+			else {
+				//currState->visualize_gamestate();
+				//printf("No valid children during playout, or no valid pawn moves\n");
+				
+				break;
+			}
+			
+			if( std::time(0) - start_time > 4){
+				cout <<"VISUALIZING BROKEN STATE";
+				currState->print_node();
+				cout << std::flush;
+				currState->visualize_gamestate();
+				//currState->parent->visualize_gamestate();
+				break;
+			}
+			//currState->print_node();
 		}
 
-		if (currState->children.size() == 0)
-			numChildren = currState->generate_random_child();
-			
-		else
-			numChildren = currState->children.size();
-
-		if ( numChildren == 1){
-			currState = &(currState->children.front());
+		// //now that we have an end state check who wins and backpropagate that info
+		// //value of terminal state is based on how far the opponent is from winning, 
+		// //so the further they are from the end the better the game
+		// ACTUALLY
+		//Take simple +1 for p1, -1 for p2
+		scoreModifier = currState->game_over();
+		if (!scoreModifier) {
+			scoreModifier = pathfinding(currState) > 0 ? 1 : -1;
 		}
-		else if (numChildren != 0){
-			std::uniform_int_distribution<> int_gen(0, numChildren-1);
-			choice = int_gen(get_rng());
-			std::vector<StateNode>::iterator it = std::next(currState->children.begin(), choice);
-			currState = &(*it);
-			//currState = &(currState->children[choice]);
-		}
-		else {
-			//currState->visualize_gamestate();
-			//printf("No valid children during playout, or no valid pawn moves\n");
-			
-			break;
-		}
-		
-		if( std::time(0) - start_time > 4){
-			cout <<"VISUALIZING BROKEN STATE";
-			currState->print_node();
-			cout << std::flush;
-			currState->visualize_gamestate();
-			//currState->parent->visualize_gamestate();
-			break;
-		}
-		//currState->print_node();
 	}
-
-	// //now that we have an end state check who wins and backpropagate that info
-	// //value of terminal state is based on how far the opponent is from winning, 
-	// //so the further they are from the end the better the game
-	// scoreModifier = pathfinding(currState);
-	// ACTUALLY
-	//Take simple +1 for p1, -1 for p2
-	scoreModifier = currState->game_over();
 
 	StateNode* winState = currState;
 	while (currState->parent != nullptr){
