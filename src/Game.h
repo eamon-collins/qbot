@@ -27,6 +27,7 @@ public:
 	//knowledge built in to the params and also eventually training a NN for individual state eval
 	void self_play(const int timeout);
     void self_play(const std::string& checkpoint_file, const int games_per_checkpoint);
+    void train_alpha(const std::string& checkpoint_file, int iterations_before_training = 50000);
 	//kind of forgot this method existed when i made get_player_move, might be possible to make a more general
 	//function that can receive input from either opposing bot or human
 	bool receive_opposing_move();
