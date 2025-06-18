@@ -7,6 +7,7 @@
 #include <sstream>
 #include <deque>
 #include <exception>
+#include <atomic>
 
 //forward declare Game
 class Game;
