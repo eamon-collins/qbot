@@ -315,6 +315,87 @@ int StateNode::generate_valid_children(){
 	return this->children.size();
 }
 
+struct MoveUrgency {
+    Move move;
+    float urgency;
+	int idx;
+};
+
+std::vector<MoveUrgency> evaluate_moves(StateNode* state, const std::vector<Move>& moves) {
+    std::vector<MoveUrgency> urgencies;
+    
+    Player curr = state->turn ? state->p1 : state->p2;
+    Player opp = state->turn ? state->p2 : state->p1;
+    
+    // Calculate distances to goal
+    int curr_dist = curr.row; // Distance for P2 (going to row 0)
+    if (state->turn) curr_dist = 8 - curr.row; // Distance for P1 (going to row 8)
+    
+    int opp_dist = opp.row;
+    if (!state->turn) opp_dist = 8 - opp.row;
+    
+    for (int i =0; i< moves.size(); i++){
+		const auto& move = moves[i];
+        MoveUrgency mu{move, 1.0f, i}; // Base urgency
+        
+        if (move.type == 'p') {
+            // Pawn moves that advance toward goal get higher urgency
+            int new_dist = move.row;
+            if (state->turn) new_dist = 8 - move.row;
+            
+            if (new_dist < curr_dist) {
+                mu.urgency = 50.0f; // Strong preference for advancing moves
+            } else {
+                mu.urgency = 10.0f; // Lateral or backward moves
+            }
+        } else { // Fence move
+            // Only consider "smart" fence placements
+            int fence_dist_to_opp = l1_f_p(move, opp);
+            
+            // Fences near opponent are more valuable
+            if (fence_dist_to_opp <= 2) {
+                // Check if this fence increases opponent's path length
+                int path_diff = pathfinding(state, move);
+                if (path_diff > 0) { // We're ahead after this fence
+                    mu.urgency = 30.0f + (10.0f * path_diff);
+                } else {
+                    mu.urgency = 0.1f; // Very low urgency for bad fences
+                }
+            } else {
+                mu.urgency = 0.1f; // Distant fences are almost never played
+            }
+            
+            // Reduce fence urgency if we're already ahead
+            if (opp_dist - curr_dist > 3) {
+                mu.urgency *= 0.3f; // Don't waste fences when winning
+            }
+        }
+        
+        urgencies.push_back(mu);
+    }
+    
+    return urgencies;
+}
+
+// Modified playout selection
+int select_playout_move(StateNode* state, const std::vector<Move>& moves) {
+    auto urgencies = evaluate_moves(state, moves);
+    
+    // Convert urgencies to probabilities
+    float total = 0;
+    for (const auto& mu : urgencies) total += mu.urgency;
+    
+    std::uniform_real_distribution<> dist(0, total);
+    float r = dist(get_rng());
+    
+    float sum = 0;
+    for (const auto& mu : urgencies) {
+        sum += mu.urgency;
+        if (r <= sum) return mu.idx;
+    }
+    
+    return moves.size()-1; // Fallback
+}
 //
 int StateNode::generate_random_child()
 {
@@ -329,8 +410,8 @@ int StateNode::generate_random_child()
 		otherPlayer = this->p1;
 	}
 	//THIS MAY NEED TO BE MODIFIED, maybe adjusted according to other metrics?
-	std::uniform_real_distribution<> float_gen(0.0, 1.0);
-	float chance_to_choose_fence = currPlayer.numFences > 0 ? .3 : 0;
+	// std::uniform_real_distribution<> float_gen(0.0, 1.0);
+	// float chance_to_choose_fence = currPlayer.numFences > 0 ? .3 : 0;
 
 	vector<Move> vmoves;
 	int numFenceMoves = generate_valid_moves(vmoves);
@@ -351,23 +432,28 @@ int StateNode::generate_random_child()
 			cout << "numFenceMoves shouldn't be zero here" << endl;
 			return 0;
 		}
-		random = float_gen(get_rng());
-		if( random >= chance_to_choose_fence){
-			std::uniform_int_distribution<> int_gen(0,vmoves.size()-numFenceMoves-1);
-			rand_index = int_gen(get_rng());
-			valid_move = test_and_add_move(this, vmoves[rand_index]);
-			//remove invalid moves so no infinite loop
-			if(!valid_move)
-				vmoves.erase(vmoves.begin() + rand_index);
-		}else{//choose a fence move, relies on fences being at back of the vector
-			std::uniform_int_distribution<> int_gen(0,numFenceMoves-1);
-			rand_index = int_gen(get_rng());
-			valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
-			if (!valid_move){
-				vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
-				numFenceMoves--;
-			}
-		}
+		int selected = select_playout_move(this,vmoves);
+		valid_move = test_and_add_move(this, vmoves[selected]);
+		if(!valid_move)
+			vmoves.erase(vmoves.begin() +selected);
+
+		// random = float_gen(get_rng());
+		// if( random >= chance_to_choose_fence){
+		// 	std::uniform_int_distribution<> int_gen(0,vmoves.size()-numFenceMoves-1);
+		// 	rand_index = int_gen(get_rng());
+		// 	valid_move = test_and_add_move(this, vmoves[rand_index]);
+		// 	//remove invalid moves so no infinite loop
+		// 	if(!valid_move)
+		// 		vmoves.erase(vmoves.begin() + rand_index);
+		// }else{//choose a fence move, relies on fences being at back of the vector
+		// 	std::uniform_int_distribution<> int_gen(0,numFenceMoves-1);
+		// 	rand_index = int_gen(get_rng());
+		// 	valid_move = test_and_add_move(this, vmoves[vmoves.size()-numFenceMoves+rand_index]);
+		// 	if (!valid_move){
+		// 		vmoves.erase(vmoves.begin() + (vmoves.size() - numFenceMoves+rand_index));
+		// 		numFenceMoves--;
+		// 	}
+		// }
 	}
 
 	return this->children.size();

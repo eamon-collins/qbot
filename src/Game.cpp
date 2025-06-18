@@ -237,7 +237,6 @@ void Game::train_alpha(const std::string& checkpoint_file, int iterations_before
     int total_iterations = 0;
     int games_played = 0;
 
-    std::cout << "Starting AlphaGo Zero-style training..." << std::endl;
     output_tree_stats(root);
 
     while (total_iterations < iterations_before_training) {
@@ -253,7 +252,7 @@ void Game::train_alpha(const std::string& checkpoint_file, int iterations_before
             }
 
             // Run MCTS simulations from this position
-            const int SIMULATIONS_PER_MOVE = 800;  // Reduced for your use case
+            const int SIMULATIONS_PER_MOVE = 800;
             for (int sim = 0; sim < SIMULATIONS_PER_MOVE; sim++) {
                 perform_mcts_simulation(current);
                 total_iterations++;
@@ -274,7 +273,7 @@ void Game::train_alpha(const std::string& checkpoint_file, int iterations_before
 
         // Backpropagate actual game outcome through the game path
         if (current->game_over()) {
-            float game_outcome = current->game_over();  // 1 for p1 win, -1 for p2 win
+            float game_outcome = current->game_over();
 
             // Update all nodes in the game path with true outcome
             for (auto* node : game_path) {
@@ -299,16 +298,11 @@ void Game::train_alpha(const std::string& checkpoint_file, int iterations_before
 
     // Save the enhanced tree for training
     std::cout << "\nReached training checkpoint after " << total_iterations << " iterations" << std::endl;
-    int final_nodes = count_nodes(root);
-    std::cout << "Final tree size: " << final_nodes << " nodes (" 
-             << (final_nodes - nodes_in_tree) << " new)" << std::endl;
+	output_tree_stats(root);
 
     int nodes_saved = save_tree(root, checkpoint_file);
     std::cout << "Saved " << nodes_saved << " nodes to " << checkpoint_file << std::endl;
     std::cout << "Ready for external model training." << std::endl;
-
-    // Output statistics
-    output_tree_stats(root);
 }
 
 // Helper function for MCTS simulation with value-only model
@@ -434,7 +428,7 @@ void Game::better_self_play(const std::string& checkpoint_file, const int games_
             }
 
             // Set a fixed number of MCTS simulations per move
-            const int num_simulations = 1600; // AlphaGo Zero used 1600 simulations per move
+            const int num_simulations = 100; // AlphaGo Zero used 1600 simulations per move
 
             // Run multiple MCTS simulations from current state
             for (int i = 0; i < num_simulations; i++) {
@@ -504,7 +498,7 @@ void Game::better_self_play(const std::string& checkpoint_file, const int games_
         // Record win statistics
         if (curr_state->game_over() == 1) {
             player1_wins++;
-        } else if (curr_state->game_over() == 2) {
+        } else if (curr_state->game_over() == -1) {
             player2_wins++;
         }
 

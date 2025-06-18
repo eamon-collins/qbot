@@ -35,6 +35,10 @@ public:
 	//currently asks for a human response to the currState, and attempts validation of the move.
 	Move get_player_move(StateNode* currState);
 	bool play_move();
+	
+	//internal helper fns
+	StateNode* select_move_by_visits(StateNode* node, int game_number);
+	void perform_mcts_simulation(StateNode* root);
 };
 
 
