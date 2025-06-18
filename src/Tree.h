@@ -96,9 +96,11 @@ public:
 	Player p2; //player 2, at the top of the screen
 	bool turn; //true for it is currently player 1's turn, false for p2
 	bool gamestate[2*NUMROWS - 1][NUMCOLS]; //stores every space in between squares where half a wall could be placed, even numbered rows have 8 0s with a -1 at the end
-	double score;
+	// double score;
+	// int visits; //number of times we've visited this node
+    std::atomic<double> score;
+    std::atomic<int> visits;
 	double vi; //average score of every node below this one
-	int visits; //number of times we've visited this node
 	int ply; //the total number of moves made up until this point.
 	unsigned char serial_type; //bookkeeping for serialization/deserialization
 

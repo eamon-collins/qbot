@@ -68,7 +68,8 @@ int main(int argc, char *argv[]){
 	StateNode::game = &game;
 	if ( train ) {
 		game.humanGame = false;
-		game.better_self_play(save_file, 1);
+        game.parallel_self_play(save_file, num_threads, 1);
+		// game.better_self_play(save_file, 1);
 		// game.train_alpha(save_file, 10000);
 	} else {
 		//uses generate_children and prune_children to generate state tree of moves from current root
