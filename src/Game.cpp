@@ -93,7 +93,7 @@ sys.path.append(os.path.join(sys.prefix, 'lib', 'python3.12', 'site-packages'))
 			std::cout << "!!! Player1 Wins !!!" << std::endl;
 			gameOver = true;
 		}
-	
+
 	}
 #ifndef NOVIZ
 	Py_Finalize();
@@ -116,7 +116,7 @@ Move Game::get_player_move(StateNode* currState){
 			std::terminate();
 			return Move();
 		}
-		
+
 		if (viz_retval == "error"){
 			std::cout << "Viz gamestate returned error" << std::endl;
 			break;
@@ -149,7 +149,7 @@ Move Game::get_player_move(StateNode* currState){
 		}
 	}
 	return Move();//bad state, should have returned earlier
-	
+
 }
 
 void Game::self_play(const int timeout) {
@@ -169,7 +169,7 @@ void Game::self_play(const int timeout) {
 				std::cout << "best_node is nullptr";
 				return;
 			}
-		
+
 			currState = nextState;
 			// currState->print_node();
 			gameOver = currState->game_over();
@@ -194,7 +194,7 @@ void Game::self_play(const std::string& checkpoint_file, const int games_per_che
         while (!gameOver) {
             int ret = currState->get_best_move();
             StateNode* nextState = &(currState->children[ret]);
-            
+
             if (nextState != nullptr) {
                 nextState->print_node(); // Keep this for debugging/monitoring
                 gameOver = nextState->game_over();
@@ -212,7 +212,7 @@ void Game::self_play(const std::string& checkpoint_file, const int games_per_che
             int nodes_saved = save_tree(root, checkpoint_file);
             std::cout << "Checkpoint after " << games_played << " games. Saved " 
                      << nodes_saved << " nodes to " << checkpoint_file << std::endl;
-            
+
             // Output some statistics
             std::time_t currentTime = std::time(0);
             double minutes = difftime(currentTime, startTime) / 60.0;
@@ -224,6 +224,302 @@ void Game::self_play(const std::string& checkpoint_file, const int games_per_che
 
         // Optional: Break if some training target is met
         // if (some_condition) break;
+    }
+}
+
+void Game::train_alpha(const std::string& checkpoint_file, int iterations_before_training) {
+    if (!model_loaded) {
+        std::cerr << "Error: No model loaded for AlphaGo Zero training" << std::endl;
+        return;
+    }
+
+    std::time_t start_time = std::time(0);
+    int total_iterations = 0;
+    int games_played = 0;
+
+    output_tree_stats(root);
+
+    while (total_iterations < iterations_before_training) {
+        StateNode* current = root;
+        std::vector<StateNode*> game_path;
+
+        while (!current->game_over()) {
+            game_path.push_back(current);
+
+            // Ensure children exist
+            if (current->children.empty()) {
+                current->generate_valid_children();
+            }
+
+            // Run MCTS simulations from this position
+            const int SIMULATIONS_PER_MOVE = 800;
+            for (int sim = 0; sim < SIMULATIONS_PER_MOVE; sim++) {
+                perform_mcts_simulation(current);
+                total_iterations++;
+
+                // Check if we should stop and train
+                if (total_iterations >= iterations_before_training) {
+                    break;
+                }
+            }
+
+            // Select move based on visit counts
+            current = select_move_by_visits(current, games_played);
+
+            if (total_iterations >= iterations_before_training) {
+                break;
+            }
+        }
+
+        // Backpropagate actual game outcome through the game path
+        if (current->game_over()) {
+            float game_outcome = current->game_over();
+
+            // Update all nodes in the game path with true outcome
+            for (auto* node : game_path) {
+                node->visits++;
+                node->score += game_outcome;
+            }
+        }
+
+        games_played++;
+
+        // Periodic logging
+        if (games_played % 100 == 0) {
+            std::time_t current_time = std::time(0);
+            double minutes = difftime(current_time, start_time) / 60.0;
+
+            std::cout << "Progress: " << games_played << " games, " 
+                     << total_iterations << " iterations in " 
+                     << minutes << " minutes" << std::endl;
+            output_tree_stats(root);
+        }
+    }
+
+    // Save the enhanced tree for training
+    std::cout << "\nReached training checkpoint after " << total_iterations << " iterations" << std::endl;
+	output_tree_stats(root);
+
+    int nodes_saved = save_tree(root, checkpoint_file);
+    std::cout << "Saved " << nodes_saved << " nodes to " << checkpoint_file << std::endl;
+    std::cout << "Ready for external model training." << std::endl;
+}
+
+// Helper function for MCTS simulation with value-only model
+void Game::perform_mcts_simulation(StateNode* root) {
+    StateNode* current = root;
+    std::vector<StateNode*> path;
+
+    // Selection phase - traverse tree using UCB
+    while (!current->children.empty()) {
+        path.push_back(current);
+
+        // Find best child using UCB (no prior probabilities)
+        StateNode* best_child = nullptr;
+        double best_ucb = -std::numeric_limits<double>::infinity();
+
+        for (auto& child : current->children) {
+            double ucb = child.UCB(current->turn);
+            if (ucb > best_ucb) {
+                best_ucb = ucb;
+                best_child = &child;
+            }
+        }
+
+        if (!best_child) break;
+        current = best_child;
+    }
+
+    // Expansion phase
+    if (!current->game_over() && current->visits > 0) {
+        // Only expand if we've visited this node before
+        if (current->children.empty()) {
+            current->generate_valid_children();
+        }
+
+        // Select a random unexplored child for evaluation
+        std::vector<StateNode*> unexplored;
+        for (auto& child : current->children) {
+            if (child.visits == 0) {
+                unexplored.push_back(&child);
+            }
+        }
+
+        if (!unexplored.empty()) {
+            std::uniform_int_distribution<> dist(0, unexplored.size() - 1);
+            current = unexplored[dist(get_rng())];
+            path.push_back(current);
+        }
+    }
+
+    // Evaluation phase - use neural network
+    double value = model.evaluate_node(current);
+
+    // Backup phase - propagate value up the tree
+    for (auto* node : path) {
+        node->visits++;
+        node->score += value;
+    }
+}
+
+// Helper to select moves during self-play
+StateNode* Game::select_move_by_visits(StateNode* node, int game_number) {
+    if (node->children.empty()) return node;
+
+    // Temperature for exploration (explore more in early moves)
+    float temperature = (node->ply < 30) ? 1.0f : 0.1f;
+
+    if (temperature > 0.1f && game_number % 10 != 0) {  // Explore 90% of games
+        // Sample proportional to visit counts
+        std::vector<float> visit_probs;
+        float sum = 0;
+
+        for (const auto& child : node->children) {
+            float prob = std::pow(child.visits, 1.0f / temperature);
+            visit_probs.push_back(prob);
+            sum += prob;
+        }
+
+        // Normalize
+        for (auto& p : visit_probs) p /= sum;
+
+        // Sample
+        std::discrete_distribution<> dist(visit_probs.begin(), visit_probs.end());
+        int selected = dist(get_rng());
+
+        return &(node->children[selected]);
+    } else {
+        // Select deterministically (most visited)
+        StateNode* best = nullptr;
+        int max_visits = -1;
+
+        for (auto& child : node->children) {
+            if (child.visits > max_visits) {
+                max_visits = child.visits;
+                best = &child;
+            }
+        }
+
+        return best ? best : &(node->children[0]);
+	}
+}
+
+void Game::better_self_play(const std::string& checkpoint_file, const int games_per_checkpoint) {
+    int games_played = 0;
+    std::time_t startTime = std::time(0);
+    double total_moves = 0;
+    int player1_wins = 0, player2_wins = 0;
+    StateNode* best_root = this->root;
+
+    while (true) { // Run continuously until stopped externally
+        // Start a new game from initial position
+        StateNode* curr_state = best_root;
+        bool game_over = false;
+        int moves_in_game = 0;
+
+        // Play a single game until termination
+        while (!game_over) {
+            // For each move, run MCTS to determine the best action
+            // This is where AlphaGo Zero would use its neural network for evaluation and prior probabilities
+
+            // Generate all valid children if they don't exist yet
+            if (curr_state->children.size() == 0) {
+                curr_state->generate_valid_children();
+            }
+
+            // Set a fixed number of MCTS simulations per move
+            const int num_simulations = 100; // AlphaGo Zero used 1600 simulations per move
+
+            // Run multiple MCTS simulations from current state
+            for (int i = 0; i < num_simulations; i++) {
+                // Select, expand, simulate, and backpropagate in the tree
+                StateNode* leaf = curr_state;
+
+                // SELECTION - find a leaf node using UCB
+                while (leaf->children.size() > 0 && !leaf->game_over()) {
+                    // Find child with highest UCB value
+                    StateNode* best_child = nullptr;
+                    double best_ucb = -std::numeric_limits<double>::infinity();
+
+                    for (auto& child : leaf->children) {
+                        double ucb = child.UCB(leaf->turn);
+                        if (ucb > best_ucb) {
+                            best_ucb = ucb;
+                            best_child = &child;
+                        }
+                    }
+
+                    if (best_child == nullptr) break; // Safety check
+                    leaf = best_child;
+                }
+
+                // EXPANSION - if leaf is not terminal and has no children
+                if (!leaf->game_over() && leaf->children.size() == 0) {
+                    leaf->generate_valid_children();
+
+                    // If children were created, select one of them
+                    if (leaf->children.size() > 0) {
+                        std::uniform_int_distribution<> dist(0, leaf->children.size() - 1);
+                        leaf = &(leaf->children[dist(get_rng())]);
+                    }
+                }
+
+                // SIMULATION - play out from the leaf node
+                leaf->play_out();
+            }
+
+            StateNode* best_node = nullptr;
+			int mod = curr_state->turn ? 1 : -1;
+			double best_score = -std::numeric_limits<double>::infinity();
+
+            for (auto& child : curr_state->children) {
+                if (mod * child.score > best_score) {
+                    best_score = child.score;
+                    best_node = &child;
+                }
+            }
+
+            if (best_node == nullptr) {
+                std::cerr << "Error: No valid moves found during self-play\n";
+                break;
+            }
+
+            // Make the selected move
+            curr_state = best_node;
+            moves_in_game++;
+
+            game_over = curr_state->game_over();
+        }
+
+        // Game has finished
+        games_played++;
+        total_moves += moves_in_game;
+
+        // Record win statistics
+        if (curr_state->game_over() == 1) {
+            player1_wins++;
+        } else if (curr_state->game_over() == -1) {
+            player2_wins++;
+        }
+
+        // Checkpoint the tree periodically
+        if (games_played % games_per_checkpoint == 0) {
+            int nodes_saved = save_tree(root, checkpoint_file);
+
+            // Output statistics
+            std::time_t currentTime = std::time(0);
+            double minutes = difftime(currentTime, startTime) / 60.0;
+
+            std::cout << "=== Training Progress Report ===\n";
+            std::cout << "Games played: " << games_played << "\n";
+            std::cout << "Time elapsed: " << minutes << " minutes\n";
+            std::cout << "Games per hour: " << (games_played / (minutes / 60.0)) << "\n";
+            std::cout << "Average game length: " << (total_moves / games_played) << " moves\n";
+            std::cout << "Player 1 win rate: " << (100.0 * player1_wins / games_played) << "%\n";
+            std::cout << "Player 2 win rate: " << (100.0 * player2_wins / games_played) << "%\n";
+            std::cout << "Saved " << nodes_saved << " nodes to " << checkpoint_file << "\n";
+            std::cout << "==============================\n";
+        }
     }
 }
 

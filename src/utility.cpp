@@ -101,7 +101,7 @@ int pathfinding(StateNode* state, Move move, bool verbose){
 	thread_local bool gamestate[2*NUMROWS - 1][NUMCOLS];
 	memcpy(gamestate, state->gamestate, (2*NUMROWS-1)*NUMCOLS*sizeof(bool));
 
-	
+
 	// Player p1 = state->turn ? state->p1 : state->p2;
 	// Player p2 = !state->turn ? state->p1 : state->p2;
 	Player p1 = state->p1;
