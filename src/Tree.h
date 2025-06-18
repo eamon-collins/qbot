@@ -90,7 +90,7 @@ public:
 
 	std::vector<StateNode> children;
 	StateNode* parent = nullptr;
-	
+
 	Move move; //the move directly prior to this state
 	Player p1; //player 1, at the bottom of the screen
 	Player p2; //player 2, at the top of the screen
@@ -139,7 +139,7 @@ bool test_and_add_move( StateNode* state, Move move); //helps testing validity a
 void best_move_worker(int id, StateNode* root);
 
 
- 
+
 #if PY_VERSION_HEX >= 0x030800f0
 static inline void
 py3__Py_DECREF(const char *filename, int lineno, PyObject *op)
