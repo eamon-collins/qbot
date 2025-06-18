@@ -483,7 +483,6 @@ StateNode* StateNode::play_out(){
 
 			if (currState->children.size() == 0)
 				numChildren = currState->generate_random_child();
-				
 			else
 				numChildren = currState->children.size();
 
