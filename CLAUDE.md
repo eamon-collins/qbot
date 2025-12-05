@@ -69,14 +69,13 @@ For bounded memory scenarios:
 src/
   core/
     types.h          # Move, Position, Player types
-    bitboard.h       # Compact wall representation
-    state.h          # Game state (no tree logic)
-    state.cpp
+    Game.h           # Game state (no tree logic)
+    Game.cpp
   tree/
-    node.h           # TreeNode with edge statistics
+    Node.h           # TreeNode with edge statistics
     node_pool.h      # Memory-bounded node allocation
-    tree.h           # MCTS tree operations
-    tree.cpp
+    Tree.h           # MCTS tree operations
+    Tree.cpp
   search/
     mcts.h           # MCTS algorithm
     mcts.cpp
