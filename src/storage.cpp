@@ -164,6 +164,11 @@ StateNode* load_tree(std::string database_name, bool verbose){
 
 	free (node_buffer);
 	free(curr_node_buffer);
+
+	//ensure parent is nullptr, signifying root of the tree
+	root->parent = nullptr;
+	root->fix_parent_references();
+
 	return root;
 
 }

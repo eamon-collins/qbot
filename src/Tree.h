@@ -7,6 +7,7 @@
 #include <sstream>
 #include <deque>
 #include <exception>
+#include <atomic>
 
 //forward declare Game
 class Game;
@@ -90,15 +91,17 @@ public:
 
 	std::vector<StateNode> children;
 	StateNode* parent = nullptr;
-	
+
 	Move move; //the move directly prior to this state
 	Player p1; //player 1, at the bottom of the screen
 	Player p2; //player 2, at the top of the screen
 	bool turn; //true for it is currently player 1's turn, false for p2
 	bool gamestate[2*NUMROWS - 1][NUMCOLS]; //stores every space in between squares where half a wall could be placed, even numbered rows have 8 0s with a -1 at the end
-	double score;
+	// double score;
+	// int visits; //number of times we've visited this node
+    double score;
+    int visits;
 	double vi; //average score of every node below this one
-	int visits; //number of times we've visited this node
 	int ply; //the total number of moves made up until this point.
 	unsigned char serial_type; //bookkeeping for serialization/deserialization
 
@@ -139,7 +142,6 @@ bool test_and_add_move( StateNode* state, Move move); //helps testing validity a
 void best_move_worker(int id, StateNode* root);
 
 
- 
 #if PY_VERSION_HEX >= 0x030800f0
 static inline void
 py3__Py_DECREF(const char *filename, int lineno, PyObject *op)

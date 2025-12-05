@@ -13,11 +13,11 @@ int main(int argc, char *argv[]){
 	int player = 1;
 	std::string save_file = "database.txt";
 	std::string load_file, load_model;
-	bool train = false;
+	bool train = false, verbose = false;
 	int num_threads = 4;
 	//
 	int c;
-	while ((c = getopt(argc, argv, "t:p:s:l:m:b")) != -1) {
+	while ((c = getopt(argc, argv, "t:p:s:l:m:bv")) != -1) {
 		switch (c) {
 			case 't':
 				num_threads = atoi(optarg); 
@@ -30,6 +30,9 @@ int main(int argc, char *argv[]){
 				break;
 			case 'b':
 				train = true;
+				break;
+			case 'v':
+				verbose = true;
 				break;
 			case 'l':
 				load_file = optarg;
@@ -68,7 +71,9 @@ int main(int argc, char *argv[]){
 	StateNode::game = &game;
 	if ( train ) {
 		game.humanGame = false;
-		game.self_play(save_file, 1);
+        // game.parallel_self_play(save_file, num_threads, 1);
+		game.better_self_play(save_file, 100);
+		// game.train_alpha(save_file, 10000);
 	} else {
 		//uses generate_children and prune_children to generate state tree of moves from current root
 		game.humanGame = true;
