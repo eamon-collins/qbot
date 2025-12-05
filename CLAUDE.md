@@ -7,6 +7,13 @@ A Monte Carlo Tree Search implementation for the board game Quoridor, designed f
 - Future neural network policy/value integration (AlphaZero-style)
 - Modern C++20 standards
 
+The code in `old_src` is my initial attempt, from when I was a bad programmer. Now that I am better, I am rewriting the codebase in `src`.
+Let this code guide overarching design principles, things like I want MCTS with a neural net value function.
+I want high performance, efficiently multithreaded simulation and tree building, alongside network training.
+I want to be able to produce and load efficiently sized binary representations of the tree so that I can save intermediate steps, and eventually so I can load a pretrained tree to give the bot a head start against players.
+For many other things, like not knowing move semantics, pool allocators, any template metaprogramming or compile time optimizations at all, and favoring a terribly complex and difficult to reason with board representation, and eschewing any code safety or good tests, do the opposite of this example.
+
+
 ## Architecture Principles
 
 ### Separation of Concerns
@@ -40,7 +47,6 @@ For bounded memory scenarios:
 - Pre-allocate node pool
 - Use LRU-based node recycling (FIFO queue of accessed nodes)
 - Left-child right-sibling tree representation saves memory
-- Target ~56 bytes per node including queue pointers
 
 ## Code Style
 
@@ -92,10 +98,6 @@ tests/
 
 ## Old Code
 this code is my initial attempt, from when I was a bad programmer. Now that I am better, I am rewriting the codebase.
-Let this code guide overarching design principles, things like I want MCTS with a neural net value function.
-I want high performance, efficiently multithreaded simulation and tree building, alongside network training.
-I want to be able to produce and load efficiently sized binary representations of the tree so that I can save intermediate steps, and eventually so I can load a pretrained tree to give the bot a head start against players.
-For many other things, like not knowing move semantics, pool allocators, any template metaprogramming or compile time optimizations at all, and favoring a terribly complex and difficult to reason with board representation, and eschewing any code safety or good tests, do the opposite of this example.
 ```
 old_src/*
 ```
