@@ -554,7 +554,7 @@ StateNode* StateNode::play_out(){
 	StateNode* currState = this;
 	int scoreModifier = 0;
 
-	if (model_loaded()) {
+	if (false && model_loaded()) {
 		double score = game->model.evaluate_node(currState);
 		scoreModifier = score >= 0 ? 1 : -1;
 	} else {
@@ -650,35 +650,12 @@ bool test_and_add_move(StateNode* state, Move move){
 	int difference = pathfinding(state, move);
 	if (difference != -999){
 		state->children.push_back(StateNode(state, move, difference));
-		state->children.back().parent = state;
+		// state->children.back().parent = state;
 		return true;
 	} else {
 		return false;
 	}
 }
-
-//attempts to evaluate the score of a gamestate
-//note that when a gamenode is created from other gamestates, its score is initialized as the 
-//difference between players' shortest path to respective goals. Do not call evaluate()
-//on the same node more than once to avoid problems.
-// void StateNode::evaluate(){
-// 	Player currPlayer;
-// 	Player otherPlayer;
-// 	if (this->turn){
-// 		currPlayer = this->p1;
-// 		otherPlayer = this->p2;
-// 	}
-// 	else {
-// 		currPlayer = this->p2;
-// 		otherPlayer = this->p1;
-// 	}
-
-
-// 	double distanceCoeff, fenceCoeff, fence2Coeff = 1.0;
-
-// 	this->score = distanceCoeff * this->score + fenceCoeff * currPlayer.numFences + otherPlayer.numFences;
-// }
-
 
 //DANGEROUS: deque will not preserve pointer validity when things are erased.
 //best solution is probably to filter moves in generate stage so we don't need pruning like this.

@@ -89,5 +89,5 @@ clean:
 src/Tree.o: src/Tree.cpp src/Tree.h src/Global.h
 src/QuoridorMain.o: src/QuoridorMain.cpp src/Global.h
 src/utility.o: src/utility.cpp src/utility.h src/Global.h 
-src/Game.o: src/Game.cpp src/GameParallel.cpp src/Game.h src/Global.h
+src/Game.o: src/Game.cpp src/Game.h src/Global.h
 src/storage.o: src/storage.cpp src/storage.h

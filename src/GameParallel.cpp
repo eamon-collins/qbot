@@ -196,47 +196,34 @@ void Game::parallel_mcts_iteration(StateNode* root, int thread_id) {
         }
     }
 
-    // BACKPROPAGATION PHASE with lock-free updates
-    for (auto* node : path) {
-        // Atomic updates for thread safety
-        node->visits.fetch_add(1);
+    // BACKPROPAGATION PHASE lock score/visits
+	{
+		std::lock_guard<std::mutex> lock(backprop_mutex);
+		for (auto* node : path) {
+			node->visits += 1;
+			node->score += value;
+		}
+	}
 
-        // Score update needs care for floating point
-        double old_score, new_score;
-        do {
-            old_score = node->score.load();
-            new_score = old_score + value;
-        } while (!node->score.compare_exchange_weak(old_score, new_score));
-    }
-
-    // Remove virtual losses
     remove_virtual_loss(virtual_loss_nodes);
 }
 
 void Game::apply_virtual_loss(StateNode* node, std::vector<StateNode*>& virtual_loss_nodes) {
     // Apply virtual loss to discourage other threads from taking same path
+	std::lock_guard<std::mutex> lock(backprop_mutex);
     for (int i = 0; i < VIRTUAL_LOSS_COUNT; i++) {
-        node->visits.fetch_add(1);
-
-        double old_score, new_score;
-        do {
-            old_score = node->score.load();
-            new_score = old_score + VIRTUAL_LOSS_VALUE;
-        } while (!node->score.compare_exchange_weak(old_score, new_score));
+        node->visits += 1;
+		node->score += VIRTUAL_LOSS_VALUE;
     }
     virtual_loss_nodes.push_back(node);
 }
 
 void Game::remove_virtual_loss(const std::vector<StateNode*>& virtual_loss_nodes) {
+	std::lock_guard<std::mutex> lock(backprop_mutex);
     for (auto* node : virtual_loss_nodes) {
         // Remove the virtual visits and losses
-        node->visits.fetch_sub(VIRTUAL_LOSS_COUNT);
-
-        double old_score, new_score;
-        do {
-            old_score = node->score.load();
-            new_score = old_score - (VIRTUAL_LOSS_COUNT * VIRTUAL_LOSS_VALUE);
-        } while (!node->score.compare_exchange_weak(old_score, new_score));
+        node->visits -= VIRTUAL_LOSS_COUNT;
+		node->score -= VIRTUAL_LOSS_COUNT * VIRTUAL_LOSS_VALUE;
     }
 }
 
@@ -255,7 +242,7 @@ StateNode* Game::select_best_child(StateNode* node) {
         float sum = 0;
 
         for (auto& child : node->children) {
-            float prob = std::pow(child.visits.load(), 1.0f / temperature);
+            float prob = std::pow(child.visits, 1.0f / temperature);
             probs.push_back(prob);
             sum += prob;
         }
@@ -269,9 +256,8 @@ StateNode* Game::select_best_child(StateNode* node) {
     } else {
         // Deterministic selection (most visited)
         for (auto& child : node->children) {
-            int visits = child.visits.load();
-            if (visits > max_visits) {
-                max_visits = visits;
+            if (child.visits > max_visits) {
+                max_visits = child.visits;
                 best = &child;
             }
         }

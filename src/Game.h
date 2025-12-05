@@ -40,7 +40,8 @@ public:
 	StateNode* select_move_by_visits(StateNode* node, int game_number);
 	void perform_mcts_simulation(StateNode* root);
 
-    std::mutex tree_mutex;  // For protecting shared tree modifications
+    std::mutex tree_mutex;  // For protecting shared tree modifications, ie generating children
+    std::mutex backprop_mutex;  // For protecting propagation of score/visit count to root
     std::atomic<int> active_threads{0};
     std::atomic<bool> stop_training{false};
 
