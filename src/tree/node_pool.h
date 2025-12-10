@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Node.h"
+#include "StateNode.h"
 
 #include <algorithm>
 #include <atomic>
@@ -115,23 +115,23 @@ public:
     }
 
     /// Access a node by index
-    [[nodiscard]] TreeNode& operator[](uint32_t idx) noexcept {
+    [[nodiscard]] StateNode& operator[](uint32_t idx) noexcept {
         assert(idx < config_.capacity);
         return nodes_[idx];
     }
 
-    [[nodiscard]] const TreeNode& operator[](uint32_t idx) const noexcept {
+    [[nodiscard]] const StateNode& operator[](uint32_t idx) const noexcept {
         assert(idx < config_.capacity);
         return nodes_[idx];
     }
 
     /// Get a node, returning nullptr if invalid index
-    [[nodiscard]] TreeNode* get(uint32_t idx) noexcept {
+    [[nodiscard]] StateNode* get(uint32_t idx) noexcept {
         if (idx >= config_.capacity) return nullptr;
         return &nodes_[idx];
     }
 
-    [[nodiscard]] const TreeNode* get(uint32_t idx) const noexcept {
+    [[nodiscard]] const StateNode* get(uint32_t idx) const noexcept {
         if (idx >= config_.capacity) return nullptr;
         return &nodes_[idx];
     }
@@ -178,10 +178,10 @@ public:
     class Iterator {
     public:
         using iterator_category = std::forward_iterator_tag;
-        using value_type = TreeNode;
+        using value_type = StateNode;
         using difference_type = std::ptrdiff_t;
-        using pointer = TreeNode*;
-        using reference = TreeNode&;
+        using pointer = StateNode*;
+        using reference = StateNode&;
 
         Iterator(NodePool* pool, uint32_t idx) : pool_(pool), idx_(idx) {
             advance_to_valid();
@@ -260,7 +260,7 @@ private:
             uint32_t idx = lru_queue_[i];
 
             // Only recycle if node is leaf and has low visit count
-            TreeNode& node = nodes_[idx];
+            StateNode& node = nodes_[idx];
             if (!node.has_children() &&
                 node.stats.visits.load(std::memory_order_relaxed) < 10) {
 
@@ -285,10 +285,10 @@ private:
 
     /// Unlink a node from its parent's child list
     void unlink_from_parent(uint32_t idx) noexcept {
-        TreeNode& node = nodes_[idx];
+        StateNode& node = nodes_[idx];
         if (node.parent == NULL_NODE) return;
 
-        TreeNode& parent = nodes_[node.parent];
+        StateNode& parent = nodes_[node.parent];
 
         if (parent.first_child == idx) {
             // Node is first child
@@ -309,7 +309,7 @@ private:
     }
 
     Config config_;
-    std::vector<TreeNode> nodes_;
+    std::vector<StateNode> nodes_;
 
     // Lock-free free list
     std::atomic<uint32_t> free_head_;
@@ -349,7 +349,7 @@ public:
 
     [[nodiscard]] uint32_t index() const noexcept { return idx_; }
     [[nodiscard]] bool valid() const noexcept { return idx_ != NULL_NODE; }
-    [[nodiscard]] TreeNode& node() { return pool_[idx_]; }
+    [[nodiscard]] StateNode& node() { return pool_[idx_]; }
 
     /// Release ownership (prevent deallocation on destruction)
     uint32_t release() noexcept {
@@ -385,7 +385,7 @@ public:
     void commit() noexcept {
         if (children_.empty()) return;
 
-        TreeNode& parent = pool_[parent_idx_];
+        StateNode& parent = pool_[parent_idx_];
 
         // Link children as siblings
         for (size_t i = 0; i < children_.size() - 1; ++i) {

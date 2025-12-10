@@ -22,6 +22,14 @@ For many other things, like not knowing move semantics, pool allocators, any tem
 - **Training**: Parallelized self-play with checkpointing
 - **Inference**: Optional neural network integration via ONNX or libtorch
 
+### Structure Guidelines
+Classes:
+- Game: handles running the game, both self play and vs human. Will always be associated with a gamestate tree, and will perform operations on it/handle traversal. Will be responsible for communicating with the GUI. Responsible for administering self play and training, building the tree, and tracking the gamestate like if someone has won or not
+- StateNode: The node representation. Stores the full gamestate at a particular turn. Organized into a tree where each child is a next potential move, and whose turn it is alternates as you go down the tree. Handles operations like generating valid moves and constructing its own children using those moves. The Quoridor rules are mostly encoded in this logic. Also responsible for scoring itself, and maybe for selecting the best next move during playout and other local play out functions.
+
+### Comment Style
+Cut down on comment verbosity. The code should for the most part be self documenting. When there is something a skilled human might not understand from reading the code, it can be commented. Optimization focused code and particular usage notes to avoid bugs can also be noted. Prefer 'why' over 'how'. Prefer to put information in a comment on top of the function explaining it all rather than interspersed in the function.
+
 ### Tree Structure (from papers)
 Per AlphaGo Zero and MCTS papers, store edge statistics:
 - `N(s,a)`: visit count
@@ -104,7 +112,7 @@ old_src/*
 
 ## Testing Strategy
 
-### Unit Tests (Catch2 or GoogleTest)
+### Unit Tests (GoogleTest)
 - State transition correctness
 - Move generation (pawn moves, walls, blocking detection)
 - MCTS selection convergence

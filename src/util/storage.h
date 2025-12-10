@@ -65,21 +65,39 @@ struct TreeFileHeader {
 static_assert(sizeof(TreeFileHeader) == 64, "Header should be 64 bytes");
 
 /// Compact serialized node format (without atomics or padding)
-/// This is the on-disk representation of TreeNode
+/// This is the on-disk representation of StateNode
 struct SerializedNode {
+    // Tree structure
     uint32_t first_child;
     uint32_t next_sibling;
     uint32_t parent;
+
+    // Game state
+    uint8_t p1_row;
+    uint8_t p1_col;
+    uint8_t p1_fences;
+    uint8_t p2_row;
+    uint8_t p2_col;
+    uint8_t p2_fences;
+
+    // Move and flags
     uint16_t move_data;
     uint8_t flags;
     uint8_t reserved;
+    uint16_t ply;
+
+    // Fence grid (128 bits = 16 bytes)
+    uint64_t fences_horizontal;
+    uint64_t fences_vertical;
+
+    // Statistics
     uint32_t visits;
     float total_value;
     float prior;
     float terminal_value;
 };
 
-static_assert(sizeof(SerializedNode) == 32, "SerializedNode should be 32 bytes");
+static_assert(sizeof(SerializedNode) == 56, "SerializedNode should be 56 bytes");
 
 /// Result of loading a tree
 struct LoadedTree {
@@ -117,11 +135,11 @@ public:
     }
 
 private:
-    /// Convert TreeNode to SerializedNode
-    static SerializedNode serialize_node(const TreeNode& node) noexcept;
+    /// Convert StateNode to SerializedNode
+    static SerializedNode serialize_node(const StateNode& node) noexcept;
 
-    /// Convert SerializedNode to TreeNode (in-place initialization)
-    static void deserialize_node(const SerializedNode& src, TreeNode& dst) noexcept;
+    /// Convert SerializedNode to StateNode (in-place initialization)
+    static void deserialize_node(const SerializedNode& src, StateNode& dst) noexcept;
 
     /// Compute CRC32 checksum
     static uint32_t compute_checksum(std::span<const std::byte> data) noexcept;

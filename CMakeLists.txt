@@ -16,7 +16,9 @@ find_package(Boost REQUIRED COMPONENTS program_options)
 # =============================================================================
 
 set(QBOT_LIB_SOURCES
+    src/tree/StateNode.cpp
     src/util/storage.cpp
+    src/core/Game.cpp
 )
 
 set(QBOT_MAIN_SOURCES
@@ -97,8 +99,13 @@ if(BUILD_TESTS)
     target_link_libraries(test_storage PRIVATE qbot_lib_debug GTest::gtest_main)
     target_compile_options(test_storage PRIVATE -g -O0)
 
+    add_executable(test_game tests/test_game.cpp)
+    target_link_libraries(test_game PRIVATE qbot_lib_debug GTest::gtest_main)
+    target_compile_options(test_game PRIVATE -g -O0)
+
     include(GoogleTest)
     gtest_discover_tests(test_storage)
+    gtest_discover_tests(test_game)
 endif()
 
 # =============================================================================

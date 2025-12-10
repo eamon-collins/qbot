@@ -59,14 +59,32 @@ constexpr uint32_t CRC32_TABLE[] = {
 
 } // anonymous namespace
 
-SerializedNode TreeStorage::serialize_node(const TreeNode& node) noexcept {
+SerializedNode TreeStorage::serialize_node(const StateNode& node) noexcept {
     SerializedNode sn;
+    // Tree structure
     sn.first_child = node.first_child;
     sn.next_sibling = node.next_sibling;
     sn.parent = node.parent;
+
+    // Game state
+    sn.p1_row = node.p1.row;
+    sn.p1_col = node.p1.col;
+    sn.p1_fences = node.p1.fences;
+    sn.p2_row = node.p2.row;
+    sn.p2_col = node.p2.col;
+    sn.p2_fences = node.p2.fences;
+
+    // Move and flags
     sn.move_data = node.move.data;
     sn.flags = node.flags;
     sn.reserved = 0;
+    sn.ply = node.ply;
+
+    // Fence grid
+    sn.fences_horizontal = node.fences.horizontal;
+    sn.fences_vertical = node.fences.vertical;
+
+    // Statistics
     sn.visits = node.stats.visits.load(std::memory_order_relaxed);
     sn.total_value = node.stats.total_value.load(std::memory_order_relaxed);
     sn.prior = node.stats.prior;
@@ -74,12 +92,30 @@ SerializedNode TreeStorage::serialize_node(const TreeNode& node) noexcept {
     return sn;
 }
 
-void TreeStorage::deserialize_node(const SerializedNode& src, TreeNode& dst) noexcept {
+void TreeStorage::deserialize_node(const SerializedNode& src, StateNode& dst) noexcept {
+    // Tree structure
     dst.first_child = src.first_child;
     dst.next_sibling = src.next_sibling;
     dst.parent = src.parent;
+
+    // Game state
+    dst.p1.row = src.p1_row;
+    dst.p1.col = src.p1_col;
+    dst.p1.fences = src.p1_fences;
+    dst.p2.row = src.p2_row;
+    dst.p2.col = src.p2_col;
+    dst.p2.fences = src.p2_fences;
+
+    // Move and flags
     dst.move.data = src.move_data;
     dst.flags = src.flags;
+    dst.ply = src.ply;
+
+    // Fence grid
+    dst.fences.horizontal = src.fences_horizontal;
+    dst.fences.vertical = src.fences_vertical;
+
+    // Statistics
     dst.terminal_value = src.terminal_value;
     dst.stats.visits.store(src.visits, std::memory_order_relaxed);
     dst.stats.total_value.store(src.total_value, std::memory_order_relaxed);
@@ -112,7 +148,7 @@ std::vector<uint32_t> TreeStorage::collect_reachable_nodes(
 
         result.push_back(idx);
 
-        const TreeNode& node = pool[idx];
+        const StateNode& node = pool[idx];
 
         // Add all children
         uint32_t child = node.first_child;
