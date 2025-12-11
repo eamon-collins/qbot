@@ -224,6 +224,11 @@ TEST_F(GameTest, BuildTreeTerminalNodesNotExpanded) {
 }
 
 TEST_F(GameTest, BenchmarkBuildTree) {
+    // Use larger pool for benchmark
+    GameConfig config;
+    config.pool_capacity = 5'000'000;
+    game_ = std::make_unique<Game>(config);
+
     uint32_t root = create_root();
 
     constexpr float branching_factor = 0.5f;

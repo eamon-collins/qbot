@@ -164,18 +164,37 @@ if(BUILD_TESTS)
 
     enable_testing()
 
+    # Optimized test builds (default)
     add_executable(test_storage tests/test_storage.cpp)
-    target_link_libraries(test_storage PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_storage PRIVATE -g -O0)
+    target_link_libraries(test_storage PRIVATE qbot_lib_fast GTest::gtest_main)
+    target_compile_options(test_storage PRIVATE -O3 -DNDEBUG -march=native -flto)
+    target_link_options(test_storage PRIVATE -flto)
 
     add_executable(test_game tests/test_game.cpp)
-    target_link_libraries(test_game PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_game PRIVATE -g -O0)
+    target_link_libraries(test_game PRIVATE qbot_lib_fast GTest::gtest_main)
+    target_compile_options(test_game PRIVATE -O3 -DNDEBUG -march=native -flto)
+    target_link_options(test_game PRIVATE -flto)
 
     if(ENABLE_INFERENCE)
         add_executable(test_inference tests/test_inference.cpp)
-        target_link_libraries(test_inference PRIVATE qbot_lib_debug GTest::gtest_main)
-        target_compile_options(test_inference PRIVATE -g -O0)
+        target_link_libraries(test_inference PRIVATE qbot_lib_fast GTest::gtest_main)
+        target_compile_options(test_inference PRIVATE -O3 -DNDEBUG -march=native -flto)
+        target_link_options(test_inference PRIVATE -flto)
+    endif()
+
+    # Debug test builds
+    add_executable(test_storage_debug tests/test_storage.cpp)
+    target_link_libraries(test_storage_debug PRIVATE qbot_lib_debug GTest::gtest_main)
+    target_compile_options(test_storage_debug PRIVATE -g -O0)
+
+    add_executable(test_game_debug tests/test_game.cpp)
+    target_link_libraries(test_game_debug PRIVATE qbot_lib_debug GTest::gtest_main)
+    target_compile_options(test_game_debug PRIVATE -g -O0)
+
+    if(ENABLE_INFERENCE)
+        add_executable(test_inference_debug tests/test_inference.cpp)
+        target_link_libraries(test_inference_debug PRIVATE qbot_lib_debug GTest::gtest_main)
+        target_compile_options(test_inference_debug PRIVATE -g -O0)
     endif()
 
     include(GoogleTest)
