@@ -19,6 +19,7 @@ set(QBOT_LIB_SOURCES
     src/tree/StateNode.cpp
     src/util/storage.cpp
     src/core/Game.cpp
+    src/search/pathfinding.cpp
 )
 
 set(QBOT_MAIN_SOURCES

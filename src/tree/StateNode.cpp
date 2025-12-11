@@ -1,8 +1,6 @@
 #include "StateNode.h"
 #include "node_pool.h"
-
-#include <array>
-#include <queue>
+#include "../search/pathfinding.h"
 
 namespace qbot {
 
@@ -155,108 +153,6 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     return moves;
 }
 
-bool StateNode::can_reach_goal(bool check_p1) const noexcept {
-    const Player& player = check_p1 ? p1 : p2;
-    const uint8_t goal_row = check_p1 ? 8 : 0;
-
-    // BFS to find if player can reach goal row
-    // visited[row][col] tracks visited squares
-    std::array<std::array<bool, BOARD_SIZE>, BOARD_SIZE> visited{};
-    std::queue<std::pair<uint8_t, uint8_t>> queue;
-
-    queue.push({player.row, player.col});
-    visited[player.row][player.col] = true;
-
-    while (!queue.empty()) {
-        auto [r, c] = queue.front();
-        queue.pop();
-
-        if (r == goal_row) {
-            return true;
-        }
-
-        // Try all four directions
-        // Up
-        if (!fences.blocked_up(r, c) && !visited[r - 1][c]) {
-            visited[r - 1][c] = true;
-            queue.push({static_cast<uint8_t>(r - 1), c});
-        }
-        // Down
-        if (!fences.blocked_down(r, c) && !visited[r + 1][c]) {
-            visited[r + 1][c] = true;
-            queue.push({static_cast<uint8_t>(r + 1), c});
-        }
-        // Left
-        if (!fences.blocked_left(r, c) && !visited[r][c - 1]) {
-            visited[r][c - 1] = true;
-            queue.push({r, static_cast<uint8_t>(c - 1)});
-        }
-        // Right
-        if (!fences.blocked_right(r, c) && !visited[r][c + 1]) {
-            visited[r][c + 1] = true;
-            queue.push({r, static_cast<uint8_t>(c + 1)});
-        }
-    }
-
-    return false;
-}
-
-bool StateNode::is_fence_move_valid(Move fence_move) const noexcept {
-    assert(fence_move.is_fence());
-
-    // Copy just the fence grid and apply the move
-    FenceGrid temp_fences = fences;
-
-    if (fence_move.is_horizontal()) {
-        temp_fences.place_h_fence(fence_move.row(), fence_move.col());
-    } else {
-        temp_fences.place_v_fence(fence_move.row(), fence_move.col());
-    }
-
-    // Check if both players can still reach their goals with the new fence
-    // P1 needs to reach row 8, P2 needs to reach row 0
-    auto can_reach = [&temp_fences](const Player& player, uint8_t goal_row) -> bool {
-        std::array<std::array<bool, BOARD_SIZE>, BOARD_SIZE> visited{};
-        std::queue<std::pair<uint8_t, uint8_t>> queue;
-
-        queue.push({player.row, player.col});
-        visited[player.row][player.col] = true;
-
-        while (!queue.empty()) {
-            auto [r, c] = queue.front();
-            queue.pop();
-
-            if (r == goal_row) {
-                return true;
-            }
-
-            // Up
-            if (!temp_fences.blocked_up(r, c) && !visited[r - 1][c]) {
-                visited[r - 1][c] = true;
-                queue.push({static_cast<uint8_t>(r - 1), c});
-            }
-            // Down
-            if (!temp_fences.blocked_down(r, c) && !visited[r + 1][c]) {
-                visited[r + 1][c] = true;
-                queue.push({static_cast<uint8_t>(r + 1), c});
-            }
-            // Left
-            if (!temp_fences.blocked_left(r, c) && !visited[r][c - 1]) {
-                visited[r][c - 1] = true;
-                queue.push({r, static_cast<uint8_t>(c - 1)});
-            }
-            // Right
-            if (!temp_fences.blocked_right(r, c) && !visited[r][c + 1]) {
-                visited[r][c + 1] = true;
-                queue.push({r, static_cast<uint8_t>(c + 1)});
-            }
-        }
-        return false;
-    };
-
-    return can_reach(p1, 8) && can_reach(p2, 0);
-}
-
 size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noexcept {
     if (is_terminal() || is_expanded()) {
         return 0;
@@ -271,9 +167,11 @@ size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noe
     std::vector<uint32_t> child_indices;
     child_indices.reserve(moves.size());
 
+    Pathfinder& pf = get_pathfinder();
+
     for (const Move& move : moves) {
         // For fence moves, validate that it doesn't block either player
-        if (move.is_fence() && !is_fence_move_valid(move)) {
+        if (move.is_fence() && !pf.check_paths_with_fence(*this, move)) {
             continue;
         }
 

@@ -419,14 +419,6 @@ struct alignas(64) StateNode {
     /// @param out_fence_count Optional pointer to receive count of fence moves
     [[nodiscard]] std::vector<Move> generate_valid_moves(size_t* out_fence_count = nullptr) const noexcept;
 
-    /// Check if a player can reach their goal row using BFS
-    /// Used to validate fence placements don't completely block a player
-    [[nodiscard]] bool can_reach_goal(bool check_p1) const noexcept;
-
-    /// Check if a fence move would block either player from reaching their goal
-    /// Returns true if the move is valid (doesn't block anyone)
-    [[nodiscard]] bool is_fence_move_valid(Move fence_move) const noexcept;
-
     /// Generate all valid child nodes from this position
     /// Allocates children from the pool and links them using left-child right-sibling.
     /// Validates fence moves with pathfinding to ensure no player gets blocked.
