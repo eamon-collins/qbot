@@ -110,6 +110,19 @@ if(ENABLE_INFERENCE)
     target_compile_definitions(qbot_lib_fast PUBLIC QBOT_ENABLE_INFERENCE)
 endif()
 
+# =============================================================================
+# Leopard: Tree file dumper for training
+# =============================================================================
+
+add_executable(leopard_exe src/util/leopard.cpp)
+target_link_libraries(leopard_exe PRIVATE qbot_lib_fast)
+target_compile_options(leopard_exe PRIVATE -O3 -DNDEBUG -march=native)
+set_target_properties(leopard_exe PROPERTIES
+    OUTPUT_NAME leopard
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_custom_target(leopard DEPENDS leopard_exe)
+
 add_executable(qbot_exe_fast ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_fast PRIVATE qbot_lib_fast Boost::program_options)
 target_compile_options(qbot_exe_fast PRIVATE -O3 -DNDEBUG -march=native -flto)

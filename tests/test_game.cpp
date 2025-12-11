@@ -1,5 +1,6 @@
 #include "core/Game.h"
 #include "tree/StateNode.h"
+#include "util/storage.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -359,5 +360,23 @@ TEST_F(GameTest, BuildTreeUntilWinAndPrintPath) {
     if (verbose) {
         std::cout << "Winner: Player " << (winner > 0 ? "1" : "2") << std::endl;
         std::cout << "==================================================" << std::endl;
+    }
+}
+
+TEST_F(GameTest, SaveTreeForLeopard) {
+    uint32_t root = create_root();
+
+    // Build a small tree
+    size_t created = game_->build_tree(root, 0.3f, 5, 500);
+    ASSERT_GT(created, 0);
+
+    // Save to temp file
+    const char* path = "/tmp/leopard_test.qbot";
+    auto result = TreeStorage::save(path, game_->pool(), root);
+    ASSERT_TRUE(result.has_value()) << "Failed to save: " << to_string(result.error());
+
+    if (is_single_test_run()) {
+        std::cout << "\nSaved " << (created + 1) << " nodes to " << path << std::endl;
+        std::cout << "Run: ./leopard " << path << " | head -c 1000 | xxd" << std::endl;
     }
 }
