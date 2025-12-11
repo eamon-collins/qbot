@@ -414,6 +414,9 @@ struct alignas(64) StateNode {
         return 0;
     }
 
+    /// Print a visual representation of the game state to stdout
+    void print_node() const noexcept;
+
     /// Generate all valid moves from this position
     /// Returns vector of valid moves. Pawn moves come first, then fence moves.
     /// @param out_fence_count Optional pointer to receive count of fence moves

@@ -12,6 +12,47 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(Boost REQUIRED COMPONENTS program_options)
 
 # =============================================================================
+# Optional: LibTorch for neural network inference
+# =============================================================================
+
+option(ENABLE_INFERENCE "Enable neural network inference with LibTorch" OFF)
+
+if(ENABLE_INFERENCE)
+    # Try to use conda environment if available
+    if(DEFINED ENV{CONDA_PREFIX})
+        set(LIBTORCH_PREFIX $ENV{CONDA_PREFIX})
+        message(STATUS "Using conda environment: ${LIBTORCH_PREFIX}")
+
+        # Set include directories
+        set(TORCH_INCLUDE_DIRS
+            ${LIBTORCH_PREFIX}/include
+            ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
+
+        # Set library directory
+        set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib)
+
+        # Manually specify torch libraries (matches old Makefile approach)
+        # Use -Wl,--no-as-needed to ensure CUDA libs are linked even if not directly referenced
+        set(TORCH_LIBRARIES
+            -Wl,--no-as-needed
+            ${TORCH_LIBRARY_DIR}/libtorch.so
+            ${TORCH_LIBRARY_DIR}/libtorch_cpu.so
+            ${TORCH_LIBRARY_DIR}/libtorch_cuda.so
+            ${TORCH_LIBRARY_DIR}/libc10.so
+            ${TORCH_LIBRARY_DIR}/libc10_cuda.so)
+
+        message(STATUS "LibTorch include dirs: ${TORCH_INCLUDE_DIRS}")
+        message(STATUS "LibTorch libraries: ${TORCH_LIBRARIES}")
+    else()
+        # Fallback to find_package
+        find_package(Torch REQUIRED)
+        set(TORCH_INCLUDE_DIRS ${TORCH_INCLUDE_DIRS})
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+        message(STATUS "LibTorch found via find_package: ${TORCH_LIBRARIES}")
+    endif()
+endif()
+
+# =============================================================================
 # Core Library (compiled separately for each build type)
 # =============================================================================
 
@@ -19,8 +60,12 @@ set(QBOT_LIB_SOURCES
     src/tree/StateNode.cpp
     src/util/storage.cpp
     src/core/Game.cpp
-    src/search/pathfinding.cpp
+    src/util/pathfinding.cpp
 )
+
+if(ENABLE_INFERENCE)
+    list(APPEND QBOT_LIB_SOURCES src/inference/inference.cpp)
+endif()
 
 set(QBOT_MAIN_SOURCES
     src/core/QuoridorMain.cpp
@@ -34,6 +79,11 @@ set(QBOT_MAIN_SOURCES
 add_library(qbot_lib_debug STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(qbot_lib_debug PRIVATE -g -O0)
+if(ENABLE_INFERENCE)
+    target_include_directories(qbot_lib_debug PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_link_libraries(qbot_lib_debug PUBLIC ${TORCH_LIBRARIES})
+    target_compile_definitions(qbot_lib_debug PUBLIC QBOT_ENABLE_INFERENCE)
+endif()
 
 add_executable(qbot_exe_debug ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_debug PRIVATE qbot_lib_debug Boost::program_options)
@@ -54,6 +104,11 @@ add_custom_target(qbot DEPENDS qbot_exe_debug)
 add_library(qbot_lib_fast STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_fast PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(qbot_lib_fast PRIVATE -O3 -DNDEBUG -march=native -flto)
+if(ENABLE_INFERENCE)
+    target_include_directories(qbot_lib_fast PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_link_libraries(qbot_lib_fast PUBLIC ${TORCH_LIBRARIES})
+    target_compile_definitions(qbot_lib_fast PUBLIC QBOT_ENABLE_INFERENCE)
+endif()
 
 add_executable(qbot_exe_fast ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_fast PRIVATE qbot_lib_fast Boost::program_options)
@@ -104,9 +159,18 @@ if(BUILD_TESTS)
     target_link_libraries(test_game PRIVATE qbot_lib_debug GTest::gtest_main)
     target_compile_options(test_game PRIVATE -g -O0)
 
+    if(ENABLE_INFERENCE)
+        add_executable(test_inference tests/test_inference.cpp)
+        target_link_libraries(test_inference PRIVATE qbot_lib_debug GTest::gtest_main)
+        target_compile_options(test_inference PRIVATE -g -O0)
+    endif()
+
     include(GoogleTest)
     gtest_discover_tests(test_storage)
     gtest_discover_tests(test_game)
+    if(ENABLE_INFERENCE)
+        gtest_discover_tests(test_inference)
+    endif()
 endif()
 
 # =============================================================================

@@ -5,14 +5,25 @@
 #include <chrono>
 #include <iostream>
 #include <queue>
+#include <vector>
 
 using namespace qbot;
+
+namespace {
+// Returns true if only a single test is being run (verbose output appropriate)
+bool is_single_test_run() {
+    const auto* filter = ::testing::GTEST_FLAG(filter).c_str();
+    // If filter contains a specific test name (not "*" or default), it's a single test run
+    return filter && std::string(filter).find('*') == std::string::npos
+           && std::string(filter) != "";
+}
+}
 
 class GameTest : public ::testing::Test {
 protected:
     void SetUp() override {
         GameConfig config;
-        config.pool_capacity = 200'000;
+        config.pool_capacity = 500'000;
         game_ = std::make_unique<Game>(config);
     }
 
@@ -123,7 +134,9 @@ TEST_F(GameTest, BuildTreeHighBranchingFactor) {
     EXPECT_GT(created, 0);
     // With high branching factor, tree should be relatively shallow
     // (though randomness means we can't be too strict)
-    std::cout << "High branching (0.9): " << created << " nodes, depth " << depth << std::endl;
+    if (is_single_test_run()) {
+        std::cout << "High branching (0.9): " << created << " nodes, depth " << depth << std::endl;
+    }
 }
 
 TEST_F(GameTest, BuildTreeLowBranchingFactor) {
@@ -134,7 +147,9 @@ TEST_F(GameTest, BuildTreeLowBranchingFactor) {
     size_t depth = max_tree_depth(root);
 
     EXPECT_GT(created, 0);
-    std::cout << "Low branching (0.1): " << created << " nodes, depth " << depth << std::endl;
+    if (is_single_test_run()) {
+        std::cout << "Low branching (0.1): " << created << " nodes, depth " << depth << std::endl;
+    }
 }
 
 TEST_F(GameTest, BuildTreeNodesAreValid) {
@@ -202,7 +217,9 @@ TEST_F(GameTest, BuildTreeTerminalNodesNotExpanded) {
         }
     }
 
-    std::cout << "Found " << terminal_count << " terminal nodes" << std::endl;
+    if (is_single_test_run()) {
+        std::cout << "Found " << terminal_count << " terminal nodes" << std::endl;
+    }
 }
 
 TEST_F(GameTest, BenchmarkBuildTree) {
@@ -222,21 +239,125 @@ TEST_F(GameTest, BenchmarkBuildTree) {
     double nodes_per_sec = (created * 1'000'000.0) / duration_us;
     double us_per_node = static_cast<double>(duration_us) / created;
 
-    std::cout << "\n========== BENCHMARK: build_tree ==========" << std::endl;
-    std::cout << "Parameters:" << std::endl;
-    std::cout << "  branching_factor: " << branching_factor << std::endl;
-    std::cout << "  time_limit:       " << time_limit_sec << " sec" << std::endl;
-    std::cout << "  node_limit:       " << node_limit << std::endl;
-    std::cout << "Results:" << std::endl;
-    std::cout << "  Nodes created:    " << created << std::endl;
-    std::cout << "  Time elapsed:     " << duration_ms << " ms" << std::endl;
-    std::cout << "  Throughput:       " << static_cast<int>(nodes_per_sec) << " nodes/sec" << std::endl;
-    std::cout << "  Per-node time:    " << us_per_node << " µs/node" << std::endl;
-    std::cout << "============================================\n" << std::endl;
+    if (is_single_test_run()) {
+        std::cout << "\n========== BENCHMARK: build_tree ==========" << std::endl;
+        std::cout << "Parameters:" << std::endl;
+        std::cout << "  branching_factor: " << branching_factor << std::endl;
+        std::cout << "  time_limit:       " << time_limit_sec << " sec" << std::endl;
+        std::cout << "  node_limit:       " << node_limit << std::endl;
+        std::cout << "Results:" << std::endl;
+        std::cout << "  Nodes created:    " << created << std::endl;
+        std::cout << "  Time elapsed:     " << duration_ms << " ms" << std::endl;
+        std::cout << "  Throughput:       " << static_cast<int>(nodes_per_sec) << " nodes/sec" << std::endl;
+        std::cout << "  Per-node time:    " << us_per_node << " µs/node" << std::endl;
+        std::cout << "============================================\n" << std::endl;
+    }
 
     EXPECT_GT(created, 0) << "Should create nodes";
 
     // Verify tree integrity
     size_t counted = count_tree_nodes(root);
     EXPECT_EQ(counted, created + 1) << "Tree count should match";
+}
+
+TEST_F(GameTest, BuildTreeUntilWinAndPrintPath) {
+    // Use larger pool for this test
+    GameConfig config;
+    config.pool_capacity = 2'000'000;
+    game_ = std::make_unique<Game>(config);
+
+    uint32_t root = create_root();
+    const bool verbose = is_single_test_run();
+
+    if (verbose) {
+        std::cout << "\n========== Building tree until win state ==========" << std::endl;
+    }
+
+    // Keep building until we find a terminal node
+    // Use very low branching factor to go deep quickly (depth-first)
+    // Also track max depth to see progress
+    constexpr float branching_factor = 0.01f;  // Almost pure depth-first
+    constexpr std::time_t time_limit_per_round = 10;
+    constexpr size_t node_limit_per_round = 500'000;
+    constexpr int max_rounds = 10;
+
+    uint32_t terminal_idx = NULL_NODE;
+    size_t total_created = 0;
+
+    for (int round = 0; round < max_rounds && terminal_idx == NULL_NODE; ++round) {
+        size_t created = game_->build_tree(root, branching_factor, time_limit_per_round, node_limit_per_round);
+        total_created += created;
+
+        // Find max depth and look for terminal nodes
+        size_t max_depth = 0;
+        std::queue<std::pair<uint32_t, size_t>> queue;
+        queue.push({root, 0});
+
+        while (!queue.empty()) {
+            auto [idx, depth] = queue.front();
+            queue.pop();
+
+            max_depth = std::max(max_depth, depth);
+            const StateNode& node = game_->pool()[idx];
+
+            if (node.is_terminal() && terminal_idx == NULL_NODE) {
+                terminal_idx = idx;
+            }
+
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                queue.push({child, depth + 1});
+                child = game_->pool()[child].next_sibling;
+            }
+        }
+
+        if (verbose) {
+            std::cout << "Round " << round << ": created " << created
+                      << " nodes (total: " << total_created << "), max depth: " << max_depth << std::endl;
+        }
+
+        if (terminal_idx != NULL_NODE) break;
+    }
+
+    if (verbose) {
+        std::cout << "Total nodes created: " << total_created << std::endl;
+    }
+
+    if (terminal_idx == NULL_NODE) {
+        if (verbose) {
+            std::cout << "No terminal node found in tree after " << max_rounds << " rounds" << std::endl;
+        }
+        GTEST_SKIP() << "No terminal node found - tree not deep enough";
+        return;
+    }
+
+    // Build path from root to terminal by walking up parent pointers
+    std::vector<uint32_t> path;
+    uint32_t current = terminal_idx;
+    while (current != NULL_NODE) {
+        path.push_back(current);
+        current = game_->pool()[current].parent;
+    }
+
+    // Reverse to get root-to-leaf order
+    std::reverse(path.begin(), path.end());
+
+    if (verbose) {
+        std::cout << "\n========== Path to terminal state (" << path.size() << " moves) ==========" << std::endl;
+        for (size_t i = 0; i < path.size(); ++i) {
+            std::cout << "--- Step " << i << " ---" << std::endl;
+            game_->pool()[path[i]].print_node();
+        }
+    }
+
+    // Verify the terminal node
+    const StateNode& terminal = game_->pool()[terminal_idx];
+    EXPECT_TRUE(terminal.is_terminal()) << "Found node should be terminal";
+    int winner = terminal.game_over();
+    EXPECT_NE(winner, 0) << "Terminal node should have a winner";
+
+    if (verbose) {
+        std::cout << "Winner: Player " << (winner > 0 ? "1" : "2") << std::endl;
+        std::cout << "==================================================" << std::endl;
+    }
 }

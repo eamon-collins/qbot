@@ -1,8 +1,91 @@
 #include "StateNode.h"
 #include "node_pool.h"
-#include "../search/pathfinding.h"
+#include "../util/pathfinding.h"
+
+#include <iostream>
+#include <sstream>
 
 namespace qbot {
+
+void StateNode::print_node() const noexcept {
+    std::ostringstream ss;
+
+    // Print move info
+    ss << "Move: ";
+    if (!move.is_valid()) {
+        ss << "(root)";
+    } else if (move.is_pawn()) {
+        ss << "pawn to (" << static_cast<int>(move.row()) << "," << static_cast<int>(move.col()) << ")";
+    } else {
+        ss << "fence " << (move.is_horizontal() ? "H" : "V")
+           << " at (" << static_cast<int>(move.row()) << "," << static_cast<int>(move.col()) << ")";
+    }
+    ss << "\n";
+
+    // Print stats
+    uint32_t v = stats.visits.load(std::memory_order_relaxed);
+    float q = stats.Q();
+    ss << "Visits: " << v << "  Q: " << q << "  Ply: " << ply
+       << "  Turn: P" << (is_p1_to_move() ? "1" : "2") << "\n";
+
+    // Print P1/P2 info
+    ss << "P1: (" << static_cast<int>(p1.row) << "," << static_cast<int>(p1.col)
+       << ") fences=" << static_cast<int>(p1.fences) << "   "
+       << "P2: (" << static_cast<int>(p2.row) << "," << static_cast<int>(p2.col)
+       << ") fences=" << static_cast<int>(p2.fences) << "\n";
+
+    if (is_terminal()) {
+        ss << "TERMINAL: " << (terminal_value > 0 ? "P1 wins" : "P2 wins") << "\n";
+    }
+
+    // Draw board: rows go from 8 (top) down to 0 (bottom)
+    // Interleave fence rows between square rows
+    for (int row = 8; row >= 0; --row) {
+        // Draw square row
+        for (int col = 0; col < 9; ++col) {
+            // Draw cell
+            if (p1.row == row && p1.col == col) {
+                ss << '1';  // Player 1
+            } else if (p2.row == row && p2.col == col) {
+                ss << '2';  // Player 2
+            } else {
+                ss << '.';  // Empty square
+            }
+
+            // Draw vertical fence to the right (if any)
+            if (col < 8) {
+                // Vertical fence at intersection (r, col) blocks between col and col+1
+                // Check both fence segments that could block this edge
+                bool blocked = false;
+                if (row > 0 && fences.has_v_fence(row - 1, col)) blocked = true;
+                if (row < 8 && fences.has_v_fence(row, col)) blocked = true;
+                ss << (blocked ? '|' : ' ');
+            }
+        }
+        ss << "\n";
+
+        // Draw horizontal fence row (between this row and row-1)
+        if (row > 0) {
+            for (int col = 0; col < 9; ++col) {
+                // Horizontal fence at intersection (row-1, c) blocks between row-1 and row
+                bool blocked = false;
+                if (col > 0 && fences.has_h_fence(row - 1, col - 1)) blocked = true;
+                if (col < 8 && fences.has_h_fence(row - 1, col)) blocked = true;
+
+                ss << (blocked ? '-' : ' ');
+
+                // Gap between horizontal segments (fence intersections)
+                if (col < 8) {
+                    ss << ' ';
+                }
+            }
+            ss << "\n";
+        }
+    }
+    ss << "\n";
+
+    std::cout << ss.str();
+}
 
 std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const noexcept {
     std::vector<Move> moves;
