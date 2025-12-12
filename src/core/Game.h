@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../tree/node_pool.h"
+#include "../util/gui_client.h"
 
 #include <atomic>
 #include <cstdint>
@@ -55,6 +56,28 @@ public:
     [[nodiscard]] uint32_t root() const noexcept { return root_; }
     void set_root(uint32_t idx) noexcept { root_ = idx; }
 
+    /// Connect to GUI server for visualization
+    /// @param config GUI connection configuration
+    /// @return true if connected successfully
+    bool connect_gui(const GUIClient::Config& config);
+
+    /// Disconnect from GUI server
+    void disconnect_gui();
+
+    /// Check if GUI is connected
+    [[nodiscard]] bool has_gui() const noexcept;
+
+    /// Visualize a state node using GUI if connected, otherwise print to stdout
+    /// @param node The state to visualize
+    /// @param score Optional evaluation score to display
+    void visualize_state(const StateNode& node, float score = 0.0f);
+
+    /// Visualize current root node
+    void visualize_root(float score = 0.0f);
+
+    /// Get the GUI client (may be nullptr)
+    [[nodiscard]] GUIClient* gui() noexcept { return gui_.get(); }
+
     // Non-copyable, non-movable (owns resources)
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;
@@ -65,6 +88,9 @@ private:
     Config config_;
     std::unique_ptr<NodePool> pool_;
     uint32_t root_{NULL_NODE};
+
+    // Optional GUI connection
+    std::unique_ptr<GUIClient> gui_;
 
     // Threading synchronization
     std::mutex tree_mutex_;

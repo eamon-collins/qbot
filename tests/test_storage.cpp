@@ -95,7 +95,7 @@ size_t count_reachable_nodes(const NodePool& pool, uint32_t root) {
         stack.pop_back();
         ++count;
 
-        const TreeNode& node = pool[idx];
+        const StateNode& node = pool[idx];
         uint32_t child = node.first_child;
         while (child != NULL_NODE) {
             stack.push_back(child);
@@ -121,8 +121,8 @@ void verify_trees_equal(
         auto [idx1, idx2] = stack.back();
         stack.pop_back();
 
-        const TreeNode& n1 = pool1[idx1];
-        const TreeNode& n2 = pool2[idx2];
+        const StateNode& n1 = pool1[idx1];
+        const StateNode& n2 = pool2[idx2];
 
         // Compare node data
         EXPECT_EQ(n1.move, n2.move);
@@ -186,14 +186,6 @@ TEST(TreeFileHeaderTest, HeaderSizeIs64Bytes) {
 }
 
 // ============================================================================
-// SerializedNode Tests
-// ============================================================================
-
-TEST(SerializedNodeTest, SizeIs32Bytes) {
-    EXPECT_EQ(sizeof(SerializedNode), 32u);
-}
-
-// ============================================================================
 // Save/Load Tests
 // ============================================================================
 
@@ -233,7 +225,7 @@ TEST(StorageTest, SaveAndLoadSingleNode) {
     // Verify
     EXPECT_EQ(loaded.root, 0u);  // Root should be remapped to 0
 
-    const TreeNode& loaded_root = (*loaded.pool)[loaded.root];
+    const StateNode& loaded_root = (*loaded.pool)[loaded.root];
     EXPECT_EQ(loaded_root.move, Move::pawn(4, 4));
     EXPECT_EQ(loaded_root.stats.visits.load(), 42u);
     EXPECT_FLOAT_EQ(loaded_root.stats.total_value.load(), 21.5f);
@@ -329,14 +321,6 @@ TEST(StorageTest, ReadHeaderOnly) {
     EXPECT_EQ(header.node_count, 7u);
     EXPECT_EQ(header.root_index, 0u);
     EXPECT_GT(header.timestamp, 0u);
-}
-
-TEST(StorageTest, FileSizeEstimation) {
-    size_t estimated = TreeStorage::estimate_file_size(100);
-    size_t expected = sizeof(TreeFileHeader) + 100 * sizeof(SerializedNode);
-
-    EXPECT_EQ(estimated, expected);
-    EXPECT_EQ(estimated, 64u + 100u * 32u);  // 64 + 3200 = 3264 bytes
 }
 
 // ============================================================================

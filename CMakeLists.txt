@@ -59,6 +59,7 @@ endif()
 set(QBOT_LIB_SOURCES
     src/tree/StateNode.cpp
     src/util/storage.cpp
+    src/util/gui_client.cpp
     src/core/Game.cpp
     src/util/pathfinding.cpp
 )
@@ -77,8 +78,15 @@ set(QBOT_MAIN_SOURCES
 # =============================================================================
 
 add_library(qbot_lib_debug STATIC ${QBOT_LIB_SOURCES})
-target_include_directories(qbot_lib_debug PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(qbot_lib_debug PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp)
 target_compile_options(qbot_lib_debug PRIVATE -g -O0)
+# Use standalone ASIO for websocketpp
+target_compile_definitions(qbot_lib_debug PUBLIC ASIO_STANDALONE)
+# websocketpp uses syntax deprecated in C++20, compile gui_client with C++17
+set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
+target_link_libraries(qbot_lib_debug PUBLIC pthread)
 if(ENABLE_INFERENCE)
     target_include_directories(qbot_lib_debug PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_debug PUBLIC ${TORCH_LIBRARIES})
@@ -102,8 +110,15 @@ add_custom_target(qbot DEPENDS qbot_exe_debug)
 # =============================================================================
 
 add_library(qbot_lib_fast STATIC ${QBOT_LIB_SOURCES})
-target_include_directories(qbot_lib_fast PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(qbot_lib_fast PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp)
 target_compile_options(qbot_lib_fast PRIVATE -O3 -DNDEBUG -march=native -flto)
+# Use standalone ASIO for websocketpp
+target_compile_definitions(qbot_lib_fast PUBLIC ASIO_STANDALONE)
+# websocketpp uses syntax deprecated in C++20, compile gui_client with C++17
+set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
+target_link_libraries(qbot_lib_fast PUBLIC pthread)
 if(ENABLE_INFERENCE)
     target_include_directories(qbot_lib_fast PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_fast PUBLIC ${TORCH_LIBRARIES})

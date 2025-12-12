@@ -11,7 +11,36 @@ Game::Game(Config config)
     , root_(NULL_NODE)
 {}
 
-Game::~Game() = default;
+Game::~Game() {
+    disconnect_gui();
+}
+
+bool Game::connect_gui(const GUIClient::Config& config) {
+    if (!gui_) {
+        gui_ = std::make_unique<GUIClient>();
+    }
+    return gui_->connect(config);
+}
+
+void Game::disconnect_gui() {
+    if (gui_) {
+        gui_->disconnect();
+    }
+}
+
+bool Game::has_gui() const noexcept {
+    return gui_ && gui_->is_connected();
+}
+
+void Game::visualize_state(const StateNode& node, float score) {
+    qbot::visualize_state(node, gui_.get(), -1, score);
+}
+
+void Game::visualize_root(float score) {
+    if (root_ != NULL_NODE) {
+        visualize_state((*pool_)[root_], score);
+    }
+}
 
 size_t Game::build_tree(uint32_t root_idx, float branching_factor,
                         std::time_t time_limit, size_t node_limit) {
