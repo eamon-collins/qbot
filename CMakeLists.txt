@@ -80,7 +80,8 @@ set(QBOT_MAIN_SOURCES
 add_library(qbot_lib_debug STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_debug PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_debug PRIVATE -g -O0)
 # Use standalone ASIO for websocketpp
 target_compile_definitions(qbot_lib_debug PUBLIC ASIO_STANDALONE)
@@ -112,7 +113,8 @@ add_custom_target(qbot DEPENDS qbot_exe_debug)
 add_library(qbot_lib_fast STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_fast PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_fast PRIVATE -O3 -DNDEBUG -march=native -flto)
 # Use standalone ASIO for websocketpp
 target_compile_definitions(qbot_lib_fast PUBLIC ASIO_STANDALONE)

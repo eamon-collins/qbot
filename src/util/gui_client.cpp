@@ -2,9 +2,9 @@
 
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
+#include <nlohmann/json.hpp>
 
 #include <iostream>
-#include <sstream>
 #include <mutex>
 #include <condition_variable>
 #include <queue>
@@ -12,58 +12,7 @@
 namespace qbot {
 
 using WsClient = websocketpp::client<websocketpp::config::asio_client>;
-
-// Simple JSON builder (avoid heavy dependencies)
-namespace json {
-
-std::string escape(const std::string& s) {
-    std::string result;
-    result.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"': result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default: result += c;
-        }
-    }
-    return result;
-}
-
-// Simple JSON parser for responses
-class Parser {
-public:
-    explicit Parser(const std::string& text) : text_(text) {}
-
-    std::string get_string(const std::string& key) {
-        size_t key_pos = text_.find("\"" + key + "\"");
-        if (key_pos == std::string::npos) return "";
-        size_t colon = text_.find(':', key_pos);
-        if (colon == std::string::npos) return "";
-        size_t start = text_.find('"', colon + 1);
-        if (start == std::string::npos) return "";
-        size_t end = text_.find('"', start + 1);
-        if (end == std::string::npos) return "";
-        return text_.substr(start + 1, end - start - 1);
-    }
-
-    int get_int(const std::string& key) {
-        size_t key_pos = text_.find("\"" + key + "\"");
-        if (key_pos == std::string::npos) return 0;
-        size_t colon = text_.find(':', key_pos);
-        if (colon == std::string::npos) return 0;
-        size_t start = colon + 1;
-        while (start < text_.size() && (text_[start] == ' ' || text_[start] == '\t')) start++;
-        return std::atoi(text_.c_str() + start);
-    }
-
-private:
-    std::string text_;
-};
-
-} // namespace json
+using json = nlohmann::json;
 
 struct GUIClient::Impl {
     WsClient client;
@@ -227,11 +176,11 @@ std::optional<std::string> GUIClient::receive_json() {
 void GUIClient::send_start(const std::string& player1_name, const std::string& player2_name) {
     if (!is_connected()) return;
 
-    std::ostringstream ss;
-    ss << R"({"type":"start","player_names":[")"
-       << json::escape(player1_name) << R"(",")"
-       << json::escape(player2_name) << R"("]})";
-    send_json(ss.str());
+    json msg = {
+        {"type", "start"},
+        {"player_names", {player1_name, player2_name}}
+    };
+    send_json(msg.dump());
 }
 
 void GUIClient::send_gamestate(const StateNode& node, int current_player, float score) {
@@ -242,65 +191,41 @@ void GUIClient::send_gamestate(const StateNode& node, int current_player, float 
         current_player = node.is_p1_to_move() ? 0 : 1;
     }
 
-    // Determine winner
-    std::string winner_str = "null";
-    if (node.is_terminal()) {
-        winner_str = (node.terminal_value > 0) ? "0" : "1";
-    }
-
     // Build walls array
-    std::ostringstream walls_ss;
-    walls_ss << "[";
-    bool first_wall = true;
+    json walls = json::array();
     for (uint8_t r = 0; r < 8; r++) {
         for (uint8_t c = 0; c < 8; c++) {
-            // Horizontal fences - need c < 7 for valid placement
             if (c < 7 && node.fences.has_h_fence(r, c)) {
-                if (!first_wall) walls_ss << ",";
-                walls_ss << R"({"x":)" << static_cast<int>(c)
-                         << R"(,"y":)" << static_cast<int>(r)
-                         << R"(,"orientation":"h"})";
-                first_wall = false;
+                walls.push_back({{"x", c}, {"y", r}, {"orientation", "h"}});
             }
-            // Vertical fences - need r < 7 for valid placement
             if (r < 7 && node.fences.has_v_fence(r, c)) {
-                if (!first_wall) walls_ss << ",";
-                walls_ss << R"({"x":)" << static_cast<int>(c)
-                         << R"(,"y":)" << static_cast<int>(r)
-                         << R"(,"orientation":"v"})";
-                first_wall = false;
+                walls.push_back({{"x", c}, {"y", r}, {"orientation", "v"}});
             }
         }
     }
-    walls_ss << "]";
 
     // Build full gamestate JSON
-    std::ostringstream ss;
-    ss << R"({"type":"gamestate","players":[)"
-       << R"({"x":)" << static_cast<int>(node.p1.col)
-       << R"(,"y":)" << static_cast<int>(node.p1.row)
-       << R"(,"walls":)" << static_cast<int>(node.p1.fences)
-       << R"(,"name":"Player1"},)"
-       << R"({"x":)" << static_cast<int>(node.p2.col)
-       << R"(,"y":)" << static_cast<int>(node.p2.row)
-       << R"(,"walls":)" << static_cast<int>(node.p2.fences)
-       << R"(,"name":"Player2"}],"walls":)"
-       << walls_ss.str()
-       << R"(,"current_player":)" << current_player
-       << R"(,"score":)" << score
-       << R"(,"winner":)" << winner_str
-       << "}";
+    json msg = {
+        {"type", "gamestate"},
+        {"players", {
+            {{"x", node.p1.col}, {"y", node.p1.row}, {"walls", node.p1.fences}, {"name", "Player1"}},
+            {{"x", node.p2.col}, {"y", node.p2.row}, {"walls", node.p2.fences}, {"name", "Player2"}}
+        }},
+        {"walls", walls},
+        {"current_player", current_player},
+        {"score", score},
+        {"winner", node.is_terminal() ? json(node.terminal_value > 0 ? 0 : 1) : json(nullptr)}
+    };
 
-    send_json(ss.str());
+    send_json(msg.dump());
 }
 
 std::optional<GUIClient::GUIMove> GUIClient::request_move(int player) {
     if (!is_connected()) return std::nullopt;
 
     // Send request
-    std::ostringstream ss;
-    ss << R"({"type":"request_move","player":)" << player << "}";
-    if (!send_json(ss.str())) {
+    json request = {{"type", "request_move"}, {"player", player}};
+    if (!send_json(request.dump())) {
         return std::nullopt;
     }
 
@@ -311,32 +236,37 @@ std::optional<GUIClient::GUIMove> GUIClient::request_move(int player) {
         return std::nullopt;
     }
 
-    json::Parser parser(*response);
-    std::string type = parser.get_string("type");
+    try {
+        json msg = json::parse(*response);
+        std::string type = msg.value("type", "");
 
-    if (type == "quit") {
-        GUIMove move{};
-        move.type = GUIMove::Type::Quit;
-        return move;
-    }
-
-    if (type == "move") {
-        GUIMove move{};
-        std::string move_type = parser.get_string("move_type");
-        move.x = static_cast<uint8_t>(parser.get_int("x"));
-        move.y = static_cast<uint8_t>(parser.get_int("y"));
-
-        if (move_type == "pawn") {
-            move.type = GUIMove::Type::Pawn;
-        } else if (move_type == "wall") {
-            move.type = GUIMove::Type::Wall;
-            std::string orient = parser.get_string("orientation");
-            move.horizontal = (orient == "h");
+        if (type == "quit") {
+            GUIMove move{};
+            move.type = GUIMove::Type::Quit;
+            return move;
         }
-        return move;
+
+        if (type == "move") {
+            GUIMove move{};
+            std::string move_type = msg.value("move_type", "");
+            move.x = msg.value("x", 0);
+            move.y = msg.value("y", 0);
+
+            if (move_type == "pawn") {
+                move.type = GUIMove::Type::Pawn;
+            } else if (move_type == "wall") {
+                move.type = GUIMove::Type::Wall;
+                std::string orient = msg.value("orientation", "");
+                move.horizontal = (orient == "h");
+            }
+            return move;
+        }
+
+        last_error_ = "Unexpected message type: " + type;
+    } catch (const json::exception& e) {
+        last_error_ = std::string("JSON parse error: ") + e.what();
     }
 
-    last_error_ = "Unexpected message type: " + type;
     return std::nullopt;
 }
 
