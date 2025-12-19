@@ -45,7 +45,7 @@ class GUIState:
 
     def __post_init__(self):
         if self.player_names is None:
-            self.player_names = ["Player", "Bot"]
+            self.player_names = ["Human", "Bot"]
 
 
 class QuoridorGUI:
@@ -89,11 +89,11 @@ class QuoridorGUI:
             c1.link_coord()
 
             if ws.orientation == "h":
-                # Horizontal wall - uses wall_south
-                c2 = self.coords.find_coord(ws.x + 1, gui_y)
-            else:
-                # Vertical wall - uses wall_east
+                # Horizontal wall - c2 below c1 (same column) so Wall uses orient="s"
                 c2 = self.coords.find_coord(ws.x, gui_y + 1)
+            else:
+                # Vertical wall - c2 right of c1 (same row) so Wall uses orient="e"
+                c2 = self.coords.find_coord(ws.x + 1, gui_y)
 
             c2.link_coord()
             w = Wall(c1, c2, self.win)
@@ -197,7 +197,7 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
 
             if msg_type == "start":
                 # Game starting, set player names
-                names = data.get("player_names", ["Player", "Bot"])
+                names = data.get("player_names", ["Human", "Bot"])
                 gui.state.player_names = names
                 gui.players.set_names(names)
                 gui.win.update_info("Game started!")
@@ -213,6 +213,7 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
                     winner=data.get("winner")
                 )
                 gui.apply_gamestate(gs)
+                gui.run_frame()  # Render immediately
 
             elif msg_type == "request_move":
                 # Client is asking GUI for a move
@@ -261,7 +262,7 @@ async def run_server(host: str, port: int, gui: QuoridorGUI):
 async def main_async(host: str, port: int):
     """Main async entry point."""
     gui = QuoridorGUI()
-    gui.players.set_names(["Player", "Bot"])
+    gui.players.set_names(["Human", "Bot"])
 
     try:
         await run_server(host, port, gui)

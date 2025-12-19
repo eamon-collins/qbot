@@ -50,8 +50,8 @@ class Players:
                 Player(3, 5, "west", Colors.yellow, coords.find_coord(0, 4))]
         elif nb_players == 2:
             self.players = [
-                Player(0, 10, "north", Colors.red, coords.find_coord(4, 0)),
-                Player(1, 10, "south", Colors.green, coords.find_coord(4, 8))]
+                Player(0, 10, "south", Colors.green, coords.find_coord(4, 8)),
+                Player(1, 10, "north", Colors.red, coords.find_coord(4, 0))]
         elif nb_players == 3:
             self.players = [
                 Player(0, 7, "north", Colors.red, coords.find_coord(4, 0)),

@@ -1,6 +1,7 @@
 #include "core/Game.h"
 #include "tree/StateNode.h"
 #include "util/storage.h"
+#include "util/gui_client.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -350,9 +351,29 @@ TEST_F(GameTest, BuildTreeUntilWinAndPrintPath) {
 
     if (verbose) {
         std::cout << "\n========== Path to terminal state (" << path.size() << " moves) ==========" << std::endl;
-        for (size_t i = 0; i < path.size(); ++i) {
-            std::cout << "--- Step " << i << " ---" << std::endl;
-            game_->pool()[path[i]].print_node();
+
+        // Try to connect to GUI for visualization
+        GUIClient gui;
+        GUIClient::Config gui_config;
+        gui_config.connect_timeout_ms = 50;  // Short timeout - fails fast if no GUI
+
+        if (gui.connect(gui_config)) {
+            std::cout << "Connected to GUI on port " << gui_config.port << " - visualizing path..." << std::endl;
+            gui.send_start("Human", "Bot");
+
+            for (size_t i = 0; i < path.size(); ++i) {
+                const StateNode& node = game_->pool()[path[i]];
+                int current_player = node.is_p1_to_move() ? 0 : 1;
+                float q_value = node.stats.Q();
+                gui.send_gamestate(node, current_player, q_value);
+            }
+            std::cout << "Visualization complete." << std::endl;
+        } else {
+            // Fall back to printing
+            for (size_t i = 0; i < path.size(); ++i) {
+                std::cout << "--- Step " << i << " ---" << std::endl;
+                game_->pool()[path[i]].print_node();
+            }
         }
     }
 

@@ -45,9 +45,9 @@ void StateNode::print_node() const noexcept {
         for (int col = 0; col < 9; ++col) {
             // Draw cell
             if (p1.row == row && p1.col == col) {
-                ss << '1';  // Player 1
+                ss << 'H';  // Player 1 (Human in vs-human games)
             } else if (p2.row == row && p2.col == col) {
-                ss << '2';  // Player 2
+                ss << 'B';  // Player 2 (Bot in vs-human games)
             } else {
                 ss << '.';  // Empty square
             }
@@ -208,19 +208,19 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     // ========== FENCE MOVES ==========
     // Only if current player has fences remaining
     if (curr.fences > 0) {
-        // Horizontal fences: intersection row in [0,7], col in [0,6]
-        // Fence at (row, col) blocks movement between rows row and row+1 at columns col and col+1
+        // Horizontal fences: intersection at (row, col), fence spans to (row, col+1)
+        // Fence blocks movement between rows row and row+1 at columns col and col+1
         for (uint8_t row = 0; row < 8; ++row) {
-            for (uint8_t col = 0; col < 7; ++col) {
+            for (uint8_t col = 0; col < 8; ++col) {
                 if (!fences.h_fence_blocked(row, col)) {
                     moves.push_back(Move::fence(row, col, true));
                 }
             }
         }
 
-        // Vertical fences: intersection row in [0,6], col in [0,7]
-        // Fence at (row, col) blocks movement between cols col and col+1 at rows row and row+1
-        for (uint8_t row = 0; row < 7; ++row) {
+        // Vertical fences: intersection at (row, col), fence spans to (row+1, col)
+        // Fence blocks movement between cols col and col+1 at rows row and row+1
+        for (uint8_t row = 0; row < 8; ++row) {
             for (uint8_t col = 0; col < 8; ++col) {
                 if (!fences.v_fence_blocked(row, col)) {
                     moves.push_back(Move::fence(row, col, false));

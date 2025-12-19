@@ -33,6 +33,15 @@ make
 ./test_game --gtest_filter=GameTest.BuildTreeUntilWinAndPrintPath
 ```
 
+## GUI Visualization
+
+Run the pygame GUI server (requires pygame and websockets):
+```bash
+python gui/main.py
+```
+
+With the GUI running on port 8765, tests like `BuildTreeUntilWinAndPrintPath` will visualize the game path instead of printing to stdout.
+
 ## Training
 
 Generate training data from a tree file:

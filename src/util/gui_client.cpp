@@ -191,14 +191,14 @@ void GUIClient::send_gamestate(const StateNode& node, int current_player, float 
         current_player = node.is_p1_to_move() ? 0 : 1;
     }
 
-    // Build walls array
+    // Build walls array - check all 8x8 intersection positions
     json walls = json::array();
     for (uint8_t r = 0; r < 8; r++) {
         for (uint8_t c = 0; c < 8; c++) {
-            if (c < 7 && node.fences.has_h_fence(r, c)) {
+            if (node.fences.has_h_fence(r, c)) {
                 walls.push_back({{"x", c}, {"y", r}, {"orientation", "h"}});
             }
-            if (r < 7 && node.fences.has_v_fence(r, c)) {
+            if (node.fences.has_v_fence(r, c)) {
                 walls.push_back({{"x", c}, {"y", r}, {"orientation", "v"}});
             }
         }

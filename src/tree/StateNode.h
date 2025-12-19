@@ -106,42 +106,56 @@ struct FenceGrid {
     /// Place a horizontal fence at intersection (r, c)
     /// Blocks movement between rows r and r+1 at columns c and c+1
     constexpr void place_h_fence(uint8_t r, uint8_t c) noexcept {
-        assert(r < 8 && c < 7);  // c < 7 because fence spans c and c+1
+        assert(r < 8 && c < 8);
         horizontal |= (1ULL << (r * 8 + c));
     }
 
     /// Place a vertical fence at intersection (r, c)
     /// Blocks movement between columns c and c+1 at rows r and r+1
     constexpr void place_v_fence(uint8_t r, uint8_t c) noexcept {
-        assert(r < 7 && c < 8);  // r < 7 because fence spans r and r+1
+        assert(r < 8 && c < 8);
         vertical |= (1ULL << (r * 8 + c));
     }
 
     /// Check if horizontal fence placement at (r, c) is blocked
+    /// A horizontal fence spans from intersection (r,c) to (r,c+1), blocking 2 edges
     [[nodiscard]] constexpr bool h_fence_blocked(uint8_t r, uint8_t c) const noexcept {
-        assert(r < 8 && c < 7);
-        // Blocked if there's already a horizontal fence at c or c-1 on the same row
+        assert(r < 8 && c < 8);
+        // Blocked if there's already a horizontal fence overlapping this position
         if (has_h_fence(r, c)) return true;
         if (c > 0 && has_h_fence(r, c - 1)) return true;
-        if (c < 6 && has_h_fence(r, c + 1)) return true;
-        // Blocked if a vertical fence crosses at the midpoint
-        // Vertical fence at (r-1, c) or (r, c) would cross
+        if (c < 7 && has_h_fence(r, c + 1)) return true;
+        // Blocked if a vertical fence crosses at either endpoint of horizontal fence
+        // Vertical fence at (rv, cv) crosses if it passes through (r, c) or (r, c+1)
+        // Check vertical fences that pass through intersection (r, c)
         if (r > 0 && has_v_fence(r - 1, c)) return true;
         if (has_v_fence(r, c)) return true;
+        // Check vertical fences that pass through intersection (r, c+1)
+        if (c < 7) {
+            if (r > 0 && has_v_fence(r - 1, c + 1)) return true;
+            if (has_v_fence(r, c + 1)) return true;
+        }
         return false;
     }
 
     /// Check if vertical fence placement at (r, c) is blocked
+    /// A vertical fence spans from intersection (r,c) to (r+1,c), blocking 2 edges
     [[nodiscard]] constexpr bool v_fence_blocked(uint8_t r, uint8_t c) const noexcept {
-        assert(r < 7 && c < 8);
-        // Blocked if there's already a vertical fence at r or r-1 on the same column
+        assert(r < 8 && c < 8);
+        // Blocked if there's already a vertical fence overlapping this position
         if (has_v_fence(r, c)) return true;
         if (r > 0 && has_v_fence(r - 1, c)) return true;
-        if (r < 6 && has_v_fence(r + 1, c)) return true;
-        // Blocked if a horizontal fence crosses at the midpoint
-        // Horizontal fence at (r, c-1) or (r, c) would cross
+        if (r < 7 && has_v_fence(r + 1, c)) return true;
+        // Blocked if a horizontal fence crosses at either endpoint of vertical fence
+        // Horizontal fence at (rh, ch) crosses if it passes through (r, c) or (r+1, c)
+        // Check horizontal fences that pass through intersection (r, c)
         if (c > 0 && has_h_fence(r, c - 1)) return true;
         if (has_h_fence(r, c)) return true;
+        // Check horizontal fences that pass through intersection (r+1, c)
+        if (r < 7) {
+            if (c > 0 && has_h_fence(r + 1, c - 1)) return true;
+            if (has_h_fence(r + 1, c)) return true;
+        }
         return false;
     }
 
