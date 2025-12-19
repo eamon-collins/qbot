@@ -62,6 +62,7 @@ set(QBOT_LIB_SOURCES
     src/util/gui_client.cpp
     src/core/Game.cpp
     src/util/pathfinding.cpp
+    src/search/mcts.cpp
 )
 
 if(ENABLE_INFERENCE)

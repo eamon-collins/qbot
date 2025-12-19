@@ -11,7 +11,10 @@
 #include "../util/storage.h"
 #include "../util/gui_client.h"
 #include "../util/pathfinding.h"
+#include "../search/mcts.h"
 #include "Game.h"
+
+#include <csignal>
 
 #include <boost/program_options.hpp>
 #include <algorithm>
@@ -28,6 +31,18 @@
 namespace po = boost::program_options;
 
 namespace qbot {
+
+// Global pointer for signal handler to stop training gracefully
+static MCTSEngine* g_mcts_engine = nullptr;
+
+void signal_handler(int signum) {
+    if (signum == SIGINT || signum == SIGTERM) {
+        std::cout << "\nReceived signal " << signum << ", stopping...\n";
+        if (g_mcts_engine) {
+            g_mcts_engine->stop();
+        }
+    }
+}
 
 enum class RunMode {
     Interactive,    // Play against human
@@ -428,68 +443,59 @@ int run_interactive(const Config& config,
     return 0;
 }
 
-/// Run self-play training
-int run_training([[maybe_unused]] const Config& config,
-                 [[maybe_unused]] std::unique_ptr<NodePool> pool,
-                 [[maybe_unused]] uint32_t root) {
-    std::cout << "\n=== Training Mode ===\n";
-    std::cout << "Games per checkpoint: " << config.games_per_checkpoint << "\n";
-    std::cout << "Total iterations:     " << config.training_iterations << "\n";
-    std::cout << "Simulations per move: " << config.simulations_per_move << "\n";
-    std::cout << "Threads:              " << config.num_threads << "\n\n";
+/// Run MCTS tree building / training
+int run_training(const Config& config,
+                 std::unique_ptr<NodePool> pool,
+                 uint32_t root) {
+    std::cout << "\n=== MCTS Training Mode ===\n";
 
-    // TODO: Implement self-play training loop
-    // This would involve:
-    // 1. Initialize game state
-    // 2. For each game:
-    //    a. Play game using MCTS (both sides)
-    //    b. Collect training data (states, policies, outcomes)
-    //    c. Update visit counts in tree
-    // 3. Periodically:
-    //    a. Save tree checkpoint
-    //    b. Train neural network on collected data (if using NN)
-    //    c. Report statistics
+    // Initialize the root node if it's a fresh tree
+    StateNode& root_node = (*pool)[root];
+    if (!root_node.move.is_valid() && root_node.ply == 0) {
+        root_node.init_root(true);  // P1 starts
+    }
 
-    /*
-    Trainer trainer(config);
-    trainer.set_tree(std::move(pool), root);
+    // Configure MCTS engine
+    MCTSConfig mcts_config;
+    mcts_config.num_threads = config.num_threads;
+    mcts_config.checkpoint_interval_seconds = 300;  // 5 minutes
+    mcts_config.checkpoint_path = config.save_file;
 
     if (!config.model_file.empty()) {
-        trainer.load_model(config.model_file);
+        mcts_config.model_path = config.model_file;
     }
 
-    int games_completed = 0;
-    int checkpoint_num = 0;
+    // Create engine
+    MCTSEngine engine(mcts_config);
 
-    while (games_completed < config.training_iterations) {
-        // Play a batch of games
-        auto stats = trainer.play_games(config.games_per_checkpoint, config.num_threads);
+    // Set up signal handler for graceful shutdown
+    g_mcts_engine = &engine;
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
-        games_completed += config.games_per_checkpoint;
-        checkpoint_num++;
+    // Start training
+    std::cout << "Starting MCTS tree building...\n";
+    std::cout << "Press Ctrl+C to stop and save.\n\n";
 
-        std::cout << "Checkpoint " << checkpoint_num << ":\n";
-        std::cout << "  Games:      " << games_completed << "\n";
-        std::cout << "  P1 wins:    " << stats.p1_wins << "\n";
-        std::cout << "  P2 wins:    " << stats.p2_wins << "\n";
-        std::cout << "  Avg length: " << stats.avg_game_length << " moves\n";
-        std::cout << "  Tree size:  " << trainer.pool()->allocated() << " nodes\n";
+    engine.start_training(*pool, root);
 
-        // Save checkpoint
-        std::string checkpoint_path = config.save_file + "." + std::to_string(checkpoint_num);
-        save_tree(*trainer.pool(), trainer.root(), checkpoint_path);
-
-        // Also save to main file
-        save_tree(*trainer.pool(), trainer.root(), config.save_file);
+    // Wait for training to complete (runs until signal)
+    while (engine.is_running()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::cout << "\nTraining complete!\n";
-    std::cout << "Final tree size: " << trainer.pool()->allocated() << " nodes\n";
-    */
+    // Clean up signal handler
+    g_mcts_engine = nullptr;
+    std::signal(SIGINT, SIG_DFL);
+    std::signal(SIGTERM, SIG_DFL);
 
-    std::cout << "Training mode not yet implemented.\n";
-    std::cout << "The MCTS search and game engine components need to be built first.\n";
+    // Final save
+    std::cout << "\nSaving final tree...\n";
+    if (!config.save_file.empty()) {
+        save_tree(*pool, root, config.save_file);
+    }
 
+    std::cout << "Training complete!\n";
     return 0;
 }
 
