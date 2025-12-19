@@ -299,9 +299,6 @@ void print_move(Move move, bool is_p1) {
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
                     uint32_t root) {
-    std::cout << "Human plays as P1 (starts at top, goal is bottom row)\n";
-    std::cout << "Bot plays as P2 (starts at bottom, goal is top row)\n\n";
-
     // Connect to GUI
     GUIClient gui;
     GUIClient::Config gui_config;
@@ -310,7 +307,6 @@ int run_interactive(const Config& config,
     gui_config.connect_timeout_ms = 5000;
     gui_config.read_timeout_ms = 60000;  // 60 seconds for human to make a move
 
-    std::cout << "Connecting to GUI at " << gui_config.host << ":" << gui_config.port << "...\n";
     if (!gui.connect(gui_config)) {
         std::cerr << "Failed to connect to GUI: " << gui.last_error() << "\n";
         std::cerr << "Please ensure the GUI server is running.\n";
@@ -322,7 +318,6 @@ int run_interactive(const Config& config,
     StateNode& root_node = (*pool)[root];
     root_node.init_root(true);  // P1 (human) starts
 
-    // Send start message to GUI
     gui.send_start("Human", "Bot");
 
     uint32_t current_idx = root;
@@ -331,7 +326,6 @@ int run_interactive(const Config& config,
     while (!game_over) {
         StateNode& current = (*pool)[current_idx];
 
-        // Send current state to GUI
         float score = current.stats.Q(0.0f);
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
 
@@ -348,9 +342,6 @@ int run_interactive(const Config& config,
         }
 
         if (current.is_p1_to_move()) {
-            // Human's turn - get move from GUI
-            std::cout << "Human's turn (P1). Waiting for move from GUI...\n";
-
             bool valid_move = false;
             while (!valid_move) {
                 auto gui_move_opt = gui.request_move(0);
@@ -386,7 +377,6 @@ int run_interactive(const Config& config,
                     continue;
                 }
 
-                // Check if fence move would block a player (validated in find_or_create_child)
                 if (move.is_fence()) {
                     Pathfinder& pf = get_pathfinder();
                     if (!pf.check_paths_with_fence(current, move)) {
@@ -396,7 +386,6 @@ int run_interactive(const Config& config,
                     }
                 }
 
-                // Move is valid
                 valid_move = true;
                 print_move(move, true);
 
@@ -410,8 +399,6 @@ int run_interactive(const Config& config,
             }
         } else {
             // Bot's turn
-            std::cout << "Bot's turn (P2). Thinking...\n";
-
             Move move = select_bot_move(*pool, current_idx);
             if (!move.is_valid()) {
                 std::cerr << "Error: Bot has no valid moves\n";
@@ -420,7 +407,6 @@ int run_interactive(const Config& config,
 
             print_move(move, false);
 
-            // Find or create the child node for this move
             uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
             if (next_idx == NULL_NODE) {
                 std::cerr << "Error: Failed to create child node for bot's move\n";
