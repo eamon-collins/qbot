@@ -89,12 +89,28 @@ void StateNode::print_node() const noexcept {
 
 std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const noexcept {
     std::vector<Move> moves;
-    moves.reserve(140);  // Rough upper bound: ~4 pawn + ~128 fence moves max
 
     const Player& curr = current_player();
     const Player& opp = opponent_player();
     const uint8_t r = curr.row;
     const uint8_t c = curr.col;
+
+    // Optimization: when both players are out of fences, the game is deterministic.
+    // Each player should just race to their goal via shortest path.
+    if (p1.fences == 0 && p2.fences == 0) {
+        if (out_fence_count) *out_fence_count = 0;
+
+        Pathfinder& pf = get_pathfinder();
+        uint8_t goal_row = is_p1_to_move() ? 8 : 0;
+        auto path = pf.find_path(fences, curr, goal_row);
+
+        if (path.size() > 1) {
+            moves.push_back(Move::pawn(path[1].row, path[1].col));
+        }
+        return moves;
+    }
+
+    moves.reserve(140);  // Rough upper bound: ~4 pawn + ~128 fence moves max
 
     // ========== PAWN MOVES ==========
     // Helper lambdas to check if movement is possible (using FenceGrid methods)
