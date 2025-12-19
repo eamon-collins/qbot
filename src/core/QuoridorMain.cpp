@@ -9,13 +9,20 @@
 
 #include "../tree/node_pool.h"
 #include "../util/storage.h"
+#include "../util/gui_client.h"
+#include "../util/pathfinding.h"
+#include "Game.h"
 
 #include <boost/program_options.hpp>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <random>
 #include <string>
 
 namespace po = boost::program_options;
@@ -176,51 +183,261 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
 // Game Modes
 // ============================================================================
 
-/// Run interactive game against human
-int run_interactive([[maybe_unused]] const Config& config,
-                    [[maybe_unused]] std::unique_ptr<NodePool> pool,
-                    [[maybe_unused]] uint32_t root) {
-    std::cout << "\n=== Interactive Mode ===\n";
+/// Check if a move is in the list of valid moves
+bool is_move_valid(const std::vector<Move>& valid_moves, Move move) {
+    return std::find_if(valid_moves.begin(), valid_moves.end(),
+        [move](const Move& m) { return m == move; }) != valid_moves.end();
+}
 
-    // TODO: Implement interactive game loop
-    // This would involve:
-    // 1. Display current board state
-    // 2. If human's turn: get move from stdin
-    // 3. If bot's turn: run MCTS and select best move
-    // 4. Apply move and update tree
-    // 5. Check for game over
-    // 6. Loop until game ends
+/// Find or create a child node for the given move
+/// Returns the child index, or NULL_NODE if move is not found
+uint32_t find_or_create_child(NodePool& pool, uint32_t parent_idx, Move move) {
+    StateNode& parent = pool[parent_idx];
 
-    /*
-    Game game(config);
-    game.set_tree(std::move(pool), root);
-
-    if (!config.model_file.empty()) {
-        game.load_model(config.model_file);
+    // First check if move exists among existing children
+    uint32_t child = parent.first_child;
+    while (child != NULL_NODE) {
+        if (pool[child].move == move) {
+            return child;
+        }
+        child = pool[child].next_sibling;
     }
 
-    while (!game.is_over()) {
-        game.display_board();
+    // If not expanded yet, expand and then find the child
+    if (!parent.is_expanded()) {
+        parent.generate_valid_children(pool, parent_idx);
+    }
 
-        if (game.is_human_turn()) {
-            Move move = game.get_human_move();
-            game.apply_move(move);
-        } else {
-            Move move = game.search_best_move(config.simulations_per_move);
-            std::cout << "Bot plays: " << move << "\n";
-            game.apply_move(move);
+    // Now search again
+    child = parent.first_child;
+    while (child != NULL_NODE) {
+        if (pool[child].move == move) {
+            return child;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    return NULL_NODE;
+}
+
+/// Select the best move for the bot
+/// Chooses the move with the best Q-value, randomly among ties
+Move select_bot_move(NodePool& pool, uint32_t current_idx) {
+    StateNode& current = pool[current_idx];
+
+    // Ensure children are generated
+    if (!current.is_expanded()) {
+        current.generate_valid_children(pool, current_idx);
+    }
+
+    // Collect all children with their scores
+    struct ScoredChild {
+        uint32_t idx;
+        Move move;
+        float score;
+    };
+    std::vector<ScoredChild> children;
+
+    uint32_t child_idx = current.first_child;
+    while (child_idx != NULL_NODE) {
+        StateNode& child = pool[child_idx];
+        // Q value: for bot (P2), higher Q from P1 perspective means worse for bot
+        // Since P2 wins when terminal_value = -1, we want lower Q (from P1's perspective)
+        // But the stats.Q() is from the edge perspective, which should work correctly
+        float q = child.stats.Q(0.0f);
+        children.push_back({child_idx, child.move, q});
+        child_idx = child.next_sibling;
+    }
+
+    if (children.empty()) {
+        return Move{};  // No valid moves
+    }
+
+    // Find the best score for the current player
+    // P2 (bot) wants to minimize (P1's perspective Q value)
+    // Actually, let's just pick randomly for now since we don't have trained values
+    // We'll pick randomly among all moves, weighted slightly towards pawn moves when fences are low
+    thread_local std::mt19937 rng(std::random_device{}());
+
+    // Find best score (Q value) - since Q is from edge perspective, we want highest Q
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (const auto& c : children) {
+        if (c.score > best_score) {
+            best_score = c.score;
         }
     }
 
-    game.display_result();
-
-    if (!config.save_file.empty()) {
-        save_tree(*game.pool(), game.root(), config.save_file);
+    // Collect all children with best score (within epsilon for floating point)
+    std::vector<ScoredChild> best_children;
+    for (const auto& c : children) {
+        if (std::abs(c.score - best_score) < 1e-6f) {
+            best_children.push_back(c);
+        }
     }
-    */
 
-    std::cout << "Interactive mode not yet implemented.\n";
-    std::cout << "The game engine components need to be built first.\n";
+    // Random selection among best
+    std::uniform_int_distribution<size_t> dist(0, best_children.size() - 1);
+    return best_children[dist(rng)].move;
+}
+
+/// Print a move in human-readable format
+void print_move(Move move, bool is_p1) {
+    const char* player = is_p1 ? "Human" : "Bot";
+    if (move.is_pawn()) {
+        std::cout << player << " moves pawn to ("
+                  << static_cast<int>(move.row()) << ", "
+                  << static_cast<int>(move.col()) << ")\n";
+    } else {
+        std::cout << player << " places "
+                  << (move.is_horizontal() ? "horizontal" : "vertical")
+                  << " fence at (" << static_cast<int>(move.row())
+                  << ", " << static_cast<int>(move.col()) << ")\n";
+    }
+}
+
+/// Run interactive game against human
+int run_interactive(const Config& config,
+                    std::unique_ptr<NodePool> pool,
+                    uint32_t root) {
+    std::cout << "Human plays as P1 (starts at top, goal is bottom row)\n";
+    std::cout << "Bot plays as P2 (starts at bottom, goal is top row)\n\n";
+
+    // Connect to GUI
+    GUIClient gui;
+    GUIClient::Config gui_config;
+    gui_config.host = "localhost";
+    gui_config.port = 8765;
+    gui_config.connect_timeout_ms = 5000;
+    gui_config.read_timeout_ms = 60000;  // 60 seconds for human to make a move
+
+    std::cout << "Connecting to GUI at " << gui_config.host << ":" << gui_config.port << "...\n";
+    if (!gui.connect(gui_config)) {
+        std::cerr << "Failed to connect to GUI: " << gui.last_error() << "\n";
+        std::cerr << "Please ensure the GUI server is running.\n";
+        return 1;
+    }
+    std::cout << "Connected to GUI!\n\n";
+
+    // Initialize the root node with starting game state
+    StateNode& root_node = (*pool)[root];
+    root_node.init_root(true);  // P1 (human) starts
+
+    // Send start message to GUI
+    gui.send_start("Human", "Bot");
+
+    uint32_t current_idx = root;
+    bool game_over = false;
+
+    while (!game_over) {
+        StateNode& current = (*pool)[current_idx];
+
+        // Send current state to GUI
+        float score = current.stats.Q(0.0f);
+        gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
+
+        // Check for terminal state
+        int result = current.game_over();
+        if (result != 0) {
+            game_over = true;
+            if (result == 1) {
+                std::cout << "\n*** HUMAN WINS! ***\n\n";
+            } else {
+                std::cout << "\n*** BOT WINS! ***\n\n";
+            }
+            break;
+        }
+
+        if (current.is_p1_to_move()) {
+            // Human's turn - get move from GUI
+            std::cout << "Human's turn (P1). Waiting for move from GUI...\n";
+
+            bool valid_move = false;
+            while (!valid_move) {
+                auto gui_move_opt = gui.request_move(0);
+                if (!gui_move_opt) {
+                    std::cerr << "Failed to get move from GUI: " << gui.last_error() << "\n";
+                    return 1;
+                }
+
+                auto gui_move = *gui_move_opt;
+                if (gui_move.type == GUIClient::GUIMove::Type::Quit) {
+                    std::cout << "Quit received from GUI.\n";
+                    return 0;
+                }
+
+                Move move = GUIClient::to_engine_move(gui_move);
+
+                // Validate the move
+                std::vector<Move> valid_moves = current.generate_valid_moves();
+                if (!is_move_valid(valid_moves, move)) {
+                    std::cout << "ILLEGAL MOVE! ";
+                    if (move.is_pawn()) {
+                        std::cout << "Pawn move to (" << static_cast<int>(move.row())
+                                  << ", " << static_cast<int>(move.col()) << ")";
+                    } else {
+                        std::cout << (move.is_horizontal() ? "H" : "V") << " fence at ("
+                                  << static_cast<int>(move.row()) << ", "
+                                  << static_cast<int>(move.col()) << ")";
+                    }
+                    std::cout << " is not legal. Try again.\n";
+
+                    // Re-send gamestate to GUI so it can reset and let user try again
+                    gui.send_gamestate(current, 0, score);
+                    continue;
+                }
+
+                // Check if fence move would block a player (validated in find_or_create_child)
+                if (move.is_fence()) {
+                    Pathfinder& pf = get_pathfinder();
+                    if (!pf.check_paths_with_fence(current, move)) {
+                        std::cout << "ILLEGAL MOVE! Fence would block a player's path to goal. Try again.\n";
+                        gui.send_gamestate(current, 0, score);
+                        continue;
+                    }
+                }
+
+                // Move is valid
+                valid_move = true;
+                print_move(move, true);
+
+                // Find or create the child node for this move
+                uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+                if (next_idx == NULL_NODE) {
+                    std::cerr << "Error: Failed to create child node for move\n";
+                    return 1;
+                }
+                current_idx = next_idx;
+            }
+        } else {
+            // Bot's turn
+            std::cout << "Bot's turn (P2). Thinking...\n";
+
+            Move move = select_bot_move(*pool, current_idx);
+            if (!move.is_valid()) {
+                std::cerr << "Error: Bot has no valid moves\n";
+                return 1;
+            }
+
+            print_move(move, false);
+
+            // Find or create the child node for this move
+            uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+            if (next_idx == NULL_NODE) {
+                std::cerr << "Error: Failed to create child node for bot's move\n";
+                return 1;
+            }
+            current_idx = next_idx;
+        }
+    }
+
+    // Send final state to GUI
+    StateNode& final_state = (*pool)[current_idx];
+    gui.send_gamestate(final_state, -1, final_state.terminal_value);
+
+    // Optionally save tree
+    if (!config.save_file.empty() && config.verbose) {
+        save_tree(*pool, root, config.save_file);
+    }
 
     return 0;
 }
