@@ -306,7 +306,7 @@ std::expected<LoadedTree, StorageError> TreeStorage::load(
 
     // Create node pool with exact capacity needed
     NodePool::Config config;
-    config.capacity = header.node_count;
+    config.initial_capacity = header.node_count;
     config.enable_lru = false;  // Disable LRU for loaded trees initially
 
     LoadedTree result{

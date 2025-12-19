@@ -7,7 +7,7 @@ namespace qbot {
 
 Game::Game(Config config)
     : config_(config)
-    , pool_(std::make_unique<NodePool>(NodePool::Config{.capacity = config.pool_capacity}))
+    , pool_(std::make_unique<NodePool>(NodePool::Config{.initial_capacity = config.pool_capacity}))
     , root_(NULL_NODE)
 {}
 

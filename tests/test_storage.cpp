@@ -279,7 +279,7 @@ TEST(StorageTest, SaveAndLoadDeepTree) {
     TempFile tmp;
 
     NodePool::Config config;
-    config.capacity = 10000;
+    config.initial_capacity = 10000;
     NodePool pool(config);
 
     // Build tree: depth=4, branching=3 => 1 + 3 + 9 + 27 + 81 = 121 nodes
@@ -482,7 +482,7 @@ TEST(StorageTest, LargeTreePerformance) {
 
     // Build a reasonably large tree
     NodePool::Config config;
-    config.capacity = 100000;
+    config.initial_capacity = 100000;
     NodePool pool(config);
 
     // depth=6, branching=4 => 1 + 4 + 16 + 64 + 256 + 1024 + 4096 = 5461 nodes

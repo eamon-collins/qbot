@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -14,43 +16,48 @@
 
 namespace qbot {
 
-/// Memory-bounded node pool with LRU-based recycling
+/// Chunked node pool with automatic growth
 ///
-/// Design principles from memory-bounded MCTS paper:
-/// - Pre-allocated arena of nodes for cache efficiency
-/// - FIFO-based recycling when pool is exhausted
-/// - Lock-free allocation via atomic free list
-/// - Nodes are accessed by index, not pointer (stable across reallocations)
+/// Uses chunked allocation to avoid copies during resize:
+/// - Nodes are stored in fixed-size chunks
+/// - When pool is exhausted, a new chunk is allocated (no copying)
+/// - Indices remain stable across growth
+/// - Each chunk is cache-efficient for traversal
 ///
 /// Thread safety:
 /// - allocate() is thread-safe via atomic CAS on free list
-/// - recycle() requires external synchronization (typically done during tree reuse)
+/// - grow() uses a mutex to ensure only one thread grows at a time
 /// - Access to individual nodes must be synchronized by the caller
 class NodePool {
 public:
     /// Configuration for node pool
     struct Config {
-        size_t capacity = 1'000'000;       // Maximum number of nodes
-        size_t recycle_batch = 1000;       // Nodes to recycle when pool exhausted
-        bool enable_lru = true;            // Enable LRU tracking for recycling
+        size_t initial_capacity = 10'000'000;  // Initial number of nodes (10M)
+        size_t chunk_size = 1'000'000;         // Nodes per chunk (1M)
+        size_t recycle_batch = 1000;           // Nodes to recycle when pool exhausted
+        bool enable_lru = true;                // Enable LRU tracking for recycling
     };
 
     NodePool() : NodePool(Config{}) {}
 
     explicit NodePool(Config config)
         : config_(config)
-        , nodes_(config.capacity)
+        , chunk_size_(config.chunk_size)
         , free_head_(0)
         , allocated_count_(0)
+        , total_capacity_(0)
     {
-        // Initialize free list: each node points to the next
-        for (size_t i = 0; i < config.capacity - 1; ++i) {
-            nodes_[i].next_sibling = static_cast<uint32_t>(i + 1);
+        // Calculate initial number of chunks
+        size_t initial_chunks = (config.initial_capacity + config.chunk_size - 1) / config.chunk_size;
+        if (initial_chunks == 0) initial_chunks = 1;
+
+        // Allocate initial chunks
+        for (size_t i = 0; i < initial_chunks; ++i) {
+            add_chunk_unlocked();
         }
-        nodes_[config.capacity - 1].next_sibling = NULL_NODE;
 
         if (config.enable_lru) {
-            lru_queue_.reserve(config.capacity);
+            lru_queue_.reserve(config.initial_capacity);
         }
     }
 
@@ -61,36 +68,33 @@ public:
     NodePool& operator=(NodePool&&) = delete;
 
     /// Allocate a node from the pool
-    /// Returns NULL_NODE if pool is exhausted and recycling fails
+    /// Automatically grows the pool if exhausted
     [[nodiscard]] uint32_t allocate() noexcept {
         uint32_t idx = try_allocate();
         if (idx != NULL_NODE) {
             return idx;
         }
 
-        // Pool exhausted - try recycling if enabled
-        if (config_.enable_lru) {
-            std::lock_guard lock(recycle_mutex_);
+        // Pool exhausted - grow it
+        {
+            std::lock_guard lock(grow_mutex_);
             // Double-check after acquiring lock
             idx = try_allocate();
             if (idx != NULL_NODE) {
                 return idx;
             }
 
-            // Recycle oldest nodes
-            if (recycle_lru_batch()) {
-                return try_allocate();
-            }
+            // Grow the pool by adding a new chunk
+            grow();
+            return try_allocate();
         }
-
-        return NULL_NODE;
     }
 
     /// Allocate a node and initialize it
     [[nodiscard]] uint32_t allocate(Move move, uint32_t parent_idx, bool p1_to_move) noexcept {
         uint32_t idx = allocate();
         if (idx != NULL_NODE) {
-            nodes_[idx].init(move, parent_idx, p1_to_move);
+            node_at(idx).init(move, parent_idx, p1_to_move);
             if (config_.enable_lru) {
                 touch(idx);
             }
@@ -101,12 +105,12 @@ public:
     /// Return a node to the pool
     /// The caller must ensure the node is not referenced elsewhere
     void deallocate(uint32_t idx) noexcept {
-        assert(idx < config_.capacity);
+        assert(idx < total_capacity_.load(std::memory_order_relaxed));
 
         // Push onto free list using CAS
         uint32_t expected = free_head_.load(std::memory_order_relaxed);
         do {
-            nodes_[idx].next_sibling = expected;
+            node_at(idx).next_sibling = expected;
         } while (!free_head_.compare_exchange_weak(
             expected, idx,
             std::memory_order_release, std::memory_order_relaxed));
@@ -114,26 +118,24 @@ public:
         allocated_count_.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    /// Access a node by index
+    /// Access a node by index (chunked indexing)
     [[nodiscard]] StateNode& operator[](uint32_t idx) noexcept {
-        assert(idx < config_.capacity);
-        return nodes_[idx];
+        return node_at(idx);
     }
 
     [[nodiscard]] const StateNode& operator[](uint32_t idx) const noexcept {
-        assert(idx < config_.capacity);
-        return nodes_[idx];
+        return node_at(idx);
     }
 
     /// Get a node, returning nullptr if invalid index
     [[nodiscard]] StateNode* get(uint32_t idx) noexcept {
-        if (idx >= config_.capacity) return nullptr;
-        return &nodes_[idx];
+        if (idx >= total_capacity_.load(std::memory_order_relaxed)) return nullptr;
+        return &node_at(idx);
     }
 
     [[nodiscard]] const StateNode* get(uint32_t idx) const noexcept {
-        if (idx >= config_.capacity) return nullptr;
-        return &nodes_[idx];
+        if (idx >= total_capacity_.load(std::memory_order_relaxed)) return nullptr;
+        return &node_at(idx);
     }
 
     /// Mark node as recently used (for LRU tracking)
@@ -147,27 +149,34 @@ public:
     }
 
     /// Pool statistics
-    [[nodiscard]] size_t capacity() const noexcept { return config_.capacity; }
+    [[nodiscard]] size_t capacity() const noexcept {
+        return total_capacity_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] size_t allocated() const noexcept {
         return allocated_count_.load(std::memory_order_relaxed);
     }
     [[nodiscard]] size_t available() const noexcept {
-        return config_.capacity - allocated();
+        return capacity() - allocated();
     }
     [[nodiscard]] float utilization() const noexcept {
-        return static_cast<float>(allocated()) / static_cast<float>(config_.capacity);
+        return static_cast<float>(allocated()) / static_cast<float>(capacity());
+    }
+    [[nodiscard]] size_t num_chunks() const noexcept {
+        std::lock_guard lock(grow_mutex_);
+        return chunks_.size();
     }
 
     /// Clear all nodes and reset the pool
     void clear() noexcept {
-        std::lock_guard lock1(recycle_mutex_);
+        std::lock_guard lock1(grow_mutex_);
         std::lock_guard lock2(lru_mutex_);
 
-        // Rebuild free list
-        for (size_t i = 0; i < config_.capacity - 1; ++i) {
-            nodes_[i].next_sibling = static_cast<uint32_t>(i + 1);
+        // Rebuild free list across all chunks
+        size_t total = total_capacity_.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < total - 1; ++i) {
+            node_at(static_cast<uint32_t>(i)).next_sibling = static_cast<uint32_t>(i + 1);
         }
-        nodes_[config_.capacity - 1].next_sibling = NULL_NODE;
+        node_at(static_cast<uint32_t>(total - 1)).next_sibling = NULL_NODE;
 
         free_head_.store(0, std::memory_order_relaxed);
         allocated_count_.store(0, std::memory_order_relaxed);
@@ -210,7 +219,7 @@ public:
             // Skip nodes that are in the free list
             // This is O(n) and mainly for debugging - production code should
             // maintain a separate allocated list
-            while (idx_ < pool_->config_.capacity && !is_allocated()) {
+            while (idx_ < pool_->capacity() && !is_allocated()) {
                 ++idx_;
             }
         }
@@ -226,14 +235,27 @@ public:
     };
 
     Iterator begin() { return Iterator(this, 0); }
-    Iterator end() { return Iterator(this, static_cast<uint32_t>(config_.capacity)); }
+    Iterator end() { return Iterator(this, static_cast<uint32_t>(capacity())); }
 
 private:
+    /// Access node by index using chunked storage
+    [[nodiscard]] StateNode& node_at(uint32_t idx) noexcept {
+        size_t chunk_idx = idx / chunk_size_;
+        size_t offset = idx % chunk_size_;
+        return chunks_[chunk_idx][offset];
+    }
+
+    [[nodiscard]] const StateNode& node_at(uint32_t idx) const noexcept {
+        size_t chunk_idx = idx / chunk_size_;
+        size_t offset = idx % chunk_size_;
+        return chunks_[chunk_idx][offset];
+    }
+
     /// Try to allocate from free list (lock-free)
     [[nodiscard]] uint32_t try_allocate() noexcept {
         uint32_t idx = free_head_.load(std::memory_order_relaxed);
         while (idx != NULL_NODE) {
-            uint32_t next = nodes_[idx].next_sibling;
+            uint32_t next = node_at(idx).next_sibling;
             if (free_head_.compare_exchange_weak(
                 idx, next,
                 std::memory_order_acquire, std::memory_order_relaxed)) {
@@ -245,9 +267,51 @@ private:
         return NULL_NODE;
     }
 
+    /// Grow the pool by adding a new chunk
+    /// Must be called with grow_mutex_ held
+    void grow() noexcept {
+        auto start = std::chrono::high_resolution_clock::now();
+
+        add_chunk_unlocked();
+
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+        std::cout << "[NodePool] Grew to " << chunks_.size() << " chunks ("
+                  << total_capacity_.load(std::memory_order_relaxed) << " nodes) in "
+                  << duration_us << " us (no copy needed)\n";
+    }
+
+    /// Add a new chunk without holding the grow mutex
+    /// Called during construction and from grow()
+    void add_chunk_unlocked() noexcept {
+        size_t old_capacity = total_capacity_.load(std::memory_order_relaxed);
+
+        // Allocate new chunk
+        chunks_.push_back(std::make_unique<StateNode[]>(chunk_size_));
+
+        // Initialize free list for the new chunk
+        uint32_t chunk_start = static_cast<uint32_t>(old_capacity);
+        uint32_t chunk_end = static_cast<uint32_t>(old_capacity + chunk_size_ - 1);
+
+        for (uint32_t i = chunk_start; i < chunk_end; ++i) {
+            node_at(i).next_sibling = i + 1;
+        }
+
+        // Link new chunk's last node to existing free list head
+        uint32_t old_head = free_head_.load(std::memory_order_relaxed);
+        node_at(chunk_end).next_sibling = old_head;
+
+        // Update capacity before updating free head (so other threads see valid indices)
+        total_capacity_.store(old_capacity + chunk_size_, std::memory_order_release);
+
+        // Point free head to start of new chunk
+        free_head_.store(chunk_start, std::memory_order_release);
+    }
+
     /// Recycle a batch of LRU nodes
     /// Returns true if nodes were recycled
-    /// Must be called with recycle_mutex_ held
+    /// Must be called with grow_mutex_ held
     bool recycle_lru_batch() noexcept {
         if (lru_queue_.empty()) {
             return false;
@@ -260,7 +324,7 @@ private:
             uint32_t idx = lru_queue_[i];
 
             // Only recycle if node is leaf and has low visit count
-            StateNode& node = nodes_[idx];
+            StateNode& node = node_at(idx);
             if (!node.has_children() &&
                 node.stats.visits.load(std::memory_order_relaxed) < 10) {
 
@@ -285,10 +349,10 @@ private:
 
     /// Unlink a node from its parent's child list
     void unlink_from_parent(uint32_t idx) noexcept {
-        StateNode& node = nodes_[idx];
+        StateNode& node = node_at(idx);
         if (node.parent == NULL_NODE) return;
 
-        StateNode& parent = nodes_[node.parent];
+        StateNode& parent = node_at(node.parent);
 
         if (parent.first_child == idx) {
             // Node is first child
@@ -296,11 +360,11 @@ private:
         } else {
             // Find previous sibling
             uint32_t prev = parent.first_child;
-            while (prev != NULL_NODE && nodes_[prev].next_sibling != idx) {
-                prev = nodes_[prev].next_sibling;
+            while (prev != NULL_NODE && node_at(prev).next_sibling != idx) {
+                prev = node_at(prev).next_sibling;
             }
             if (prev != NULL_NODE) {
-                nodes_[prev].next_sibling = node.next_sibling;
+                node_at(prev).next_sibling = node.next_sibling;
             }
         }
 
@@ -309,18 +373,22 @@ private:
     }
 
     Config config_;
-    std::vector<StateNode> nodes_;
+    size_t chunk_size_;
+
+    // Chunked storage - each chunk is a fixed-size array of nodes
+    std::vector<std::unique_ptr<StateNode[]>> chunks_;
 
     // Lock-free free list
     std::atomic<uint32_t> free_head_;
     std::atomic<size_t> allocated_count_;
+    std::atomic<size_t> total_capacity_;
 
     // LRU tracking (FIFO approximation)
     std::mutex lru_mutex_;
     std::vector<uint32_t> lru_queue_;
 
-    // Recycling synchronization
-    std::mutex recycle_mutex_;
+    // Growth synchronization
+    mutable std::mutex grow_mutex_;
 };
 
 /// RAII helper for allocating nodes
