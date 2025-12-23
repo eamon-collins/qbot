@@ -17,15 +17,11 @@
 #include <csignal>
 
 #include <boost/program_options.hpp>
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <optional>
-#include <random>
 #include <string>
 
 namespace po = boost::program_options;
@@ -198,118 +194,6 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
 // Game Modes
 // ============================================================================
 
-/// Check if a move is in the list of valid moves
-bool is_move_valid(const std::vector<Move>& valid_moves, Move move) {
-    return std::find_if(valid_moves.begin(), valid_moves.end(),
-        [move](const Move& m) { return m == move; }) != valid_moves.end();
-}
-
-/// Find or create a child node for the given move
-/// Returns the child index, or NULL_NODE if move is not found
-uint32_t find_or_create_child(NodePool& pool, uint32_t parent_idx, Move move) {
-    StateNode& parent = pool[parent_idx];
-
-    // First check if move exists among existing children
-    uint32_t child = parent.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].move == move) {
-            return child;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    // If not expanded yet, expand and then find the child
-    if (!parent.is_expanded()) {
-        parent.generate_valid_children(pool, parent_idx);
-    }
-
-    // Now search again
-    child = parent.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].move == move) {
-            return child;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    return NULL_NODE;
-}
-
-/// Select the best move for the bot
-/// Chooses the move with the best Q-value, randomly among ties
-Move select_bot_move(NodePool& pool, uint32_t current_idx) {
-    StateNode& current = pool[current_idx];
-
-    // Ensure children are generated
-    if (!current.is_expanded()) {
-        current.generate_valid_children(pool, current_idx);
-    }
-
-    // Collect all children with their scores
-    struct ScoredChild {
-        uint32_t idx;
-        Move move;
-        float score;
-    };
-    std::vector<ScoredChild> children;
-
-    uint32_t child_idx = current.first_child;
-    while (child_idx != NULL_NODE) {
-        StateNode& child = pool[child_idx];
-        // Q value: for bot (P2), higher Q from P1 perspective means worse for bot
-        // Since P2 wins when terminal_value = -1, we want lower Q (from P1's perspective)
-        // But the stats.Q() is from the edge perspective, which should work correctly
-        float q = child.stats.Q(0.0f);
-        children.push_back({child_idx, child.move, q});
-        child_idx = child.next_sibling;
-    }
-
-    if (children.empty()) {
-        return Move{};  // No valid moves
-    }
-
-    // Find the best score for the current player
-    // P2 (bot) wants to minimize (P1's perspective Q value)
-    // Actually, let's just pick randomly for now since we don't have trained values
-    // We'll pick randomly among all moves, weighted slightly towards pawn moves when fences are low
-    thread_local std::mt19937 rng(std::random_device{}());
-
-    // Find best score (Q value) - since Q is from edge perspective, we want highest Q
-    float best_score = -std::numeric_limits<float>::infinity();
-    for (const auto& c : children) {
-        if (c.score > best_score) {
-            best_score = c.score;
-        }
-    }
-
-    // Collect all children with best score (within epsilon for floating point)
-    std::vector<ScoredChild> best_children;
-    for (const auto& c : children) {
-        if (std::abs(c.score - best_score) < 1e-6f) {
-            best_children.push_back(c);
-        }
-    }
-
-    // Random selection among best
-    std::uniform_int_distribution<size_t> dist(0, best_children.size() - 1);
-    return best_children[dist(rng)].move;
-}
-
-/// Print a move in human-readable format
-void print_move(Move move, bool is_p1) {
-    const char* player = is_p1 ? "Human" : "Bot";
-    if (move.is_pawn()) {
-        std::cout << player << " moves pawn to ("
-                  << static_cast<int>(move.row()) << ", "
-                  << static_cast<int>(move.col()) << ")\n";
-    } else {
-        std::cout << player << " places "
-                  << (move.is_horizontal() ? "horizontal" : "vertical")
-                  << " fence at (" << static_cast<int>(move.row())
-                  << ", " << static_cast<int>(move.col()) << ")\n";
-    }
-}
-
 /// Run interactive game against human
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
@@ -374,8 +258,7 @@ int run_interactive(const Config& config,
                 Move move = GUIClient::to_engine_move(gui_move);
 
                 // Validate the move
-                std::vector<Move> valid_moves = current.generate_valid_moves();
-                if (!is_move_valid(valid_moves, move)) {
+                if (!current.is_move_valid(move)) {
                     std::cout << "ILLEGAL MOVE! ";
                     if (move.is_pawn()) {
                         std::cout << "Pawn move to (" << static_cast<int>(move.row())
@@ -402,10 +285,10 @@ int run_interactive(const Config& config,
                 }
 
                 valid_move = true;
-                print_move(move, true);
+                move.print("Human");
 
                 // Find or create the child node for this move
-                uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+                uint32_t next_idx = current.find_or_create_child(*pool, current_idx, move);
                 if (next_idx == NULL_NODE) {
                     std::cerr << "Error: Failed to create child node for move\n";
                     return 1;
@@ -414,15 +297,15 @@ int run_interactive(const Config& config,
             }
         } else {
             // Bot's turn
-            Move move = select_bot_move(*pool, current_idx);
+            Move move = Game::select_best_move(*pool, current_idx);
             if (!move.is_valid()) {
                 std::cerr << "Error: Bot has no valid moves\n";
                 return 1;
             }
 
-            print_move(move, false);
+            move.print("Bot");
 
-            uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+            uint32_t next_idx = current.find_or_create_child(*pool, current_idx, move);
             if (next_idx == NULL_NODE) {
                 std::cerr << "Error: Failed to create child node for bot's move\n";
                 return 1;

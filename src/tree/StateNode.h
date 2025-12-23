@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <cassert>
@@ -51,6 +52,19 @@ struct Move {
 
     constexpr bool operator==(const Move& other) const noexcept { return data == other.data; }
     constexpr bool operator!=(const Move& other) const noexcept { return data != other.data; }
+
+    /// Print move description to stdout
+    void print(const char* player_name) const noexcept {
+        if (is_pawn()) {
+            std::printf("%s moves pawn to (%d, %d)\n",
+                        player_name, static_cast<int>(row()), static_cast<int>(col()));
+        } else {
+            std::printf("%s places %s fence at (%d, %d)\n",
+                        player_name,
+                        is_horizontal() ? "horizontal" : "vertical",
+                        static_cast<int>(row()), static_cast<int>(col()));
+        }
+    }
 };
 
 static_assert(sizeof(Move) == 2, "Move should be 2 bytes");
@@ -436,6 +450,15 @@ struct alignas(64) StateNode {
     /// @param out_fence_count Optional pointer to receive count of fence moves
     [[nodiscard]] std::vector<Move> generate_valid_moves(size_t* out_fence_count = nullptr) const noexcept;
 
+    /// Check if a move is valid from this position
+    [[nodiscard]] bool is_move_valid(Move move) const noexcept {
+        auto valid_moves = generate_valid_moves();
+        for (const auto& m : valid_moves) {
+            if (m == move) return true;
+        }
+        return false;
+    }
+
     /// Generate all valid child nodes from this position
     /// Allocates children from the pool and links them using left-child right-sibling.
     /// Validates fence moves with pathfinding to ensure no player gets blocked.
@@ -443,6 +466,14 @@ struct alignas(64) StateNode {
     /// @param my_index This node's index in the pool
     /// @return Number of children generated, or 0 if terminal/already expanded/allocation failed
     size_t generate_valid_children(class NodePool& pool, uint32_t my_index) noexcept;
+
+    /// Find or create a child node for the given move
+    /// Searches existing children first, then expands if needed.
+    /// @param pool Node pool for allocation and traversal
+    /// @param my_index This node's index in the pool
+    /// @param move The move to find/create a child for
+    /// @return Child index, or NULL_NODE if move not found after expansion
+    uint32_t find_or_create_child(class NodePool& pool, uint32_t my_index, Move move) noexcept;
 };
 
 // Note: With full game state, size is larger than 64 bytes

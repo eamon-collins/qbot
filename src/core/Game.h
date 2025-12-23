@@ -78,6 +78,14 @@ public:
     /// Get the GUI client (may be nullptr)
     [[nodiscard]] GUIClient* gui() noexcept { return gui_.get(); }
 
+    /// Select the best move from a node based on Q-values
+    /// Chooses randomly among moves with the highest Q-value.
+    /// Static so it can be called without a Game instance.
+    /// @param pool Node pool containing the tree
+    /// @param node_idx Index of the node to select from
+    /// @return Best move, or invalid Move if node has no children
+    [[nodiscard]] static Move select_best_move(NodePool& pool, uint32_t node_idx);
+
     // Non-copyable, non-movable (owns resources)
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;

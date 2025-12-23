@@ -129,14 +129,10 @@ class QuoridorDataset:
         # Meta features (remaining fences)
         meta = np.array([state.p1_fences, state.p2_fences], dtype=np.float32)
 
-        # Target value: Q = total_value / visits (mean value)
-        # For terminal nodes, use terminal_value
-        # Normalize to [-1, 1] with tanh
-        if state.visits > 0:
-            q_value = state.total_value / state.visits
-        else:
-            q_value = state.terminal_value if state.terminal_value != 0 else 0.0
-        target = np.array([np.tanh(q_value)], dtype=np.float32)
+        # Target value: game outcome z ∈ {-1, +1}
+        # leopard outputs actual game outcomes in terminal_value field
+        # +1 = P1 won, -1 = P2 won
+        target = np.array([state.terminal_value], dtype=np.float32)
 
         return (
             torch.from_numpy(pawn),

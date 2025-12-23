@@ -1,6 +1,8 @@
 #include "Game.h"
 
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <random>
 
 namespace qbot {
@@ -120,6 +122,55 @@ size_t Game::build_tree(uint32_t root_idx, float branching_factor,
     }
 
     return nodes_created;
+}
+
+Move Game::select_best_move(NodePool& pool, uint32_t node_idx) {
+    StateNode& current = pool[node_idx];
+
+    // Ensure children are generated
+    if (!current.is_expanded()) {
+        current.generate_valid_children(pool, node_idx);
+    }
+
+    // Collect all children with their scores
+    struct ScoredChild {
+        Move move;
+        float score;
+    };
+    std::vector<ScoredChild> children;
+
+    uint32_t child_idx = current.first_child;
+    while (child_idx != NULL_NODE) {
+        StateNode& child = pool[child_idx];
+        float q = child.stats.Q(0.0f);
+        children.push_back({child.move, q});
+        child_idx = child.next_sibling;
+    }
+
+    if (children.empty()) {
+        return Move{};
+    }
+
+    thread_local std::mt19937 rng(std::random_device{}());
+
+    // Find best score
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (const auto& c : children) {
+        if (c.score > best_score) {
+            best_score = c.score;
+        }
+    }
+
+    // Collect all with best score (within epsilon)
+    std::vector<Move> best_moves;
+    for (const auto& c : children) {
+        if (std::abs(c.score - best_score) < 1e-6f) {
+            best_moves.push_back(c.move);
+        }
+    }
+
+    std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
+    return best_moves[dist(rng)];
 }
 
 } // namespace qbot

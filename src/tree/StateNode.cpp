@@ -305,4 +305,31 @@ size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noe
     return child_indices.size();
 }
 
+uint32_t StateNode::find_or_create_child(NodePool& pool, uint32_t my_index, Move move) noexcept {
+    // First check if move exists among existing children
+    uint32_t child = first_child;
+    while (child != NULL_NODE) {
+        if (pool[child].move == move) {
+            return child;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    // If not expanded yet, expand and then find the child
+    if (!is_expanded()) {
+        generate_valid_children(pool, my_index);
+    }
+
+    // Now search again
+    child = first_child;
+    while (child != NULL_NODE) {
+        if (pool[child].move == move) {
+            return child;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    return NULL_NODE;
+}
+
 } // namespace qbot

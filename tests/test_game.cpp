@@ -390,11 +390,44 @@ TEST_F(GameTest, BuildTreeUntilWinAndPrintPath) {
 }
 
 TEST_F(GameTest, SaveTreeForLeopard) {
+    // Use larger pool to reach terminal states
+    GameConfig config;
+    config.pool_capacity = 2'000'000;
+    game_ = std::make_unique<Game>(config);
+
     uint32_t root = create_root();
 
-    // Build a small tree
-    size_t created = game_->build_tree(root, 0.3f, 5, 500);
-    ASSERT_GT(created, 0);
+    // Build tree with very low branching factor (almost pure depth-first)
+    // to reach terminal states quickly. Quoridor games typically need 30-80 moves.
+    size_t total_created = 0;
+    size_t terminal_count = 0;
+    constexpr float branching_factor = 0.01f;  // Almost pure depth-first
+    constexpr size_t nodes_per_round = 100'000;
+    constexpr int max_rounds = 20;
+
+    for (int round = 0; round < max_rounds; ++round) {
+        size_t created = game_->build_tree(root, branching_factor, 5, nodes_per_round);
+        total_created += created;
+
+        // Count terminal nodes
+        terminal_count = 0;
+        std::deque<uint32_t> queue;
+        queue.push_back(root);
+        while (!queue.empty()) {
+            uint32_t idx = queue.front();
+            queue.pop_front();
+            const StateNode& node = game_->pool()[idx];
+            if (node.is_terminal()) terminal_count++;
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                queue.push_back(child);
+                child = game_->pool()[child].next_sibling;
+            }
+        }
+        if (terminal_count >= 3) break;  // Have enough terminals
+    }
+
+    ASSERT_GT(total_created, 0);
 
     // Save to temp file
     const char* path = "/tmp/leopard_test.qbot";
@@ -402,7 +435,8 @@ TEST_F(GameTest, SaveTreeForLeopard) {
     ASSERT_TRUE(result.has_value()) << "Failed to save: " << to_string(result.error());
 
     if (is_single_test_run()) {
-        std::cout << "\nSaved " << (created + 1) << " nodes to " << path << std::endl;
-        std::cout << "Run: ./leopard " << path << " | head -c 1000 | xxd" << std::endl;
+        std::cout << "\nSaved " << game_->pool().allocated() << " nodes to " << path << std::endl;
+        std::cout << "Found " << terminal_count << " terminal nodes (completed games)" << std::endl;
+        std::cout << "Run: ./leopard " << path << std::endl;
     }
 }

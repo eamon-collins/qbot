@@ -43,7 +43,7 @@ public:
     explicit NodePool(Config config)
         : config_(config)
         , chunk_size_(config.chunk_size)
-        , free_head_(0)
+        , free_head_(0)  // Will point to index 0 after initialization
         , allocated_count_(0)
         , total_capacity_(0)
     {
@@ -51,10 +51,21 @@ public:
         size_t initial_chunks = (config.initial_capacity + config.chunk_size - 1) / config.chunk_size;
         if (initial_chunks == 0) initial_chunks = 1;
 
-        // Allocate initial chunks
+        // Allocate all initial chunks
         for (size_t i = 0; i < initial_chunks; ++i) {
-            add_chunk_unlocked();
+            chunks_.push_back(std::make_unique<StateNode[]>(chunk_size_));
         }
+
+        // Build free list in FORWARD order (0 -> 1 -> 2 -> ... -> N-1 -> NULL)
+        // This ensures sequential allocation which is required for save/load
+        size_t total = initial_chunks * chunk_size_;
+        for (size_t i = 0; i + 1 < total; ++i) {
+            node_at(static_cast<uint32_t>(i)).next_sibling = static_cast<uint32_t>(i + 1);
+        }
+        node_at(static_cast<uint32_t>(total - 1)).next_sibling = NULL_NODE;
+
+        total_capacity_.store(total, std::memory_order_relaxed);
+        free_head_.store(0, std::memory_order_relaxed);
 
         if (config.enable_lru) {
             lru_queue_.reserve(config.initial_capacity);
@@ -164,6 +175,16 @@ public:
     [[nodiscard]] size_t num_chunks() const noexcept {
         std::lock_guard lock(grow_mutex_);
         return chunks_.size();
+    }
+
+    /// Memory usage in bytes (allocated nodes * node size)
+    [[nodiscard]] size_t memory_usage_bytes() const noexcept {
+        return allocated() * sizeof(StateNode);
+    }
+
+    /// Total memory capacity in bytes
+    [[nodiscard]] size_t memory_capacity_bytes() const noexcept {
+        return capacity() * sizeof(StateNode);
     }
 
     /// Clear all nodes and reset the pool

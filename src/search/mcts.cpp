@@ -22,6 +22,10 @@ void MCTSEngine::start_training(NodePool& pool, uint32_t root_idx) {
     std::cout << "Starting MCTS training with " << config_.num_threads << " threads\n";
     std::cout << "  c_puct: " << config_.c_puct << "\n";
     std::cout << "  virtual_loss: " << config_.virtual_loss_amount << "\n";
+    std::cout << "  memory limit: " << (config_.bounds.max_bytes / (1024ULL * 1024 * 1024)) << " GB\n";
+    std::cout << "  soft limit: " << (config_.bounds.soft_limit_ratio * 100) << "%"
+              << ", hard limit: " << (config_.bounds.hard_limit_ratio * 100) << "%\n";
+    std::cout << "  min visits to expand: " << config_.bounds.min_visits_to_expand << "\n";
     std::cout << "  checkpoint interval: " << config_.checkpoint_interval_seconds << "s\n";
     if (!config_.checkpoint_path.empty()) {
         std::cout << "  checkpoint path: " << config_.checkpoint_path << "\n";
@@ -73,35 +77,52 @@ void MCTSEngine::mcts_iteration(NodePool& pool, uint32_t root_idx) {
     float value;
     uint32_t eval_node_idx = selection.leaf_idx;
 
-    if (selection.reached_terminal) {
-        // Terminal node - use known value
-        value = pool[selection.leaf_idx].terminal_value;
-    } else {
-        StateNode& leaf = pool[selection.leaf_idx];
+    switch (selection.expansion) {
+        case ExpansionDecision::Terminal:
+            // Terminal node - use known value
+            value = pool[selection.leaf_idx].terminal_value;
+            break;
 
-        // EXPANSION: generate children if not already expanded
-        if (!leaf.is_expanded()) {
-            // Only one thread expands at a time to prevent duplicate children
-            std::lock_guard lock(expansion_mutex_);
+        case ExpansionDecision::UseNNEvaluation:
+            // Memory pressure too high - skip expansion, evaluate directly
+            stats_.skipped_expansions.fetch_add(1, std::memory_order_relaxed);
+            {
+                uint32_t root_visits = pool[root_idx].stats.visits.load(std::memory_order_relaxed);
+                value = evaluate_leaf(pool[eval_node_idx], config_, root_visits, stats_, inference_);
+            }
+            break;
+
+        case ExpansionDecision::Expand:
+        case ExpansionDecision::AlreadyExpanded:
+        default: {
+            StateNode& leaf = pool[selection.leaf_idx];
+
+            // EXPANSION: generate children if not already expanded
             if (!leaf.is_expanded()) {
-                leaf.generate_valid_children(pool, selection.leaf_idx);
+                // Use striped mutex - allows parallel expansion of different nodes
+                size_t mutex_idx = selection.leaf_idx % NUM_EXPANSION_MUTEXES;
+                std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+                if (!leaf.is_expanded()) {
+                    leaf.generate_valid_children(pool, selection.leaf_idx);
+                }
             }
-        }
 
-        // If expansion created children, select one for evaluation
-        if (leaf.has_children()) {
-            uint32_t child = select_child_puct(pool, selection.leaf_idx, config_);
-            if (child != NULL_NODE) {
-                // Add virtual loss to selected child and add to path
-                pool[child].stats.add_virtual_loss(config_.virtual_loss_amount);
-                selection.path.push_back(child);
-                eval_node_idx = child;
+            // If expansion created children, select one for evaluation
+            if (leaf.has_children()) {
+                uint32_t child = select_child_puct(pool, selection.leaf_idx, config_);
+                if (child != NULL_NODE) {
+                    // Add virtual loss to selected child and add to path
+                    pool[child].stats.add_virtual_loss(config_.virtual_loss_amount);
+                    selection.path.push_back(child);
+                    eval_node_idx = child;
+                }
             }
-        }
 
-        // EVALUATION
-        uint32_t root_visits = pool[root_idx].stats.visits.load(std::memory_order_relaxed);
-        value = evaluate_leaf(pool[eval_node_idx], config_, root_visits, stats_, inference_);
+            // EVALUATION
+            uint32_t root_visits = pool[root_idx].stats.visits.load(std::memory_order_relaxed);
+            value = evaluate_leaf(pool[eval_node_idx], config_, root_visits, stats_, inference_);
+            break;
+        }
     }
 
     // Update max depth statistic
@@ -232,9 +253,16 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
     uint64_t iterations = stats_.total_iterations.load(std::memory_order_relaxed);
     uint64_t rollouts = stats_.total_rollouts.load(std::memory_order_relaxed);
     uint64_t nn_evals = stats_.nn_evaluations.load(std::memory_order_relaxed);
+    uint64_t skipped = stats_.skipped_expansions.load(std::memory_order_relaxed);
     uint32_t depth = stats_.max_depth.load(std::memory_order_relaxed);
 
     double iter_per_sec = elapsed > 0 ? static_cast<double>(iterations) / elapsed : 0;
+
+    // Memory usage
+    size_t mem_used_mb = pool.memory_usage_bytes() / (1024 * 1024);
+    size_t mem_limit_mb = config_.bounds.max_bytes / (1024 * 1024);
+    float mem_pct = 100.0f * static_cast<float>(pool.memory_usage_bytes()) /
+                    static_cast<float>(config_.bounds.max_bytes);
 
     // Format time as HH:MM:SS
     int hours = static_cast<int>(elapsed / 3600);
@@ -247,11 +275,16 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
        << std::setw(2) << mins << ":"
        << std::setw(2) << secs << "] ";
 
-    ss << "Iterations: " << iterations
+    ss << "Iter: " << iterations
        << ", Nodes: " << pool.allocated()
+       << ", Mem: " << mem_used_mb << "/" << mem_limit_mb << "MB"
+       << " (" << std::fixed << std::setprecision(1) << mem_pct << "%)"
        << ", Depth: " << depth
-       << ", Rate: " << std::fixed << std::setprecision(0) << iter_per_sec << "/s";
+       << ", Rate: " << std::setprecision(0) << iter_per_sec << "/s";
 
+    if (skipped > 0) {
+        ss << ", Skipped: " << skipped;
+    }
     if (nn_evals > 0) {
         ss << ", NN: " << nn_evals;
     }

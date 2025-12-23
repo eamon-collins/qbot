@@ -14,6 +14,7 @@
 #include "../util/pathfinding.h"
 #include "../util/storage.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -38,6 +39,16 @@ namespace qbot {
 // Configuration
 // ============================================================================
 
+/// Tree memory bounds configuration
+/// Controls when to stop expanding and use NN evaluation instead
+struct TreeBoundsConfig {
+    size_t max_bytes = 40ULL * 1024 * 1024 * 1024;  // 40GB default
+    float soft_limit_ratio = 0.80f;   // Start being selective about expansion
+    float hard_limit_ratio = 0.95f;   // Stop expanding entirely
+    uint32_t min_visits_to_expand = 8; // Min visits at soft limit to expand
+    bool enable_recycling = false;    // LRU recycling when full (future)
+};
+
 /// MCTS configuration - all parameters in one place
 struct MCTSConfig {
     // Selection parameters
@@ -48,6 +59,9 @@ struct MCTSConfig {
     // Evaluation parameters
     int max_rollout_depth = 200;               // Max moves in random rollout
 
+    // Tree bounds
+    TreeBoundsConfig bounds;                   // Memory limit configuration
+
     // Threading
     int num_threads = 4;                       // Worker threads for parallel MCTS
     int checkpoint_interval_seconds = 300;     // Time between checkpoints (5 min default)
@@ -57,11 +71,20 @@ struct MCTSConfig {
     std::filesystem::path model_path;          // Optional NN model path
 };
 
+/// Result of expansion decision
+enum class ExpansionDecision {
+    Expand,          // Expand the node normally
+    UseNNEvaluation, // Skip expansion, use NN to evaluate directly
+    AlreadyExpanded, // Node was already expanded
+    Terminal         // Node is terminal, no expansion needed
+};
+
 /// Result of selection phase - path from root to leaf
 struct SelectionResult {
     std::vector<uint32_t> path;                // Node indices from root to leaf
     uint32_t leaf_idx{NULL_NODE};              // Final node (leaf or terminal)
     bool reached_terminal{false};              // True if hit a terminal game state
+    ExpansionDecision expansion{ExpansionDecision::Expand}; // What to do with leaf
 };
 
 /// Training statistics - all atomic for thread safety
@@ -69,6 +92,7 @@ struct TrainingStats {
     std::atomic<uint64_t> total_iterations{0};  // MCTS iterations completed
     std::atomic<uint64_t> total_rollouts{0};    // Random rollouts performed
     std::atomic<uint64_t> nn_evaluations{0};    // NN evaluations performed
+    std::atomic<uint64_t> skipped_expansions{0}; // Expansions skipped due to memory limit
     std::atomic<uint32_t> max_depth{0};         // Deepest node reached
     std::chrono::steady_clock::time_point start_time;
 
@@ -76,6 +100,7 @@ struct TrainingStats {
         total_iterations.store(0, std::memory_order_relaxed);
         total_rollouts.store(0, std::memory_order_relaxed);
         nn_evaluations.store(0, std::memory_order_relaxed);
+        skipped_expansions.store(0, std::memory_order_relaxed);
         max_depth.store(0, std::memory_order_relaxed);
         start_time = std::chrono::steady_clock::now();
     }
@@ -89,6 +114,74 @@ struct TrainingStats {
         }
     }
 };
+
+// ============================================================================
+// Expansion Policy
+// ============================================================================
+
+/// Determine whether a node should be expanded based on memory pressure
+/// Returns true if expansion is allowed, false if should use NN evaluation instead
+///
+/// Policy:
+/// - Below soft limit: always expand
+/// - Between soft and hard limit: expand only if visit count exceeds threshold
+/// - Above hard limit: never expand (use NN evaluation)
+///
+/// The visit threshold scales linearly with memory pressure, making expansion
+/// progressively more selective as the tree approaches capacity.
+[[nodiscard]] inline bool should_expand(
+    const NodePool& pool,
+    const StateNode& node,
+    const TreeBoundsConfig& bounds) noexcept
+{
+    size_t current_bytes = pool.memory_usage_bytes();
+    float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
+
+    // Below soft limit: always expand
+    if (utilization < bounds.soft_limit_ratio) {
+        return true;
+    }
+
+    // Above hard limit: never expand
+    if (utilization >= bounds.hard_limit_ratio) {
+        return false;
+    }
+
+    // In the soft-to-hard zone: scale threshold based on pressure
+    // pressure goes from 0.0 (at soft limit) to 1.0 (at hard limit)
+    float pressure = (utilization - bounds.soft_limit_ratio) /
+                     (bounds.hard_limit_ratio - bounds.soft_limit_ratio);
+
+    // Threshold increases as we approach hard limit
+    // At soft limit: threshold = min_visits_to_expand
+    // At hard limit: threshold = min_visits_to_expand * 5
+    uint32_t threshold = static_cast<uint32_t>(
+        bounds.min_visits_to_expand * (1.0f + pressure * 4.0f));
+
+    uint32_t visits = node.stats.visits.load(std::memory_order_relaxed);
+    return visits >= threshold;
+}
+
+/// Decide what to do with a leaf node
+[[nodiscard]] inline ExpansionDecision decide_expansion(
+    const NodePool& pool,
+    const StateNode& node,
+    const TreeBoundsConfig& bounds) noexcept
+{
+    if (node.is_terminal()) {
+        return ExpansionDecision::Terminal;
+    }
+
+    if (node.is_expanded()) {
+        return ExpansionDecision::AlreadyExpanded;
+    }
+
+    if (should_expand(pool, node, bounds)) {
+        return ExpansionDecision::Expand;
+    }
+
+    return ExpansionDecision::UseNNEvaluation;
+}
 
 // ============================================================================
 // Selection Functions
@@ -130,10 +223,11 @@ struct TrainingStats {
 
 /// Traverse from root to leaf, applying virtual loss along the path
 /// Virtual loss discourages other threads from selecting the same path
+/// Also determines whether the leaf should be expanded based on memory bounds
 /// @param pool Node pool
 /// @param root_idx Starting node
 /// @param config MCTS configuration
-/// @return Selection result with path and leaf info
+/// @return Selection result with path, leaf info, and expansion decision
 [[nodiscard]] inline SelectionResult select_to_leaf(
     NodePool& pool,
     uint32_t root_idx,
@@ -141,6 +235,7 @@ struct TrainingStats {
 {
     SelectionResult result;
     result.reached_terminal = false;
+    result.expansion = ExpansionDecision::Expand;
 
     uint32_t current = root_idx;
     while (current != NULL_NODE) {
@@ -152,11 +247,13 @@ struct TrainingStats {
 
         if (node.is_terminal()) {
             result.reached_terminal = true;
+            result.expansion = ExpansionDecision::Terminal;
             break;
         }
 
         if (!node.has_children()) {
-            // Leaf node - needs expansion
+            // Leaf node - decide whether to expand based on memory pressure
+            result.expansion = decide_expansion(pool, node, config.bounds);
             break;
         }
 
@@ -591,8 +688,10 @@ private:
     std::condition_variable pause_cv_;
     std::atomic<int> workers_paused_{0};
 
-    // Expansion mutex - prevents multiple threads expanding same node
-    std::mutex expansion_mutex_;
+    // Striped expansion mutexes - allows parallel expansion of different nodes
+    // while preventing races on the same node. Index = node_idx % array_size
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 256;
+    std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 
     // Reference to pool and root for checkpointing
     NodePool* pool_ptr_{nullptr};
