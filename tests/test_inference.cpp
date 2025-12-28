@@ -3,6 +3,7 @@
 #include "tree/StateNode.h"
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -18,6 +19,50 @@ bool is_single_test_run() {
 }
 
 const char* DEFAULT_MODEL_PATH = "/home/eamon/repos/qbot/model/tree.pt";
+const char* TEST_MODEL_PATH = "/tmp/test_model.pt";
+
+// Create a fresh model with current architecture for testing
+bool create_test_model() {
+    // Python script to create and export a fresh model
+    const char* script = R"(
+import sys
+sys.path.insert(0, '/home/eamon/repos/qbot/train')
+import torch
+from resnet import QuoridorValueNet
+
+model = QuoridorValueNet()
+model.eval()
+
+# Create example inputs with current dimensions (meta has 3 elements now)
+example_pawn = torch.zeros(1, 2, 9, 9)
+example_wall = torch.zeros(1, 2, 8, 8)
+example_meta = torch.zeros(1, 3)
+
+traced = torch.jit.trace(model, (example_pawn, example_wall, example_meta))
+traced.save('/tmp/test_model.pt')
+print('Model saved successfully')
+)";
+
+    std::string cmd = "python3 -c \"" + std::string(script) + "\" 2>&1";
+    int result = std::system(cmd.c_str());
+    return result == 0;
+}
+
+// Check if a model file is compatible with current input dimensions
+bool is_model_compatible(const std::string& path) {
+    try {
+        ModelInference inference(path, 1, false);
+        if (!inference.is_ready()) return false;
+
+        // Create a dummy node and try to evaluate
+        StateNode dummy;
+        dummy.init_root(true);
+        inference.evaluate_node(&dummy);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 }
 
 class InferenceTest : public ::testing::Test {
@@ -67,13 +112,25 @@ protected:
 TEST_F(InferenceTest, EvaluateRandomLeafNode) {
     const bool verbose = is_single_test_run();
 
-    // Check if model file exists
-    std::ifstream model_file(DEFAULT_MODEL_PATH);
-    if (!model_file.good()) {
-        GTEST_SKIP() << "Model file not found: " << DEFAULT_MODEL_PATH;
-        return;
+    // Determine which model to use
+    std::string model_path;
+    std::ifstream default_model(DEFAULT_MODEL_PATH);
+    if (default_model.good() && is_model_compatible(DEFAULT_MODEL_PATH)) {
+        model_path = DEFAULT_MODEL_PATH;
+        if (verbose) {
+            std::cout << "Using default model: " << DEFAULT_MODEL_PATH << std::endl;
+        }
+    } else {
+        // Create a fresh test model with current architecture
+        if (verbose) {
+            std::cout << "Default model missing or incompatible, creating test model..." << std::endl;
+        }
+        if (!create_test_model()) {
+            GTEST_SKIP() << "Failed to create test model (requires Python with PyTorch)";
+            return;
+        }
+        model_path = TEST_MODEL_PATH;
     }
-    model_file.close();
 
     // Build a small tree
     uint32_t root = create_root();
@@ -109,7 +166,7 @@ TEST_F(InferenceTest, EvaluateRandomLeafNode) {
 
     // Load model and evaluate
     try {
-        ModelInference inference(DEFAULT_MODEL_PATH, 16, true);
+        ModelInference inference(model_path, 16, true);
 
         if (verbose) {
             std::cout << "\n--- Model Diagnostics ---" << std::endl;
@@ -138,12 +195,19 @@ TEST_F(InferenceTest, EvaluateRandomLeafNode) {
 TEST_F(InferenceTest, BatchEvaluation) {
     const bool verbose = is_single_test_run();
 
-    std::ifstream model_file(DEFAULT_MODEL_PATH);
-    if (!model_file.good()) {
-        GTEST_SKIP() << "Model file not found: " << DEFAULT_MODEL_PATH;
-        return;
+    // Determine which model to use
+    std::string model_path;
+    std::ifstream default_model(DEFAULT_MODEL_PATH);
+    if (default_model.good() && is_model_compatible(DEFAULT_MODEL_PATH)) {
+        model_path = DEFAULT_MODEL_PATH;
+    } else {
+        // Create a fresh test model with current architecture
+        if (!create_test_model()) {
+            GTEST_SKIP() << "Failed to create test model (requires Python with PyTorch)";
+            return;
+        }
+        model_path = TEST_MODEL_PATH;
     }
-    model_file.close();
 
     // Build a tree
     uint32_t root = create_root();
@@ -153,7 +217,7 @@ TEST_F(InferenceTest, BatchEvaluation) {
     ASSERT_GT(leaves.size(), 0);
 
     try {
-        ModelInference inference(DEFAULT_MODEL_PATH, 8, true);
+        ModelInference inference(model_path, 8, true);
         ASSERT_TRUE(inference.is_ready());
 
         // Queue several nodes for batch evaluation

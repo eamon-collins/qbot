@@ -1,12 +1,11 @@
 /// leopard - Tree file to training data converter
 ///
-/// AlphaZero-style training data extraction:
-/// Finds all terminal nodes (completed games) and traces back to root,
-/// outputting each position labeled with the actual game outcome.
+/// Extracts training data from MCTS tree using accumulated Q-values.
+/// Each node's Q-value represents the average outcome from that position,
+/// based on all simulations that passed through it.
 ///
 /// Output format: SerializedNode structs where terminal_value contains
-/// the game outcome (z = +1 if P1 won, -1 if P2 won) for ALL nodes,
-/// not just terminal ones.
+/// the Q-value from P1's perspective (positive = P1 advantage).
 
 #include "storage.h"
 #include "../tree/StateNode.h"
@@ -14,13 +13,15 @@
 #include <cstdio>
 #include <deque>
 #include <iostream>
-#include <unordered_set>
 #include <vector>
 
 using namespace qbot;
 
-/// Serialize a node with a specific outcome value
-void output_node(const StateNode& node, float outcome) {
+// Minimum visits required for a node to be included in training data
+constexpr uint32_t MIN_VISITS_FOR_TRAINING = 5;
+
+/// Serialize a node with its Q-value (from P1's perspective)
+void output_node(const StateNode& node, float value) {
     SerializedNode serialized;
     serialized.first_child = node.first_child;
     serialized.next_sibling = node.next_sibling;
@@ -40,8 +41,8 @@ void output_node(const StateNode& node, float outcome) {
     serialized.visits = node.stats.visits.load(std::memory_order_relaxed);
     serialized.total_value = node.stats.total_value.load(std::memory_order_relaxed);
     serialized.prior = node.stats.prior;
-    // Store the GAME OUTCOME, not the node's terminal status
-    serialized.terminal_value = outcome;
+    // Store Q-value from P1's perspective
+    serialized.terminal_value = value;
 
     std::fwrite(&serialized, sizeof(SerializedNode), 1, stdout);
 }
@@ -50,12 +51,13 @@ int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: leopard <tree_file>\n";
         std::cerr << "\n";
-        std::cerr << "Extracts AlphaZero-style training data from a tree file.\n";
-        std::cerr << "Finds completed games (terminal nodes) and outputs all positions\n";
-        std::cerr << "along each game path, labeled with the actual game outcome.\n";
+        std::cerr << "Extracts training data from MCTS tree using Q-values.\n";
+        std::cerr << "Outputs all nodes with sufficient visits, labeled with their\n";
+        std::cerr << "accumulated Q-value (from P1's perspective).\n";
         std::cerr << "\n";
         std::cerr << "Output: Binary SerializedNode structs to stdout.\n";
-        std::cerr << "        terminal_value field contains game outcome z ∈ {-1, +1}\n";
+        std::cerr << "        terminal_value field contains Q ∈ [-1, +1] from P1's perspective\n";
+        std::cerr << "        (positive = P1 advantage, negative = P2 advantage)\n";
         return 1;
     }
 
@@ -73,19 +75,43 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Step 1: Find all terminal nodes via BFS
-    std::vector<uint32_t> terminal_nodes;
+    // BFS through tree, output all nodes with sufficient visits
     std::deque<uint32_t> queue;
     queue.push_back(root);
+
+    size_t sample_count = 0;
+    size_t terminal_count = 0;
+    size_t skipped_low_visits = 0;
 
     while (!queue.empty()) {
         uint32_t idx = queue.front();
         queue.pop_front();
 
         const StateNode& node = (*pool)[idx];
+        uint32_t visits = node.stats.visits.load(std::memory_order_relaxed);
 
-        if (node.is_terminal()) {
-            terminal_nodes.push_back(idx);
+        // Check if node has enough visits to be useful training data
+        if (visits >= MIN_VISITS_FOR_TRAINING) {
+            float q_value;
+
+            if (node.is_terminal()) {
+                // Terminal nodes have known exact values
+                q_value = node.terminal_value;
+                ++terminal_count;
+            } else {
+                // Get Q-value: stored Q is from perspective of player to move
+                // We need to convert to P1's perspective for consistent training
+                float stored_q = node.stats.Q(0.0f);
+
+                // If P1 to move: stored Q is already from P1's perspective
+                // If P2 to move: stored Q is from P2's perspective, negate for P1's
+                q_value = node.is_p1_to_move() ? stored_q : -stored_q;
+            }
+
+            output_node(node, q_value);
+            ++sample_count;
+        } else {
+            ++skipped_low_visits;
         }
 
         // Add children to queue
@@ -96,42 +122,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cerr << "Found " << terminal_nodes.size() << " terminal nodes (completed games)\n";
-
-    if (terminal_nodes.empty()) {
-        std::cerr << "No completed games in tree - nothing to output\n";
-        return 0;
-    }
-
-    // Step 2: For each terminal, trace back to root and output training samples
-    // Track which nodes we've already output to avoid duplicates
-    // (same position can be reached via different game paths)
-    std::unordered_set<uint32_t> output_nodes;
-    size_t sample_count = 0;
-    size_t game_count = 0;
-
-    for (uint32_t terminal_idx : terminal_nodes) {
-        const StateNode& terminal = (*pool)[terminal_idx];
-        float outcome = terminal.terminal_value;  // z = +1 (P1 wins) or -1 (P2 wins)
-
-        // Walk back to root
-        uint32_t current = terminal_idx;
-        while (current != NULL_NODE) {
-            // Only output each node once (first game path wins)
-            if (output_nodes.find(current) == output_nodes.end()) {
-                output_node((*pool)[current], outcome);
-                output_nodes.insert(current);
-                ++sample_count;
-            }
-
-            current = (*pool)[current].parent;
-        }
-        ++game_count;
-    }
-
-    std::cerr << "Wrote " << sample_count << " training samples from "
-              << game_count << " games ("
+    std::cerr << "Found " << terminal_count << " terminal nodes (completed games)\n";
+    std::cerr << "Wrote " << sample_count << " training samples ("
               << (sample_count * sizeof(SerializedNode)) << " bytes)\n";
+    std::cerr << "Skipped " << skipped_low_visits << " nodes with < "
+              << MIN_VISITS_FOR_TRAINING << " visits\n";
 
     return 0;
 }

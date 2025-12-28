@@ -14,6 +14,10 @@
 #include "../search/mcts.h"
 #include "Game.h"
 
+#ifdef QBOT_ENABLE_INFERENCE
+#include "../inference/inference.h"
+#endif
+
 #include <csignal>
 
 #include <boost/program_options.hpp>
@@ -213,6 +217,21 @@ int run_interactive(const Config& config,
     }
     std::cout << "Connected to GUI!\n\n";
 
+#ifdef QBOT_ENABLE_INFERENCE
+    // Load model for position evaluation if specified
+    std::unique_ptr<ModelInference> model;
+    if (!config.model_file.empty()) {
+        std::cout << "Loading model from: " << config.model_file << "\n";
+        model = std::make_unique<ModelInference>(config.model_file);
+        if (model->is_ready()) {
+            std::cout << "Model loaded successfully!\n\n";
+        } else {
+            std::cerr << "Warning: Failed to load model, using Q-values instead\n\n";
+            model.reset();
+        }
+    }
+#endif
+
     // Initialize the root node with starting game state
     StateNode& root_node = (*pool)[root];
     root_node.init_root(true);  // P1 (human) starts
@@ -225,7 +244,13 @@ int run_interactive(const Config& config,
     while (!game_over) {
         StateNode& current = (*pool)[current_idx];
 
+        // Evaluate current position - use model if available, otherwise Q-value
         float score = current.stats.Q(0.0f);
+#ifdef QBOT_ENABLE_INFERENCE
+        if (model && model->is_ready()) {
+            score = model->evaluate_node(&current);
+        }
+#endif
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
 
         // Check for terminal state

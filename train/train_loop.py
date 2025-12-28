@@ -132,9 +132,10 @@ def export_model(model: QuoridorValueNet, export_path: str) -> bool:
         model.cpu()  # Ensure model is on CPU for export
 
         # Create example inputs for tracing
+        # meta has 3 elements: p1_fences, p2_fences, turn_indicator
         example_pawn = torch.zeros(1, 2, 9, 9)
         example_wall = torch.zeros(1, 2, 8, 8)
-        example_meta = torch.zeros(1, 2)
+        example_meta = torch.zeros(1, 3)
 
         traced = torch.jit.trace(model, (example_pawn, example_wall, example_meta))
         traced.save(export_path)
@@ -165,9 +166,9 @@ def main():
     # Paths
     parser.add_argument('--tree', type=str, default='tree.qbot',
                         help='Path to tree file')
-    parser.add_argument('--model', type=str, default='model.pt',
+    parser.add_argument('--model', type=str, default='treestyle.model',
                         help='Path to model weights file')
-    parser.add_argument('--export-model', type=str, default='model_traced.pt',
+    parser.add_argument('--export-model', type=str, default='treestyle.pt',
                         dest='export_model',
                         help='Path to exported TorchScript model')
 
