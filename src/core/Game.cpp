@@ -1,5 +1,9 @@
 #include "Game.h"
 
+#ifdef QBOT_ENABLE_INFERENCE
+#include "../inference/inference.h"
+#endif
+
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -11,6 +15,12 @@ Game::Game(Config config)
     : config_(config)
     , pool_(std::make_unique<NodePool>(NodePool::Config{.initial_capacity = config.pool_capacity}))
     , root_(NULL_NODE)
+{}
+
+Game::Game(std::unique_ptr<NodePool> pool, uint32_t root)
+    : config_()
+    , pool_(std::move(pool))
+    , root_(root)
 {}
 
 Game::~Game() {
@@ -80,7 +90,7 @@ size_t Game::build_tree(uint32_t root_idx, float branching_factor,
 
         // Expand if not already expanded
         if (!current.is_expanded()) {
-            size_t children_created = current.generate_valid_children(*pool_, current_idx);
+            size_t children_created = current.generate_valid_children();
             nodes_created += children_created;
 
             if (children_created == 0) {
@@ -124,12 +134,12 @@ size_t Game::build_tree(uint32_t root_idx, float branching_factor,
     return nodes_created;
 }
 
-Move Game::select_best_move(NodePool& pool, uint32_t node_idx) {
+Move Game::select_best_move_by_q(NodePool& pool, uint32_t node_idx) {
     StateNode& current = pool[node_idx];
 
     // Ensure children are generated
     if (!current.is_expanded()) {
-        current.generate_valid_children(pool, node_idx);
+        current.generate_valid_children();
     }
 
     // Collect all children with their scores
@@ -171,6 +181,47 @@ Move Game::select_best_move(NodePool& pool, uint32_t node_idx) {
 
     std::uniform_int_distribution<size_t> dist(0, best_moves.size() - 1);
     return best_moves[dist(rng)];
+}
+
+Move Game::select_best_move(uint32_t node_idx) {
+#ifdef QBOT_ENABLE_INFERENCE
+    if (model_ && model_->is_ready()) {
+        StateNode& current = (*pool_)[node_idx];
+
+        // Ensure children are generated
+        if (!current.is_expanded()) {
+            current.generate_valid_children();
+        }
+
+        if (current.first_child == NULL_NODE) {
+            return Move{};
+        }
+
+        // P1 wants to maximize score (closer to +1), P2 wants to minimize (closer to -1)
+        bool maximize = current.is_p1_to_move();
+        Move best_move;
+        float best_score = maximize ? -std::numeric_limits<float>::infinity()
+                                    : std::numeric_limits<float>::infinity();
+
+        uint32_t child_idx = current.first_child;
+        while (child_idx != NULL_NODE) {
+            StateNode& child = (*pool_)[child_idx];
+            float score = model_->evaluate_node(&child);
+
+            bool dominated = maximize ? (score > best_score) : (score < best_score);
+            if (dominated) {
+                best_score = score;
+                best_move = child.move;
+            }
+
+            child_idx = child.next_sibling;
+        }
+
+        return best_move;
+    }
+#endif
+    // Fall back to Q-value selection
+    return select_best_move_by_q(*pool_, node_idx);
 }
 
 } // namespace qbot

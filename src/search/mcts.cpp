@@ -103,7 +103,7 @@ void MCTSEngine::mcts_iteration(NodePool& pool, uint32_t root_idx) {
                 size_t mutex_idx = selection.leaf_idx % NUM_EXPANSION_MUTEXES;
                 std::lock_guard lock(expansion_mutexes_[mutex_idx]);
                 if (!leaf.is_expanded()) {
-                    leaf.generate_valid_children(pool, selection.leaf_idx);
+                    leaf.generate_valid_children();
                 }
             }
 

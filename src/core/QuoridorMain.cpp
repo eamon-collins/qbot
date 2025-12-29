@@ -202,6 +202,9 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
                     uint32_t root) {
+    // Create Game instance from the pool
+    Game game(std::move(pool), root);
+
     // Connect to GUI
     GUIClient gui;
     GUIClient::Config gui_config;
@@ -225,6 +228,7 @@ int run_interactive(const Config& config,
         model = std::make_unique<ModelInference>(config.model_file);
         if (model->is_ready()) {
             std::cout << "Model loaded successfully!\n\n";
+            game.set_model(model.get());
         } else {
             std::cerr << "Warning: Failed to load model, using Q-values instead\n\n";
             model.reset();
@@ -233,7 +237,7 @@ int run_interactive(const Config& config,
 #endif
 
     // Initialize the root node with starting game state
-    StateNode& root_node = (*pool)[root];
+    StateNode& root_node = game.pool()[root];
     root_node.init_root(true);  // P1 (human) starts
 
     gui.send_start("Human", "Bot");
@@ -242,7 +246,7 @@ int run_interactive(const Config& config,
     bool game_over = false;
 
     while (!game_over) {
-        StateNode& current = (*pool)[current_idx];
+        StateNode& current = game.pool()[current_idx];
 
         // Evaluate current position - use model if available, otherwise Q-value
         float score = current.stats.Q(0.0f);
@@ -313,7 +317,7 @@ int run_interactive(const Config& config,
                 move.print("Human");
 
                 // Find or create the child node for this move
-                uint32_t next_idx = current.find_or_create_child(*pool, current_idx, move);
+                uint32_t next_idx = current.find_or_create_child(move);
                 if (next_idx == NULL_NODE) {
                     std::cerr << "Error: Failed to create child node for move\n";
                     return 1;
@@ -321,8 +325,8 @@ int run_interactive(const Config& config,
                 current_idx = next_idx;
             }
         } else {
-            // Bot's turn
-            Move move = Game::select_best_move(*pool, current_idx);
+            // Bot's turn - Game::select_best_move handles model if set
+            Move move = game.select_best_move(current_idx);
             if (!move.is_valid()) {
                 std::cerr << "Error: Bot has no valid moves\n";
                 return 1;
@@ -330,7 +334,7 @@ int run_interactive(const Config& config,
 
             move.print("Bot");
 
-            uint32_t next_idx = current.find_or_create_child(*pool, current_idx, move);
+            uint32_t next_idx = current.find_or_create_child(move);
             if (next_idx == NULL_NODE) {
                 std::cerr << "Error: Failed to create child node for bot's move\n";
                 return 1;
@@ -340,12 +344,12 @@ int run_interactive(const Config& config,
     }
 
     // Send final state to GUI
-    StateNode& final_state = (*pool)[current_idx];
+    StateNode& final_state = game.pool()[current_idx];
     gui.send_gamestate(final_state, -1, final_state.terminal_value);
 
     // Optionally save tree
     if (!config.save_file.empty() && config.verbose) {
-        save_tree(*pool, root, config.save_file);
+        save_tree(game.pool(), root, config.save_file);
     }
 
     return 0;

@@ -47,6 +47,9 @@ public:
         , allocated_count_(0)
         , total_capacity_(0)
     {
+        // Set static pool pointer for StateNode access
+        StateNode::set_pool(this);
+
         // Calculate initial number of chunks
         size_t initial_chunks = (config.initial_capacity + config.chunk_size - 1) / config.chunk_size;
         if (initial_chunks == 0) initial_chunks = 1;
@@ -80,9 +83,11 @@ public:
 
     /// Allocate a node from the pool
     /// Automatically grows the pool if exhausted
+    /// Sets the node's self_index automatically
     [[nodiscard]] uint32_t allocate() noexcept {
         uint32_t idx = try_allocate();
         if (idx != NULL_NODE) {
+            node_at(idx).self_index = idx;
             return idx;
         }
 
@@ -92,12 +97,17 @@ public:
             // Double-check after acquiring lock
             idx = try_allocate();
             if (idx != NULL_NODE) {
+                node_at(idx).self_index = idx;
                 return idx;
             }
 
             // Grow the pool by adding a new chunk
             grow();
-            return try_allocate();
+            idx = try_allocate();
+            if (idx != NULL_NODE) {
+                node_at(idx).self_index = idx;
+            }
+            return idx;
         }
     }
 

@@ -133,43 +133,47 @@ struct FenceGrid {
 
     /// Check if horizontal fence placement at (r, c) is blocked
     /// A horizontal fence spans from intersection (r,c) to (r,c+1), blocking 2 edges
+    ///
+    /// Blocked by:
+    /// - Overlapping horizontal fences at (r, c-1), (r, c), or (r, c+1)
+    /// - Vertical fences that pass through intersection (r, c) or (r, c+1)
+    ///   A V fence at (vr, vc) passes through (vr, vc) and (vr+1, vc)
+    ///   So we must check V fences at (r, c), (r-1, c), (r, c+1), (r-1, c+1)
     [[nodiscard]] constexpr bool h_fence_blocked(uint8_t r, uint8_t c) const noexcept {
         assert(r < 8 && c < 8);
         // Blocked if there's already a horizontal fence overlapping this position
         if (has_h_fence(r, c)) return true;
         if (c > 0 && has_h_fence(r, c - 1)) return true;
         if (c < 7 && has_h_fence(r, c + 1)) return true;
-        // Blocked if a vertical fence crosses at either endpoint of horizontal fence
-        // Vertical fence at (rv, cv) crosses if it passes through (r, c) or (r, c+1)
-        // Check vertical fences that pass through intersection (r, c)
-        if (r > 0 && has_v_fence(r - 1, c)) return true;
+        // Blocked if a vertical fence passes through intersection (r, c)
         if (has_v_fence(r, c)) return true;
-        // Check vertical fences that pass through intersection (r, c+1)
-        if (c < 7) {
-            if (r > 0 && has_v_fence(r - 1, c + 1)) return true;
-            if (has_v_fence(r, c + 1)) return true;
-        }
+        if (r > 0 && has_v_fence(r - 1, c)) return true;
+        // Blocked if a vertical fence passes through intersection (r, c+1)
+        if (c < 7 && has_v_fence(r, c + 1)) return true;
+        if (r > 0 && c < 7 && has_v_fence(r - 1, c + 1)) return true;
         return false;
     }
 
     /// Check if vertical fence placement at (r, c) is blocked
     /// A vertical fence spans from intersection (r,c) to (r+1,c), blocking 2 edges
+    ///
+    /// Blocked by:
+    /// - Overlapping vertical fences at (r-1, c), (r, c), or (r+1, c)
+    /// - Horizontal fences that pass through intersection (r, c) or (r+1, c)
+    ///   An H fence at (hr, hc) passes through (hr, hc) and (hr, hc+1)
+    ///   So we must check H fences at (r, c), (r, c-1), (r+1, c), (r+1, c-1)
     [[nodiscard]] constexpr bool v_fence_blocked(uint8_t r, uint8_t c) const noexcept {
         assert(r < 8 && c < 8);
         // Blocked if there's already a vertical fence overlapping this position
         if (has_v_fence(r, c)) return true;
         if (r > 0 && has_v_fence(r - 1, c)) return true;
         if (r < 7 && has_v_fence(r + 1, c)) return true;
-        // Blocked if a horizontal fence crosses at either endpoint of vertical fence
-        // Horizontal fence at (rh, ch) crosses if it passes through (r, c) or (r+1, c)
-        // Check horizontal fences that pass through intersection (r, c)
-        if (c > 0 && has_h_fence(r, c - 1)) return true;
+        // Blocked if a horizontal fence passes through intersection (r, c)
         if (has_h_fence(r, c)) return true;
-        // Check horizontal fences that pass through intersection (r+1, c)
-        if (r < 7) {
-            if (c > 0 && has_h_fence(r + 1, c - 1)) return true;
-            if (has_h_fence(r + 1, c)) return true;
-        }
+        if (c > 0 && has_h_fence(r, c - 1)) return true;
+        // Blocked if a horizontal fence passes through intersection (r+1, c)
+        if (r < 7 && has_h_fence(r + 1, c)) return true;
+        if (r < 7 && c > 0 && has_h_fence(r + 1, c - 1)) return true;
         return false;
     }
 
@@ -277,6 +281,9 @@ struct EdgeStats {
     }
 };
 
+// Forward declaration
+class NodePool;
+
 /// Tree node using left-child right-sibling representation
 /// Children are stored as indices into the node pool, not as pointers
 /// This allows for memory-bounded node allocation with recycling
@@ -284,10 +291,16 @@ struct EdgeStats {
 /// Contains the full game state for fast move generation and evaluation
 /// from any node without tree traversal.
 struct alignas(64) StateNode {
+    // === Static pool reference (single pool instance) ===
+    static NodePool* pool_;
+    static void set_pool(NodePool* pool) noexcept { pool_ = pool; }
+    [[nodiscard]] static NodePool& pool() noexcept { return *pool_; }
+
     // === Tree structure (indices into node pool) ===
     uint32_t first_child{NULL_NODE};   // Left-child (first child)
     uint32_t next_sibling{NULL_NODE};  // Right-sibling (next child of same parent)
-    uint32_t parent{NULL_NODE};        // Parent node
+    uint32_t parent{NULL_NODE};
+    uint32_t self_index{NULL_NODE};    // This node's index in the pool
 
     // === Game state ===
     Player p1;           // Player 1 state (starts at row 0, goal row 8)
@@ -451,6 +464,7 @@ struct alignas(64) StateNode {
     [[nodiscard]] std::vector<Move> generate_valid_moves(size_t* out_fence_count = nullptr) const noexcept;
 
     /// Check if a move is valid from this position
+	/// only called during gui client move validation, so this inefficient way of doing things is ok
     [[nodiscard]] bool is_move_valid(Move move) const noexcept {
         auto valid_moves = generate_valid_moves();
         for (const auto& m : valid_moves) {
@@ -462,18 +476,23 @@ struct alignas(64) StateNode {
     /// Generate all valid child nodes from this position
     /// Allocates children from the pool and links them using left-child right-sibling.
     /// Validates fence moves with pathfinding to ensure no player gets blocked.
-    /// @param pool Node pool to allocate children from
-    /// @param my_index This node's index in the pool
+    /// Uses static pool() and this node's self_index.
     /// @return Number of children generated, or 0 if terminal/already expanded/allocation failed
-    size_t generate_valid_children(class NodePool& pool, uint32_t my_index) noexcept;
+    size_t generate_valid_children() noexcept;
 
     /// Find or create a child node for the given move
     /// Searches existing children first, then expands if needed.
-    /// @param pool Node pool for allocation and traversal
-    /// @param my_index This node's index in the pool
+    /// Uses static pool() and this node's self_index.
     /// @param move The move to find/create a child for
     /// @return Child index, or NULL_NODE if move not found after expansion
-    uint32_t find_or_create_child(class NodePool& pool, uint32_t my_index, Move move) noexcept;
+    uint32_t find_or_create_child(Move move) noexcept;
+
+    /// Test a move for legality and add it as a child if valid
+    /// Checks: move is legal, not already a child, fence doesn't block paths.
+    /// Uses static pool() and this node's self_index.
+    /// @param move The move to test and add
+    /// @return Child index if added, or NULL_NODE if invalid/duplicate/allocation failed
+    uint32_t test_and_add_move(Move move) noexcept;
 };
 
 // Note: With full game state, size is larger than 64 bytes

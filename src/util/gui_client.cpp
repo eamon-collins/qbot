@@ -158,13 +158,12 @@ std::optional<std::string> GUIClient::receive_json() {
     if (!is_connected()) return std::nullopt;
 
     std::unique_lock<std::mutex> lock(impl_->msg_mutex);
-    bool success = impl_->msg_cv.wait_for(
+    impl_->msg_cv.wait(
         lock,
-        std::chrono::milliseconds(impl_->config.read_timeout_ms),
         [this]() { return !impl_->incoming_messages.empty() || !impl_->connected; }
     );
 
-    if (!success || impl_->incoming_messages.empty()) {
+    if (impl_->incoming_messages.empty()) {
         return std::nullopt;
     }
 
@@ -232,7 +231,7 @@ std::optional<GUIClient::GUIMove> GUIClient::request_move(int player) {
     // Wait for response
     auto response = receive_json();
     if (!response) {
-        last_error_ = "Timeout waiting for move";
+        last_error_ = "Lost connection waiting for move";
         return std::nullopt;
     }
 

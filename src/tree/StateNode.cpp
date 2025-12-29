@@ -7,6 +7,9 @@
 
 namespace qbot {
 
+// Static pool pointer definition
+NodePool* StateNode::pool_ = nullptr;
+
 void StateNode::print_node() const noexcept {
     std::ostringstream ss;
 
@@ -252,7 +255,7 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     return moves;
 }
 
-size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noexcept {
+size_t StateNode::generate_valid_children() noexcept {
     if (is_terminal() || is_expanded()) {
         return 0;
     }
@@ -262,29 +265,31 @@ size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noe
         return 0;
     }
 
+    NodePool& p = pool();
+
     // Track children indices for linking
     std::vector<uint32_t> child_indices;
     child_indices.reserve(moves.size());
 
     Pathfinder& pf = get_pathfinder();
 
-    for (const Move& move : moves) {
+    for (const Move& m : moves) {
         // For fence moves, validate that it doesn't block either player
-        if (move.is_fence() && !pf.check_paths_with_fence(*this, move)) {
+        if (m.is_fence() && !pf.check_paths_with_fence(*this, m)) {
             continue;
         }
 
-        uint32_t child_idx = pool.allocate();
+        uint32_t child_idx = p.allocate();
         if (child_idx == NULL_NODE) {
             // Allocation failed - rollback all allocated children
             for (uint32_t idx : child_indices) {
-                pool.deallocate(idx);
+                p.deallocate(idx);
             }
             return 0;
         }
 
         // Initialize child from this parent's state with move applied
-        pool[child_idx].init_from_parent(*this, move, my_index);
+        p[child_idx].init_from_parent(*this, m, self_index);
         child_indices.push_back(child_idx);
     }
 
@@ -294,9 +299,9 @@ size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noe
 
     // Link children as siblings (left-child right-sibling representation)
     for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
-        pool[child_indices[i]].next_sibling = child_indices[i + 1];
+        p[child_indices[i]].next_sibling = child_indices[i + 1];
     }
-    pool[child_indices.back()].next_sibling = NULL_NODE;
+    p[child_indices.back()].next_sibling = NULL_NODE;
 
     // Set first child and mark as expanded
     first_child = child_indices.front();
@@ -305,31 +310,73 @@ size_t StateNode::generate_valid_children(NodePool& pool, uint32_t my_index) noe
     return child_indices.size();
 }
 
-uint32_t StateNode::find_or_create_child(NodePool& pool, uint32_t my_index, Move move) noexcept {
+uint32_t StateNode::find_or_create_child(Move move) noexcept {
+    NodePool& p = pool();
+
     // First check if move exists among existing children
     uint32_t child = first_child;
     while (child != NULL_NODE) {
-        if (pool[child].move == move) {
+        if (p[child].move == move) {
             return child;
         }
-        child = pool[child].next_sibling;
+        child = p[child].next_sibling;
     }
 
     // If not expanded yet, expand and then find the child
     if (!is_expanded()) {
-        generate_valid_children(pool, my_index);
+        generate_valid_children();
     }
 
     // Now search again
     child = first_child;
     while (child != NULL_NODE) {
-        if (pool[child].move == move) {
+        if (p[child].move == move) {
             return child;
         }
-        child = pool[child].next_sibling;
+        child = p[child].next_sibling;
     }
 
     return NULL_NODE;
+}
+
+uint32_t StateNode::test_and_add_move(Move move) noexcept {
+    NodePool& p = pool();
+
+    // Check if move already exists among children
+    uint32_t child = first_child;
+    while (child != NULL_NODE) {
+        if (p[child].move == move) {
+            return NULL_NODE;  // Already exists
+        }
+        child = p[child].next_sibling;
+    }
+
+    // Validate move is legal
+    if (!is_move_valid(move)) {
+        return NULL_NODE;
+    }
+
+    // For fence moves, validate pathfinding
+    if (move.is_fence()) {
+        Pathfinder& pf = get_pathfinder();
+        if (!pf.check_paths_with_fence(*this, move)) {
+            return NULL_NODE;
+        }
+    }
+
+    // Allocate and initialize the child
+    uint32_t child_idx = p.allocate();
+    if (child_idx == NULL_NODE) {
+        return NULL_NODE;
+    }
+
+    p[child_idx].init_from_parent(*this, move, self_index);
+
+    // Insert at head of children list
+    p[child_idx].next_sibling = first_child;
+    first_child = child_idx;
+
+    return child_idx;
 }
 
 } // namespace qbot

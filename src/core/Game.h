@@ -11,6 +11,9 @@
 
 namespace qbot {
 
+// Forward declaration for optional model inference
+class ModelInference;
+
 /// Configuration for game/training sessions
 struct GameConfig {
     size_t pool_capacity = 1'000'000;  // Node pool size
@@ -31,9 +34,14 @@ class Game {
 public:
     using Config = GameConfig;
 
-    /// Construct a new game
+    /// Construct a new game with a fresh pool
     /// @param config Game configuration
     explicit Game(Config config = Config{});
+
+    /// Construct a game with an existing pool (takes ownership)
+    /// @param pool Existing node pool
+    /// @param root Root node index
+    Game(std::unique_ptr<NodePool> pool, uint32_t root);
 
     ~Game();
 
@@ -78,13 +86,27 @@ public:
     /// Get the GUI client (may be nullptr)
     [[nodiscard]] GUIClient* gui() noexcept { return gui_.get(); }
 
-    /// Select the best move from a node based on Q-values
+    /// Set the model for position evaluation (non-owning pointer)
+    /// @param model Pointer to ModelInference, or nullptr to disable
+    void set_model(ModelInference* model) noexcept { model_ = model; }
+
+    /// Check if a model is set
+    [[nodiscard]] bool has_model() const noexcept { return model_ != nullptr; }
+
+    /// Select the best move from a node
+    /// If a model is set, evaluates all children and picks the best move for
+    /// the current player (max score for P1, min score for P2).
+    /// Otherwise falls back to Q-value based selection.
+    /// @param node_idx Index of the node to select from
+    /// @return Best move, or invalid Move if node has no children
+    [[nodiscard]] Move select_best_move(uint32_t node_idx);
+
+    /// Select the best move using Q-values only (static version)
     /// Chooses randomly among moves with the highest Q-value.
-    /// Static so it can be called without a Game instance.
     /// @param pool Node pool containing the tree
     /// @param node_idx Index of the node to select from
     /// @return Best move, or invalid Move if node has no children
-    [[nodiscard]] static Move select_best_move(NodePool& pool, uint32_t node_idx);
+    [[nodiscard]] static Move select_best_move_by_q(NodePool& pool, uint32_t node_idx);
 
     // Non-copyable, non-movable (owns resources)
     Game(const Game&) = delete;
@@ -99,6 +121,9 @@ private:
 
     // Optional GUI connection
     std::unique_ptr<GUIClient> gui_;
+
+    // Optional model for position evaluation (non-owning)
+    ModelInference* model_{nullptr};
 
     // Threading synchronization
     std::mutex tree_mutex_;
