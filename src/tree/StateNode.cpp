@@ -351,7 +351,6 @@ uint32_t StateNode::test_and_add_move(Move move) noexcept {
         child = p[child].next_sibling;
     }
 
-    // Validate move is legal
     if (!is_move_valid(move)) {
         return NULL_NODE;
     }

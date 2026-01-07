@@ -42,6 +42,7 @@ class GUIState:
     game_state: Optional[GameState] = None
     should_quit: bool = False
     player_names: list[str] = None
+    active_handler_id: int = 0  # Incremented on each new connection
 
     def __post_init__(self):
         if self.player_names is None:
@@ -186,12 +187,25 @@ class QuoridorGUI:
 
 async def websocket_handler(websocket, gui: QuoridorGUI):
     """Handle WebSocket connection from game client."""
-    print(f"Client connected from {websocket.remote_address}")
+    # Assign this handler a unique ID and invalidate any previous handler
+    gui.state.active_handler_id += 1
+    my_handler_id = gui.state.active_handler_id
+    gui.state.waiting_for_move = False  # Reset state from any previous handler
+
+    print(f"Client connected from {websocket.remote_address} (handler {my_handler_id})")
     gui.state.connected = True
     gui.win.update_info("Client connected! Waiting for game start...")
 
+    def is_active():
+        """Check if this handler is still the active one."""
+        return gui.state.active_handler_id == my_handler_id and not gui.state.should_quit
+
     try:
         async for message in websocket:
+            if not is_active():
+                print(f"Handler {my_handler_id} superseded, exiting")
+                break
+
             data = parse_message(message)
             msg_type = data.get("type")
 
@@ -213,7 +227,7 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
                     winner=data.get("winner")
                 )
                 gui.apply_gamestate(gs)
-                gui.run_frame()  # Render immediately
+                gui.render()  # Render immediately (but don't consume events)
 
             elif msg_type == "request_move":
                 # Client is asking GUI for a move
@@ -223,14 +237,14 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
                     gui.win.update_info("Your turn - make a move")
 
                     # Wait for player to make a move
-                    while gui.state.waiting_for_move and not gui.state.should_quit:
+                    while gui.state.waiting_for_move and is_active():
                         move = gui.run_frame()
                         if move:
                             gui.state.waiting_for_move = False
                             await websocket.send(move.to_json())
                             gui.win.update_info("Move sent, waiting...")
                             break
-                        await asyncio.sleep(0.01)
+                        await asyncio.sleep(0.001)
 
                     if gui.state.should_quit:
                         await websocket.send(json.dumps({"type": "quit"}))
@@ -240,15 +254,21 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
                 break
 
     except websockets.ConnectionClosed:
-        print("Client disconnected")
+        print(f"Client disconnected (handler {my_handler_id})")
     finally:
-        gui.state.connected = False
-        gui.win.update_info("Disconnected. Waiting for connection...")
+        # Only clear connected state if we're still the active handler
+        if gui.state.active_handler_id == my_handler_id:
+            gui.state.connected = False
+            gui.state.waiting_for_move = False
+            gui.win.update_info("Disconnected. Waiting for connection...")
+        print(f"Handler {my_handler_id} exiting")
 
 
 async def run_server(host: str, port: int, gui: QuoridorGUI):
     """Run the WebSocket server."""
-    async with serve(lambda ws: websocket_handler(ws, gui), host, port):
+    # ping_interval sends pings every 5s, ping_timeout closes connection if no pong within 10s
+    async with serve(lambda ws: websocket_handler(ws, gui), host, port,
+                     ping_interval=5, ping_timeout=10):
         print(f"WebSocket server running on ws://{host}:{port}")
         gui.win.update_info(f"Waiting for connection on port {port}...")
 

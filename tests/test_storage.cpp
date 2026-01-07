@@ -350,6 +350,9 @@ TEST(StorageTest, LoadInvalidFile) {
 }
 
 TEST(StorageTest, ChecksumValidation) {
+    // Checksum validation has been removed for performance.
+    // This test now verifies that files load even with corrupted data
+    // (trusting the filesystem for integrity).
     TempFile tmp;
 
     // Create and save a valid tree with some children
@@ -385,13 +388,9 @@ TEST(StorageTest, ChecksumValidation) {
         file.flush();
     }
 
-    // Load should fail with checksum error
+    // Load should succeed now (no checksum validation)
     auto result = TreeStorage::load(tmp.path());
-
-    EXPECT_FALSE(result.has_value());
-    if (!result.has_value()) {
-        EXPECT_EQ(result.error(), StorageError::ChecksumMismatch);
-    }
+    EXPECT_TRUE(result.has_value());
 }
 
 // ============================================================================

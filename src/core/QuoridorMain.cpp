@@ -21,6 +21,7 @@
 #include <csignal>
 
 #include <boost/program_options.hpp>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -157,10 +158,14 @@ initialize_tree(const Config& config) {
     if (!config.load_file.empty() && std::filesystem::exists(config.load_file)) {
         std::cout << "Loading tree from: " << config.load_file << "\n";
 
+        auto start = std::chrono::steady_clock::now();
         auto result = TreeStorage::load(config.load_file);
+        auto end = std::chrono::steady_clock::now();
+        auto sec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
         if (result.has_value()) {
             auto& loaded = *result;
-            std::cout << "  Loaded " << loaded.pool->allocated() << " nodes\n";
+            std::cout << "  Loaded " << loaded.pool->allocated() << " nodes in " << sec << " s\n";
             return {std::move(loaded.pool), loaded.root};
         } else {
             std::cerr << "Warning: Failed to load tree: "
@@ -182,11 +187,15 @@ initialize_tree(const Config& config) {
 bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
     std::cout << "Saving tree to: " << path << "\n";
 
+    auto start = std::chrono::steady_clock::now();
     auto result = TreeStorage::save(path, pool, root);
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
     if (result.has_value()) {
         auto file_size = std::filesystem::file_size(path);
         std::cout << "  Saved " << pool.allocated() << " nodes ("
-                  << file_size / 1024 << " KB)\n";
+                  << file_size / 1024 << " KB) in " << ms << " s\n";
         return true;
     } else {
         std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
@@ -361,9 +370,9 @@ int run_training(const Config& config,
                  uint32_t root) {
     std::cout << "\n=== MCTS Training Mode ===\n";
 
-    // Initialize the root node if it's a fresh tree
+    // Initialize the root node only if it's a fresh tree (not loaded)
     StateNode& root_node = (*pool)[root];
-    if (!root_node.move.is_valid() && root_node.ply == 0) {
+    if (!root_node.is_expanded() && !root_node.has_children()) {
         root_node.init_root(true);  // P1 starts
     }
 

@@ -147,10 +147,10 @@ struct FenceGrid {
         if (c < 7 && has_h_fence(r, c + 1)) return true;
         // Blocked if a vertical fence passes through intersection (r, c)
         if (has_v_fence(r, c)) return true;
-        if (r > 0 && has_v_fence(r - 1, c)) return true;
-        // Blocked if a vertical fence passes through intersection (r, c+1)
-        if (c < 7 && has_v_fence(r, c + 1)) return true;
-        if (r > 0 && c < 7 && has_v_fence(r - 1, c + 1)) return true;
+        // if (r > 0 && has_v_fence(r - 1, c)) return true;
+        // // Blocked if a vertical fence passes through intersection (r, c+1)
+        // if (c < 7 && has_v_fence(r, c + 1)) return true;
+        // if (r > 0 && c < 7 && has_v_fence(r - 1, c + 1)) return true;
         return false;
     }
 
@@ -170,10 +170,10 @@ struct FenceGrid {
         if (r < 7 && has_v_fence(r + 1, c)) return true;
         // Blocked if a horizontal fence passes through intersection (r, c)
         if (has_h_fence(r, c)) return true;
-        if (c > 0 && has_h_fence(r, c - 1)) return true;
-        // Blocked if a horizontal fence passes through intersection (r+1, c)
-        if (r < 7 && has_h_fence(r + 1, c)) return true;
-        if (r < 7 && c > 0 && has_h_fence(r + 1, c - 1)) return true;
+        // if (c > 0 && has_h_fence(r, c - 1)) return true;
+        // // Blocked if a horizontal fence passes through intersection (r+1, c)
+        // if (r < 7 && has_h_fence(r + 1, c)) return true;
+        // if (r < 7 && c > 0 && has_h_fence(r + 1, c - 1)) return true;
         return false;
     }
 

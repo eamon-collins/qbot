@@ -19,7 +19,7 @@ enum class StorageError {
     InvalidFormat,
     VersionMismatch,
     CorruptedData,
-    ChecksumMismatch,
+    ChecksumMismatch,  // Deprecated, no longer used
     InsufficientMemory,
     IoError,
     EmptyTree,
@@ -51,7 +51,7 @@ struct TreeFileHeader {
     uint16_t flags = 0;
     uint32_t node_count = 0;
     uint32_t root_index = NULL_NODE;
-    uint32_t checksum = 0;  // CRC32 of node data
+    uint32_t reserved1 = 0;  // Reserved (was checksum, removed for performance)
     uint64_t timestamp = 0; // Unix timestamp when saved
 
     // Reserved for future use
@@ -140,20 +140,6 @@ private:
 
     /// Convert SerializedNode to StateNode (in-place initialization)
     static void deserialize_node(const SerializedNode& src, StateNode& dst) noexcept;
-
-    /// Compute CRC32 checksum
-    static uint32_t compute_checksum(std::span<const std::byte> data) noexcept;
-
-    /// Collect all reachable nodes from root (BFS traversal)
-    /// Returns indices in the order they should be written
-    static std::vector<uint32_t> collect_reachable_nodes(
-        const NodePool& pool, uint32_t root);
-
-    /// Build index remapping table for compaction
-    /// Maps old indices to new sequential indices
-    static std::vector<uint32_t> build_remap_table(
-        const std::vector<uint32_t>& reachable,
-        size_t pool_capacity);
 };
 
 } // namespace qbot
