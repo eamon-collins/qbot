@@ -1,13 +1,13 @@
 #pragma once
 
-/// Parallel MCTS Training System
+/// Parallel MCTS with Neural Network Evaluation
 ///
 /// Implements Monte Carlo Tree Search with:
 /// - Virtual loss for tree parallelism (multiple threads explore different paths)
-/// - Hybrid evaluation: random rollout + neural network (bootstraps toward NN)
+/// - Neural network evaluation at leaf nodes (AlphaZero-style)
 /// - Early termination when both players out of fences
 /// - Time-based checkpointing
-/// - Pure tree building mode (single persistent tree)
+/// - Self-play mode for training data generation
 
 #include "../tree/node_pool.h"
 #include "../tree/StateNode.h"
@@ -28,8 +28,8 @@
 #include <thread>
 #include <vector>
 
-// Forward declaration for optional NN inference
-#ifdef ENABLE_INFERENCE
+// Include inference for NN evaluation
+#ifdef QBOT_ENABLE_INFERENCE
 #include "../inference/inference.h"
 #endif
 
@@ -55,9 +55,6 @@ struct MCTSConfig {
     float c_puct = 1.5f;                       // PUCT exploration constant
     float fpu = 0.0f;                          // First play urgency for unvisited nodes
     int32_t virtual_loss_amount = 3;           // Virtual loss per selection step
-
-    // Evaluation parameters
-    int max_rollout_depth = 200;               // Max moves in random rollout
 
     // Tree bounds
     TreeBoundsConfig bounds;                   // Memory limit configuration
@@ -90,7 +87,6 @@ struct SelectionResult {
 /// Training statistics - all atomic for thread safety
 struct TrainingStats {
     std::atomic<uint64_t> total_iterations{0};  // MCTS iterations completed
-    std::atomic<uint64_t> total_rollouts{0};    // Random rollouts performed
     std::atomic<uint64_t> nn_evaluations{0};    // NN evaluations performed
     std::atomic<uint64_t> skipped_expansions{0}; // Expansions skipped due to memory limit
     std::atomic<uint32_t> max_depth{0};         // Deepest node reached
@@ -98,7 +94,6 @@ struct TrainingStats {
 
     void reset() noexcept {
         total_iterations.store(0, std::memory_order_relaxed);
-        total_rollouts.store(0, std::memory_order_relaxed);
         nn_evaluations.store(0, std::memory_order_relaxed);
         skipped_expansions.store(0, std::memory_order_relaxed);
         max_depth.store(0, std::memory_order_relaxed);
@@ -313,257 +308,15 @@ inline void remove_virtual_loss(
     }
 }
 
-/// Lightweight simulation state for rollouts (copyable, no atomics)
-struct SimState {
-    Player p1;
-    Player p2;
-    FenceGrid fences;
-    uint8_t flags{0};
-    uint16_t ply{0};
 
-    static constexpr uint8_t FLAG_P1_TO_MOVE = StateNode::FLAG_P1_TO_MOVE;
-
-    explicit SimState(const StateNode& node)
-        : p1(node.p1), p2(node.p2), fences(node.fences), flags(node.flags), ply(node.ply) {}
-
-    [[nodiscard]] bool is_p1_to_move() const noexcept { return flags & FLAG_P1_TO_MOVE; }
-
-    [[nodiscard]] int game_over() const noexcept {
-        if (p1.row == 8) return 1;
-        if (p2.row == 0) return -1;
-        return 0;
-    }
-
-    [[nodiscard]] const Player& current_player() const noexcept {
-        return is_p1_to_move() ? p1 : p2;
-    }
-
-    [[nodiscard]] const Player& opponent_player() const noexcept {
-        return is_p1_to_move() ? p2 : p1;
-    }
-
-    [[nodiscard]] bool is_occupied(uint8_t row, uint8_t col) const noexcept {
-        return (p1.row == row && p1.col == col) || (p2.row == row && p2.col == col);
-    }
-
-    /// Generate valid moves (simplified version for rollout)
-    [[nodiscard]] std::vector<Move> generate_valid_moves() const noexcept {
-        std::vector<Move> moves;
-        const Player& curr = current_player();
-        const Player& opp = opponent_player();
-        const uint8_t r = curr.row;
-        const uint8_t c = curr.col;
-
-        // Early termination - just take shortest path
-        if (p1.fences == 0 && p2.fences == 0) {
-            Pathfinder& pf = get_pathfinder();
-            uint8_t goal_row = is_p1_to_move() ? 8 : 0;
-            auto path = pf.find_path(fences, curr, goal_row);
-            if (path.size() > 1) {
-                moves.push_back(Move::pawn(path[1].row, path[1].col));
-            }
-            return moves;
-        }
-
-        moves.reserve(140);
-
-        // Pawn moves with jump logic
-        auto can_move_up = [&](uint8_t from_row, uint8_t from_col) -> bool {
-            return !fences.blocked_up(from_row, from_col);
-        };
-        auto can_move_down = [&](uint8_t from_row, uint8_t from_col) -> bool {
-            return !fences.blocked_down(from_row, from_col);
-        };
-        auto can_move_left = [&](uint8_t from_row, uint8_t from_col) -> bool {
-            return !fences.blocked_left(from_row, from_col);
-        };
-        auto can_move_right = [&](uint8_t from_row, uint8_t from_col) -> bool {
-            return !fences.blocked_right(from_row, from_col);
-        };
-
-        // UP
-        if (can_move_up(r, c)) {
-            if (opp.row == r - 1 && opp.col == c) {
-                if (can_move_up(r - 1, c)) {
-                    moves.push_back(Move::pawn(r - 2, c));
-                } else {
-                    if (can_move_left(r - 1, c)) moves.push_back(Move::pawn(r - 1, c - 1));
-                    if (can_move_right(r - 1, c)) moves.push_back(Move::pawn(r - 1, c + 1));
-                }
-            } else {
-                moves.push_back(Move::pawn(r - 1, c));
-            }
-        }
-
-        // DOWN
-        if (can_move_down(r, c)) {
-            if (opp.row == r + 1 && opp.col == c) {
-                if (can_move_down(r + 1, c)) {
-                    moves.push_back(Move::pawn(r + 2, c));
-                } else {
-                    if (can_move_left(r + 1, c)) moves.push_back(Move::pawn(r + 1, c - 1));
-                    if (can_move_right(r + 1, c)) moves.push_back(Move::pawn(r + 1, c + 1));
-                }
-            } else {
-                moves.push_back(Move::pawn(r + 1, c));
-            }
-        }
-
-        // LEFT
-        if (can_move_left(r, c)) {
-            if (opp.row == r && opp.col == c - 1) {
-                if (can_move_left(r, c - 1)) {
-                    moves.push_back(Move::pawn(r, c - 2));
-                } else {
-                    if (can_move_up(r, c - 1)) moves.push_back(Move::pawn(r - 1, c - 1));
-                    if (can_move_down(r, c - 1)) moves.push_back(Move::pawn(r + 1, c - 1));
-                }
-            } else {
-                moves.push_back(Move::pawn(r, c - 1));
-            }
-        }
-
-        // RIGHT
-        if (can_move_right(r, c)) {
-            if (opp.row == r && opp.col == c + 1) {
-                if (can_move_right(r, c + 1)) {
-                    moves.push_back(Move::pawn(r, c + 2));
-                } else {
-                    if (can_move_up(r, c + 1)) moves.push_back(Move::pawn(r - 1, c + 1));
-                    if (can_move_down(r, c + 1)) moves.push_back(Move::pawn(r + 1, c + 1));
-                }
-            } else {
-                moves.push_back(Move::pawn(r, c + 1));
-            }
-        }
-
-        // Fence moves (simplified - no path validation in rollout for speed)
-        if (curr.fences > 0) {
-            for (uint8_t row = 0; row < 8; ++row) {
-                for (uint8_t col = 0; col < 8; ++col) {
-                    if (!fences.h_fence_blocked(row, col)) {
-                        moves.push_back(Move::fence(row, col, true));
-                    }
-                    if (!fences.v_fence_blocked(row, col)) {
-                        moves.push_back(Move::fence(row, col, false));
-                    }
-                }
-            }
-        }
-
-        return moves;
-    }
-
-    /// Apply a move to this state
-    void apply_move(Move move) noexcept {
-        bool was_p1_turn = is_p1_to_move();
-        if (move.is_pawn()) {
-            if (was_p1_turn) {
-                p1.row = move.row();
-                p1.col = move.col();
-            } else {
-                p2.row = move.row();
-                p2.col = move.col();
-            }
-        } else {
-            if (move.is_horizontal()) {
-                fences.place_h_fence(move.row(), move.col());
-            } else {
-                fences.place_v_fence(move.row(), move.col());
-            }
-            if (was_p1_turn) {
-                p1.fences--;
-            } else {
-                p2.fences--;
-            }
-        }
-        flags = was_p1_turn ? 0 : FLAG_P1_TO_MOVE;
-        ply++;
-    }
-};
-
-/// Early termination helper for SimState
-[[nodiscard]] inline float early_terminate_simstate(const SimState& state) noexcept {
-    Pathfinder& pf = get_pathfinder();
-
-    int p1_dist = pf.path_length(state.fences, state.p1, 8);
-    int p2_dist = pf.path_length(state.fences, state.p2, 0);
-
-    if (p1_dist < 0 || p2_dist < 0) {
-        return 0.0f;
-    }
-
-    if (state.is_p1_to_move()) {
-        p1_dist--;
-    } else {
-        p2_dist--;
-    }
-
-    if (p1_dist < p2_dist) {
-        return 1.0f;
-    } else if (p2_dist < p1_dist) {
-        return -1.0f;
-    } else {
-        return state.is_p1_to_move() ? 1.0f : -1.0f;
-    }
-}
-
-/// Perform a random rollout from the given state to terminal or depth limit
-/// Uses early termination when both players out of fences
-/// @param start_node Starting game state
-/// @param max_depth Maximum moves to simulate
-/// @return Terminal value: +1.0 P1 wins, -1.0 P2 wins
-[[nodiscard]] inline float random_rollout(
-    const StateNode& start_node,
-    int max_depth) noexcept
-{
-    thread_local std::mt19937 rng(std::random_device{}());
-
-    // Create lightweight copy for simulation
-    SimState sim(start_node);
-
-    for (int depth = 0; depth < max_depth; ++depth) {
-        // Check terminal
-        int result = sim.game_over();
-        if (result != 0) {
-            return static_cast<float>(result);
-        }
-
-        // Early termination when fences exhausted
-        if (sim.p1.fences == 0 && sim.p2.fences == 0) {
-            return early_terminate_simstate(sim);
-        }
-
-        // Generate valid moves
-        std::vector<Move> moves = sim.generate_valid_moves();
-        if (moves.empty()) {
-            return 0.0f;
-        }
-
-        // Pick random move
-        std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
-        Move move = moves[dist(rng)];
-
-        // Apply move
-        sim.apply_move(move);
-    }
-
-    // Reached depth limit without terminal - use heuristic
-    return early_terminate_simstate(sim);
-}
-
-/// Evaluate a leaf node using hybrid strategy:
-/// - Random rollout OR neural network, weighted by tree maturity
-/// - More rollout when immature, more NN when mature
+/// Evaluate a leaf node
+/// Uses neural network if available, otherwise uses heuristic (path distance)
 /// @param node Node to evaluate
-/// @param config MCTS configuration
-/// @param root_visits Root node visit count (for maturity estimate)
+/// @param stats Training stats (updated with evaluation count)
 /// @param inference Optional NN inference engine
 /// @return Value in [-1, 1] from P1's perspective
 [[nodiscard]] inline float evaluate_leaf(
     const StateNode& node,
-    const MCTSConfig& config,
-    [[maybe_unused]] uint32_t root_visits,
     TrainingStats& stats,
     [[maybe_unused]] void* inference = nullptr) noexcept
 {
@@ -572,35 +325,214 @@ struct SimState {
         return node.terminal_value;
     }
 
-    // Early termination when fences exhausted (counts as rollout)
+    // Early termination when fences exhausted - use path distance heuristic
     if (node.p1.fences == 0 && node.p2.fences == 0) {
-        stats.total_rollouts.fetch_add(1, std::memory_order_relaxed);
         return early_terminate_no_fences(node);
     }
 
-#ifdef ENABLE_INFERENCE
-    // Hybrid: choose between rollout and NN based on tree maturity
+#ifdef QBOT_ENABLE_INFERENCE
+    // Use neural network evaluation if available
     if (inference != nullptr) {
         auto* model = static_cast<ModelInference*>(inference);
         if (model->is_ready()) {
-            // P(use_nn) = min(0.9, sqrt(root_visits) / 1000)
-            float p_nn = std::min(0.9f, std::sqrt(static_cast<float>(root_visits)) / 1000.0f);
-
-            thread_local std::mt19937 rng(std::random_device{}());
-            std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-
-            if (dist(rng) < p_nn) {
-                stats.nn_evaluations.fetch_add(1, std::memory_order_relaxed);
-                return model->evaluate_node(&node);
-            }
+            stats.nn_evaluations.fetch_add(1, std::memory_order_relaxed);
+            return model->evaluate_node(&node);
         }
     }
 #endif
 
-    // Default: random rollout
-    stats.total_rollouts.fetch_add(1, std::memory_order_relaxed);
-    return random_rollout(node, config.max_rollout_depth);
+    // No NN available - use path distance heuristic
+    return early_terminate_no_fences(node);
 }
+
+// ============================================================================
+// Self-Play Support
+// ============================================================================
+
+/// Configuration for self-play game generation
+struct SelfPlayConfig {
+    int simulations_per_move = 800;       // MCTS iterations per move
+    float temperature = 1.0f;              // Softmax temperature for move selection
+    int temperature_drop_ply = 30;         // After this ply, use temperature → 0
+    bool stochastic = true;                // True = sample from policy, False = argmax
+};
+
+/// Compute policy distribution from child Q-values
+/// π_i = exp(Q_i / τ) / Σ exp(Q_j / τ)  (softmax)
+/// @param pool Node pool
+/// @param parent_idx Parent node index
+/// @param temperature Softmax temperature (higher = more uniform)
+/// @return Vector of (move, probability) pairs
+[[nodiscard]] inline std::vector<std::pair<Move, float>> compute_policy_from_q(
+    NodePool& pool,
+    uint32_t parent_idx,
+    float temperature) noexcept
+{
+    std::vector<std::pair<Move, float>> policy;
+    if (!pool[parent_idx].has_children()) return policy;
+
+    // First pass: collect Q-values and find max for numerical stability
+    float max_q = -std::numeric_limits<float>::infinity();
+    uint32_t child = pool[parent_idx].first_child;
+    while (child != NULL_NODE) {
+        float q = pool[child].stats.Q();
+        max_q = std::max(max_q, q);
+        policy.push_back({pool[child].move, q});
+        child = pool[child].next_sibling;
+    }
+
+    if (policy.empty()) return policy;
+
+    // Handle temperature = 0 (deterministic)
+    if (temperature <= 0.0f) {
+        // Find argmax
+        size_t best_idx = 0;
+        float best_q = policy[0].second;
+        for (size_t i = 1; i < policy.size(); ++i) {
+            if (policy[i].second > best_q) {
+                best_q = policy[i].second;
+                best_idx = i;
+            }
+        }
+        // Set probability 1.0 for best, 0.0 for others
+        for (size_t i = 0; i < policy.size(); ++i) {
+            policy[i].second = (i == best_idx) ? 1.0f : 0.0f;
+        }
+        return policy;
+    }
+
+    // Second pass: softmax with temperature
+    float sum = 0.0f;
+    for (auto& [move, q] : policy) {
+        q = std::exp((q - max_q) / temperature);  // Subtract max for stability
+        sum += q;
+    }
+
+    // Normalize
+    if (sum > 0.0f) {
+        for (auto& [move, prob] : policy) {
+            prob /= sum;
+        }
+    }
+
+    return policy;
+}
+
+/// Select a move from the policy distribution
+/// @param policy Vector of (move, probability) pairs
+/// @param stochastic If true, sample from distribution; if false, take argmax
+/// @return Selected move
+[[nodiscard]] inline Move select_move_from_policy(
+    const std::vector<std::pair<Move, float>>& policy,
+    bool stochastic) noexcept
+{
+    if (policy.empty()) return Move{};
+
+    if (!stochastic) {
+        // Deterministic: return move with highest probability
+        auto best = std::max_element(policy.begin(), policy.end(),
+            [](const auto& a, const auto& b) { return a.second < b.second; });
+        return best->first;
+    }
+
+    // Stochastic: sample from distribution
+    thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    float r = dist(rng);
+
+    float cumulative = 0.0f;
+    for (const auto& [move, prob] : policy) {
+        cumulative += prob;
+        if (r <= cumulative) {
+            return move;
+        }
+    }
+
+    // Fallback (shouldn't happen with proper normalization)
+    return policy.back().first;
+}
+
+/// Advance the root to a child after a move is played (tree reuse)
+/// @param pool Node pool
+/// @param current_root Current root node index
+/// @param played_move The move that was played
+/// @return New root index, or NULL_NODE if move not found
+[[nodiscard]] inline uint32_t advance_root(
+    NodePool& pool,
+    uint32_t current_root,
+    Move played_move) noexcept
+{
+    if (current_root == NULL_NODE) return NULL_NODE;
+
+    StateNode& root = pool[current_root];
+
+    // Find child corresponding to played move
+    uint32_t child = root.first_child;
+    while (child != NULL_NODE) {
+        if (pool[child].move == played_move) {
+            // Found it - detach from parent
+            pool[child].parent = NULL_NODE;
+            return child;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    // Move not found in tree
+    return NULL_NODE;
+}
+
+/// Result of a single self-play game
+struct SelfPlayResult {
+    int winner{0};      // +1 = P1 won, -1 = P2 won, 0 = draw/error
+    int num_moves{0};   // Total moves in the game
+};
+
+// ============================================================================
+// Self-Play Engine
+// ============================================================================
+
+#ifdef QBOT_ENABLE_INFERENCE
+
+/// Self-play engine for generating training data
+/// Plays complete games using MCTS + NN evaluation, accumulating statistics
+/// in a persistent tree that can be dumped for training.
+class SelfPlayEngine {
+public:
+    explicit SelfPlayEngine(SelfPlayConfig config = SelfPlayConfig{})
+        : config_(std::move(config)) {}
+
+    /// Play a single self-play game, accumulating stats in the tree
+    /// @param pool Node pool (persistent across games)
+    /// @param root_idx Root node index
+    /// @param model Neural network for evaluation
+    /// @return Game result
+    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, ModelInference& model);
+
+    /// Get configuration
+    [[nodiscard]] const SelfPlayConfig& config() const noexcept { return config_; }
+    [[nodiscard]] SelfPlayConfig& config() noexcept { return config_; }
+
+private:
+    /// Run MCTS iterations from a position
+    void run_mcts_iterations(NodePool& pool, uint32_t root_idx, ModelInference& model, int iterations);
+
+    /// Single MCTS iteration: select -> expand -> evaluate -> backprop
+    void mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInference& model);
+
+    /// Expand a node and set priors using batch NN evaluation
+    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, ModelInference& model);
+
+    /// Backpropagate value up a path
+    void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
+
+    SelfPlayConfig config_;
+
+    // Striped mutexes for expansion (same pattern as MCTSEngine)
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 64;
+    std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
+};
+
+#endif // QBOT_ENABLE_INFERENCE
 
 // ============================================================================
 // MCTS Engine

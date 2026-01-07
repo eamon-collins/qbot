@@ -1,5 +1,10 @@
 #include "mcts.h"
 
+#ifdef QBOT_ENABLE_INFERENCE
+#include "../inference/inference.h"
+#endif
+
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -86,10 +91,7 @@ void MCTSEngine::mcts_iteration(NodePool& pool, uint32_t root_idx) {
         case ExpansionDecision::UseNNEvaluation:
             // Memory pressure too high - skip expansion, evaluate directly
             stats_.skipped_expansions.fetch_add(1, std::memory_order_relaxed);
-            {
-                uint32_t root_visits = pool[root_idx].stats.visits.load(std::memory_order_relaxed);
-                value = evaluate_leaf(pool[eval_node_idx], config_, root_visits, stats_, inference_);
-            }
+            value = evaluate_leaf(pool[eval_node_idx], stats_, inference_);
             break;
 
         case ExpansionDecision::Expand:
@@ -119,8 +121,7 @@ void MCTSEngine::mcts_iteration(NodePool& pool, uint32_t root_idx) {
             }
 
             // EVALUATION
-            uint32_t root_visits = pool[root_idx].stats.visits.load(std::memory_order_relaxed);
-            value = evaluate_leaf(pool[eval_node_idx], config_, root_visits, stats_, inference_);
+            value = evaluate_leaf(pool[eval_node_idx], stats_, inference_);
             break;
         }
     }
@@ -251,7 +252,6 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
         now - stats_.start_time).count();
 
     uint64_t iterations = stats_.total_iterations.load(std::memory_order_relaxed);
-    uint64_t rollouts = stats_.total_rollouts.load(std::memory_order_relaxed);
     uint64_t nn_evals = stats_.nn_evaluations.load(std::memory_order_relaxed);
     uint64_t skipped = stats_.skipped_expansions.load(std::memory_order_relaxed);
     uint32_t depth = stats_.max_depth.load(std::memory_order_relaxed);
@@ -288,9 +288,246 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
     if (nn_evals > 0) {
         ss << ", NN: " << nn_evals;
     }
-    ss << ", Rollouts: " << rollouts;
 
     std::cout << ss.str() << "\n";
 }
+
+// ============================================================================
+// SelfPlayEngine Implementation
+// ============================================================================
+
+#ifdef QBOT_ENABLE_INFERENCE
+
+SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, ModelInference& model) {
+    SelfPlayResult result;
+
+    // Track the path through the game (for potential backprop)
+    std::vector<uint32_t> game_path;
+    game_path.reserve(200);  // Typical game length
+
+    uint32_t current = root_idx;
+    game_path.push_back(current);
+
+    while (current != NULL_NODE) {
+        StateNode& node = pool[current];
+
+        // Check for terminal
+        if (node.is_terminal()) {
+            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            break;
+        }
+
+        // Check for game end conditions
+        if (node.p1.row == 8) {
+            result.winner = 1;  // P1 reached goal
+            node.set_terminal(1.0f);
+            break;
+        }
+        if (node.p2.row == 0) {
+            result.winner = -1;  // P2 reached goal
+            node.set_terminal(-1.0f);
+            break;
+        }
+
+        // Expand if not already expanded
+        if (!node.is_expanded()) {
+            expand_with_nn_priors(pool, current, model);
+        }
+
+        // If no children after expansion, something went wrong
+        if (!node.has_children()) {
+            result.winner = 0;  // Draw/error
+            break;
+        }
+
+        // Run MCTS iterations to build statistics
+        run_mcts_iterations(pool, current, model, config_.simulations_per_move);
+
+        // Compute policy from Q-values
+        float temp = (result.num_moves < config_.temperature_drop_ply)
+                     ? config_.temperature : 0.0f;
+        auto policy = compute_policy_from_q(pool, current, temp);
+
+        if (policy.empty()) {
+            result.winner = 0;  // Error
+            break;
+        }
+
+        // Select move
+        Move selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
+
+        // Find the child for this move
+        uint32_t next = NULL_NODE;
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].move == selected_move) {
+                next = child;
+                break;
+            }
+            child = pool[child].next_sibling;
+        }
+
+        if (next == NULL_NODE) {
+            // Move not in tree - shouldn't happen if expansion worked
+            result.winner = 0;
+            break;
+        }
+
+        current = next;
+        game_path.push_back(current);
+        result.num_moves++;
+
+        // Safety limit
+        if (result.num_moves > 500) {
+            result.winner = 0;  // Draw - too long
+            break;
+        }
+    }
+
+    // Backpropagate game result along the path taken
+    // This reinforces the actual game outcome in the tree
+    if (result.winner != 0) {
+        float value = static_cast<float>(result.winner);
+        for (size_t i = game_path.size(); i > 0; --i) {
+            uint32_t idx = game_path[i - 1];
+            StateNode& node = pool[idx];
+
+            // Value from this node's perspective
+            float node_value = node.is_p1_to_move() ? value : -value;
+            node.stats.update(node_value);
+        }
+    }
+
+    return result;
+}
+
+void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
+                                          ModelInference& model, int iterations) {
+    for (int i = 0; i < iterations; ++i) {
+        mcts_iteration(pool, root_idx, model);
+    }
+}
+
+void SelfPlayEngine::mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInference& model) {
+    // SELECTION: traverse to leaf
+    std::vector<uint32_t> path;
+    path.reserve(64);
+
+    uint32_t current = root_idx;
+    while (current != NULL_NODE) {
+        path.push_back(current);
+        StateNode& node = pool[current];
+
+        if (node.is_terminal()) {
+            break;
+        }
+
+        if (!node.has_children()) {
+            // Leaf - expand it
+            break;
+        }
+
+        // Select best child via PUCT
+        MCTSConfig dummy_config;
+        dummy_config.c_puct = 1.5f;
+        dummy_config.fpu = 0.0f;
+        current = select_child_puct(pool, current, dummy_config);
+    }
+
+    if (path.empty()) return;
+
+    uint32_t leaf_idx = path.back();
+    StateNode& leaf = pool[leaf_idx];
+    float value;
+
+    if (leaf.is_terminal()) {
+        value = leaf.terminal_value;
+    } else {
+        // EXPANSION: expand if not already
+        if (!leaf.is_expanded()) {
+            expand_with_nn_priors(pool, leaf_idx, model);
+        }
+
+        // EVALUATION: use NN on leaf or a child
+        if (leaf.has_children()) {
+            // Select one child for evaluation
+            MCTSConfig dummy_config;
+            dummy_config.c_puct = 1.5f;
+            dummy_config.fpu = 0.0f;
+            uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
+            if (child != NULL_NODE) {
+                path.push_back(child);
+                value = model.evaluate_node(&pool[child]);
+            } else {
+                value = model.evaluate_node(&leaf);
+            }
+        } else {
+            value = model.evaluate_node(&leaf);
+        }
+    }
+
+    // BACKPROPAGATION
+    backpropagate(pool, path, value);
+}
+
+void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, ModelInference& model) {
+    StateNode& node = pool[node_idx];
+
+    // Use striped mutex for thread safety (future-proofing)
+    size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
+    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+
+    // Double-check after acquiring lock
+    if (node.is_expanded()) return;
+
+    // Generate children
+    node.generate_valid_children();
+
+    if (!node.has_children()) return;
+
+    // Collect all children for batch evaluation
+    std::vector<const StateNode*> children;
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        children.push_back(&pool[child]);
+        child = pool[child].next_sibling;
+    }
+
+    // Batch evaluate all children
+    std::vector<float> values = model.evaluate_batch(children);
+
+    // Convert values to priors via softmax
+    // Note: child values are from opponent's perspective, so negate
+    if (!values.empty()) {
+        float max_v = *std::max_element(values.begin(), values.end());
+        float sum = 0.0f;
+        for (float& v : values) {
+            v = std::exp(-(v - max_v));  // Negate and subtract max for stability
+            sum += v;
+        }
+
+        // Set priors on children
+        child = node.first_child;
+        size_t i = 0;
+        while (child != NULL_NODE && i < values.size()) {
+            pool[child].stats.prior = values[i] / sum;
+            child = pool[child].next_sibling;
+            ++i;
+        }
+    }
+}
+
+void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value) {
+    for (size_t i = path.size(); i > 0; --i) {
+        uint32_t idx = path[i - 1];
+        StateNode& node = pool[idx];
+
+        // Value from this node's perspective
+        float node_value = node.is_p1_to_move() ? value : -value;
+        node.stats.update(node_value);
+    }
+}
+
+#endif // QBOT_ENABLE_INFERENCE
 
 } // namespace qbot

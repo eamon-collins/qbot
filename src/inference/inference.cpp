@@ -152,6 +152,55 @@ float ModelInference::evaluate_node(const StateNode* node) {
     return value;
 }
 
+std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateNode*>& nodes) {
+    std::vector<float> results;
+    if (nodes.empty()) return results;
+
+    const int batch_size = static_cast<int>(nodes.size());
+    results.reserve(batch_size);
+
+    // Prepare batch tensors
+    auto batch_pawn = torch::zeros({batch_size, 2, 9, 9}, torch::kFloat32);
+    auto batch_wall = torch::zeros({batch_size, 2, 8, 8}, torch::kFloat32);
+    auto batch_meta = torch::zeros({batch_size, 3}, torch::kFloat32);
+
+    // Fill batch tensors
+    for (int i = 0; i < batch_size; ++i) {
+        auto [pawn, wall, meta] = state_to_tensors(nodes[i]);
+        batch_pawn[i] = pawn;
+        batch_wall[i] = wall;
+        batch_meta[i] = meta;
+    }
+
+    // Move tensors to device
+    batch_pawn = batch_pawn.to(device_);
+    batch_wall = batch_wall.to(device_);
+    batch_meta = batch_meta.to(device_);
+
+    // Run inference
+    std::vector<torch::jit::IValue> inputs;
+    inputs.push_back(batch_pawn);
+    inputs.push_back(batch_wall);
+    inputs.push_back(batch_meta);
+
+    torch::NoGradGuard no_grad;
+    auto output = model_.forward(inputs).toTensor();
+
+    // Move output back to CPU
+    output = output.to(torch::kCPU);
+
+    // Extract values
+    for (int i = 0; i < batch_size; ++i) {
+        float value = output[i].item<float>();
+        if (std::isnan(value)) {
+            value = 0.0f;
+        }
+        results.push_back(value);
+    }
+
+    return results;
+}
+
 void ModelInference::print_diagnostics() {
     std::cout << "LibTorch version: " << TORCH_VERSION << std::endl;
     std::cout << "CUDA available: " << (torch::cuda::is_available() ? "yes" : "no") << std::endl;

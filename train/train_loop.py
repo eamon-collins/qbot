@@ -10,10 +10,7 @@ Alternates between:
 import argparse
 import logging
 import os
-import signal
 import subprocess
-import sys
-import time
 from pathlib import Path
 
 import torch
@@ -26,57 +23,58 @@ def get_project_root():
     return Path(__file__).parent.parent
 
 
-def run_qbot(tree_path: str, model_path: str | None, duration_seconds: int,
-             num_threads: int) -> bool:
-    """Run qbot to build tree for a specified duration."""
+def run_selfplay(tree_path: str, model_path: str, num_games: int,
+                 simulations: int, num_threads: int,
+                 temperature: float = 1.0, temp_drop_ply: int = 30) -> bool:
+    """Run self-play games using NN-only MCTS evaluation."""
     qbot_path = get_project_root() / "build" / "qbot"
 
     if not qbot_path.exists():
         logging.error(f"qbot not found at {qbot_path}")
         return False
 
+    if not model_path or not os.path.exists(model_path):
+        logging.error(f"Model file required for self-play: {model_path}")
+        return False
+
     cmd = [
         str(qbot_path),
-        "-b",  # Training mode
+        "--selfplay",
+        "-m", model_path,
+        "-g", str(num_games),
+        "-n", str(simulations),
         "-t", str(num_threads),
         "-s", tree_path,
+        "--temperature", str(temperature),
+        "--temp-drop", str(temp_drop_ply),
     ]
 
     # Load existing tree if it exists
     if os.path.exists(tree_path):
         cmd.extend(["-l", tree_path])
 
-    # Use model if provided
-    if model_path and os.path.exists(model_path):
-        cmd.extend(["-m", model_path])
-
     logging.info(f"Running: {' '.join(cmd)}")
-    logging.info(f"Building tree for {duration_seconds} seconds...")
+    logging.info(f"Playing {num_games} self-play games...")
 
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
-        # Wait for duration then send SIGINT for graceful shutdown
-        time.sleep(duration_seconds)
-        proc.send_signal(signal.SIGINT)
+        # Self-play runs to completion
+        stdout, _ = proc.communicate(timeout=3600 * 4)  # 4 hour timeout
+        if stdout:
+            lines = stdout.decode().strip().split('\n')
+            for line in lines[-10:]:
+                logging.info(f"  {line}")
 
-        # Wait for graceful shutdown (with timeout)
-        try:
-            stdout, _ = proc.communicate(timeout=60)
-            if stdout:
-                # Print last few lines of output
-                lines = stdout.decode().strip().split('\n')
-                for line in lines[-5:]:
-                    logging.info(f"  {line}")
-        except subprocess.TimeoutExpired:
-            logging.warning("qbot didn't shut down gracefully, killing...")
-            proc.kill()
-            proc.wait()
+        return proc.returncode == 0
 
-        return proc.returncode == 0 or proc.returncode == -2  # -2 is SIGINT
-
+    except subprocess.TimeoutExpired:
+        logging.error("Self-play timed out after 4 hours")
+        proc.kill()
+        proc.wait()
+        return False
     except Exception as e:
-        logging.error(f"Error running qbot: {e}")
+        logging.error(f"Error running self-play: {e}")
         return False
 
 
@@ -174,15 +172,21 @@ def main():
 
     # Training parameters
     parser.add_argument('--iterations', type=int, default=10,
-                        help='Number of train/build iterations')
-    parser.add_argument('--tree-time', type=int, default=300, dest='tree_time',
-                        help='Seconds to build tree per iteration')
+                        help='Number of train/selfplay iterations')
+    parser.add_argument('--games', type=int, default=500,
+                        help='Self-play games per iteration')
+    parser.add_argument('--simulations', type=int, default=800,
+                        help='MCTS simulations per move')
     parser.add_argument('--epochs', type=int, default=50,
                         help='Training epochs per iteration')
     parser.add_argument('--batch-size', type=int, default=64, dest='batch_size',
                         help='Training batch size')
     parser.add_argument('--threads', type=int, default=8,
-                        help='Number of threads for tree building')
+                        help='Number of threads for self-play')
+    parser.add_argument('--temperature', type=float, default=1.0,
+                        help='Temperature for move selection')
+    parser.add_argument('--temp-drop', type=int, default=30, dest='temp_drop',
+                        help='Ply at which to drop temperature to 0')
 
     # Options
     parser.add_argument('--skip-initial-build', action='store_true',
@@ -219,48 +223,47 @@ def main():
     export_path = os.path.abspath(args.export_model)
 
     logging.info("=" * 60)
-    logging.info("Quoridor AlphaZero Training Loop")
+    logging.info("Quoridor AlphaZero Training Loop (Self-Play)")
     logging.info("=" * 60)
     logging.info(f"Tree file:      {tree_path}")
     logging.info(f"Model file:     {model_path}")
     logging.info(f"Export file:    {export_path}")
     logging.info(f"Iterations:     {args.iterations}")
-    logging.info(f"Tree time:      {args.tree_time}s per iteration")
+    logging.info(f"Games/iter:     {args.games}")
+    logging.info(f"Sims/move:      {args.simulations}")
+    logging.info(f"Temperature:    {args.temperature} (drops at ply {args.temp_drop})")
     logging.info(f"Epochs:         {args.epochs} per iteration")
     logging.info(f"Threads:        {args.threads}")
     logging.info("=" * 60)
+
+    # Export initial model (required for self-play)
+    if not os.path.exists(export_path):
+        logging.info("Exporting initial model for self-play...")
+        if not export_model(model, export_path):
+            logging.error("Failed to export initial model")
+            return
 
     for iteration in range(args.iterations):
         logging.info("")
         logging.info(f"{'=' * 20} ITERATION {iteration + 1}/{args.iterations} {'=' * 20}")
 
-        # Phase 1: Build tree (skip on first iteration if requested)
-        if iteration == 0 and args.skip_initial_build:
-            logging.info("Skipping initial tree build")
+        # Phase 1: Self-play (skip on first iteration if requested and tree exists)
+        if iteration == 0 and args.skip_initial_build and os.path.exists(tree_path):
+            logging.info("Skipping initial self-play (using existing tree)")
         else:
-            # Export model for C++ before tree building (if we have trained it)
-            if iteration > 0 or os.path.exists(args.model):
-                if not export_model(model, export_path):
-                    logging.warning("Failed to export model, building without NN")
-                    export_path_for_qbot = None
-                else:
-                    export_path_for_qbot = export_path
-            else:
-                export_path_for_qbot = None
-
-            logging.info(f"[Phase 1] Building tree...")
-            if not run_qbot(tree_path, export_path_for_qbot, args.tree_time, args.threads):
-                logging.error("Tree building failed")
+            logging.info(f"[Phase 1] Self-play ({args.games} games)...")
+            if not run_selfplay(tree_path, export_path, args.games, args.simulations,
+                                args.threads, args.temperature, args.temp_drop):
+                logging.error("Self-play failed")
                 continue
 
         # Check if tree has completed games
         num_games = check_tree_has_games(tree_path)
         if num_games == 0:
             logging.warning("No completed games in tree, skipping training")
-            logging.info("Try running longer or with more depth-first exploration")
             continue
 
-        logging.info(f"Tree has {num_games} completed games")
+        logging.info(f"Tree has {num_games} terminal nodes (completed games)")
 
         # Phase 2: Train neural network
         logging.info(f"[Phase 2] Training neural network...")
@@ -268,8 +271,9 @@ def main():
             logging.error("Training failed")
             continue
 
-        # Save checkpoint
+        # Save checkpoint and export updated model for next iteration
         save_checkpoint(model, model_path)
+        export_model(model, export_path)
 
         logging.info(f"Iteration {iteration + 1} complete")
 

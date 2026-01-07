@@ -56,6 +56,12 @@ public:
     /// @return Model's value estimate for the position
     [[nodiscard]] float evaluate_node(const StateNode* node);
 
+    /// Evaluate multiple nodes in a batch (for efficient GPU utilization)
+    /// Used for computing priors: evaluate all children at once
+    /// @param nodes Vector of node pointers to evaluate
+    /// @return Vector of value estimates, one per node
+    [[nodiscard]] std::vector<float> evaluate_batch(const std::vector<const StateNode*>& nodes);
+
     /// Get current queue size
     [[nodiscard]] size_t queue_size() const noexcept { return evaluation_queue_.size(); }
 
