@@ -129,6 +129,63 @@ python resnet.py --load-tree ../build/tree.qbot --load-model model.pt --save-mod
 # ... repeat
 ```
 
+### AlphaZero-Style Training
+
+For pure neural network training without rollouts, use self-play mode:
+
+#### Self-Play
+
+Generate training data by playing complete games with NN evaluation:
+
+```bash
+# Run 500 self-play games, 800 sims/move, save tree for training
+./qbot --selfplay -m model/current_best.pt -g 500 -n 800 -s tree.qbot
+
+# With temperature settings (exploration vs exploitation)
+./qbot --selfplay -m model/current_best.pt -g 1000 -n 800 \
+    --temperature 1.0 --temp-drop 30 -s tree.qbot
+```
+
+Options:
+- `--selfplay` - Enable self-play mode (requires model)
+- `-g, --games N` - Number of games to play (default: 1000)
+- `-n, --simulations N` - MCTS simulations per move (default: 800)
+- `--temperature T` - Softmax temperature for move selection (default: 1.0)
+- `--temp-drop PLY` - Ply to drop temperature to 0 for deterministic play (default: 30)
+
+#### Arena (Model Evaluation)
+
+Evaluate a candidate model against the current best:
+
+```bash
+# Evaluate candidate vs current, promote if candidate wins >= 55%
+./qbot --arena -m model/current_best.pt --candidate model/new_model.pt \
+    --arena-games 100 -n 400
+
+# Custom threshold and output path
+./qbot --arena -m model/current_best.pt --candidate model/new_model.pt \
+    --arena-games 200 -n 800 --win-threshold 0.55 --best-model model/current_best.pt
+```
+
+Options:
+- `--arena` - Enable arena mode
+- `-m, --model` - Current best model path
+- `--candidate` - Candidate model to evaluate
+- `--arena-games N` - Number of games to play (default: 100)
+- `--win-threshold F` - Win rate to replace best model (default: 0.55)
+- `--best-model PATH` - Where to save winning model (default: model/current_best.pt)
+
+The arena alternates which model plays as P1/P2 for fairness. If the candidate wins >= 55% of decisive games, it replaces the current best.
+
+#### Automated Training Loop
+
+Use `train_loop.py` to automate the self-play → train → evaluate cycle:
+
+```bash
+cd train/
+python train_loop.py --iterations 10 --games 500 --simulations 800 --epochs 50
+```
+
 ### Tree Memory Limits
 
 The tree will automatically limit expansion when approaching memory bounds:
