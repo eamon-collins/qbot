@@ -231,6 +231,8 @@ struct EdgeStats {
     std::atomic<float> total_value{0.0f};  // W(s,a): sum of values from backpropagation
     std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
     float prior{0.0f};                     // P(s,a): policy prior (set once, read-only after)
+    float nn_value{0.0f};                  // Cached NN value (avoids re-evaluation)
+    std::atomic<bool> nn_evaluated{false}; // True if nn_value is valid (atomic for thread safety)
 
     EdgeStats() = default;
 
@@ -243,7 +245,27 @@ struct EdgeStats {
         : visits(other.visits.load(std::memory_order_relaxed))
         , total_value(other.total_value.load(std::memory_order_relaxed))
         , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
-        , prior(other.prior) {}
+        , prior(other.prior)
+        , nn_value(other.nn_value)
+        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed)) {}
+
+    /// Set cached NN value (thread-safe, only first setter wins)
+    void set_nn_value(float value) noexcept {
+        bool expected = false;
+        if (nn_evaluated.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            nn_value = value;
+        }
+    }
+
+    /// Check if we have a cached NN value
+    [[nodiscard]] bool has_nn_value() const noexcept {
+        return nn_evaluated.load(std::memory_order_acquire);
+    }
+
+    /// Get cached NN value (only valid if has_nn_value() is true)
+    [[nodiscard]] float get_nn_value() const noexcept {
+        return nn_value;
+    }
 
     /// Get Q(s,a) = W(s,a) / N(s,a) with first-play urgency
     [[nodiscard]] float Q(float fpu = 0.0f) const noexcept {

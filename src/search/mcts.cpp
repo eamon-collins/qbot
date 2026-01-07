@@ -4,6 +4,8 @@
 #include "../inference/inference.h"
 #endif
 
+#include "../util/timer.h"
+
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -300,6 +302,7 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
 
 SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, ModelInference& model) {
     SelfPlayResult result;
+    auto& timers = get_timers();
 
     // Track the path through the game (for potential backprop)
     std::vector<uint32_t> game_path;
@@ -331,6 +334,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
         // Expand if not already expanded
         if (!node.is_expanded()) {
+            ScopedTimer t(timers.expansion);
             expand_with_nn_priors(pool, current, model);
         }
 
@@ -341,12 +345,19 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         }
 
         // Run MCTS iterations to build statistics
-        run_mcts_iterations(pool, current, model, config_.simulations_per_move);
+        {
+            ScopedTimer t(timers.mcts_iterations);
+            run_mcts_iterations(pool, current, model, config_.simulations_per_move);
+        }
 
         // Compute policy from Q-values
         float temp = (result.num_moves < config_.temperature_drop_ply)
                      ? config_.temperature : 0.0f;
-        auto policy = compute_policy_from_q(pool, current, temp);
+        std::vector<std::pair<Move, float>> policy;
+        {
+            ScopedTimer t(timers.policy_compute);
+            policy = compute_policy_from_q(pool, current, temp);
+        }
 
         if (policy.empty()) {
             result.winner = 0;  // Error
@@ -354,17 +365,24 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         }
 
         // Select move
-        Move selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
+        Move selected_move;
+        {
+            ScopedTimer t(timers.move_selection);
+            selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
+        }
 
         // Find the child for this move
         uint32_t next = NULL_NODE;
-        uint32_t child = node.first_child;
-        while (child != NULL_NODE) {
-            if (pool[child].move == selected_move) {
-                next = child;
-                break;
+        {
+            ScopedTimer t(timers.child_lookup);
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                if (pool[child].move == selected_move) {
+                    next = child;
+                    break;
+                }
+                child = pool[child].next_sibling;
             }
-            child = pool[child].next_sibling;
         }
 
         if (next == NULL_NODE) {
@@ -387,6 +405,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
     // Backpropagate game result along the path taken
     // This reinforces the actual game outcome in the tree
     if (result.winner != 0) {
+        ScopedTimer t(timers.backprop);
         float value = static_cast<float>(result.winner);
         for (size_t i = game_path.size(); i > 0; --i) {
             uint32_t idx = game_path[i - 1];
@@ -403,13 +422,130 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
 void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                                           ModelInference& model, int iterations) {
+    auto& timers = get_timers();
+
+    // Process in batches for better GPU utilization
+    constexpr int EVAL_BATCH_SIZE = 64;
+
+    // Pending evaluations: (path, node_to_eval_idx)
+    // We store paths because we need them for backprop after batch eval
+    struct PendingEval {
+        std::vector<uint32_t> path;
+        uint32_t eval_node_idx;
+    };
+    std::vector<PendingEval> pending;
+    pending.reserve(EVAL_BATCH_SIZE);
+
+    auto flush_pending = [&]() {
+        if (pending.empty()) return;
+
+        // Collect nodes for batch evaluation (skip cached ones)
+        std::vector<const StateNode*> nodes_to_eval;
+        std::vector<size_t> needs_eval_idx;  // indices into pending
+        nodes_to_eval.reserve(pending.size());
+        needs_eval_idx.reserve(pending.size());
+
+        for (size_t i = 0; i < pending.size(); ++i) {
+            StateNode& node = pool[pending[i].eval_node_idx];
+            if (node.stats.has_nn_value()) {
+                // Use cached value immediately
+                backpropagate(pool, pending[i].path, node.stats.get_nn_value());
+            } else {
+                nodes_to_eval.push_back(&node);
+                needs_eval_idx.push_back(i);
+            }
+        }
+
+        // Batch evaluate only uncached nodes
+        if (!nodes_to_eval.empty()) {
+            std::vector<float> values;
+            {
+                ScopedTimer t(timers.nn_single_eval);
+                values = model.evaluate_batch(nodes_to_eval);
+            }
+
+            // Cache and backpropagate
+            for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
+                size_t i = needs_eval_idx[j];
+                pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
+                backpropagate(pool, pending[i].path, values[j]);
+            }
+        }
+
+        pending.clear();
+    };
+
+    MCTSConfig dummy_config;
+    dummy_config.c_puct = 1.5f;
+    dummy_config.fpu = 0.0f;
+
     for (int i = 0; i < iterations; ++i) {
-        mcts_iteration(pool, root_idx, model);
+        ScopedTimer t(timers.single_mcts);
+
+        // SELECTION: traverse to leaf
+        std::vector<uint32_t> path;
+        path.reserve(64);
+
+        uint32_t current = root_idx;
+        while (current != NULL_NODE) {
+            path.push_back(current);
+            StateNode& node = pool[current];
+
+            if (node.is_terminal()) {
+                break;
+            }
+
+            if (!node.has_children()) {
+                break;
+            }
+
+            current = select_child_puct(pool, current, dummy_config);
+        }
+
+        if (path.empty()) continue;
+
+        uint32_t leaf_idx = path.back();
+        StateNode& leaf = pool[leaf_idx];
+
+        if (leaf.is_terminal()) {
+            // Terminal - backprop immediately with known value
+            backpropagate(pool, path, leaf.terminal_value);
+            continue;
+        }
+
+        // EXPANSION: expand if not already
+        if (!leaf.is_expanded()) {
+            ScopedTimer t2(timers.expansion);
+            expand_with_nn_priors(pool, leaf_idx, model);
+        }
+
+        // Determine which node to evaluate
+        uint32_t eval_node_idx = leaf_idx;
+        if (leaf.has_children()) {
+            uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
+            if (child != NULL_NODE) {
+                path.push_back(child);
+                eval_node_idx = child;
+            }
+        }
+
+        // Queue for batch evaluation
+        pending.push_back({std::move(path), eval_node_idx});
+
+        // Flush when batch is full
+        if (pending.size() >= EVAL_BATCH_SIZE) {
+            flush_pending();
+        }
     }
+
+    // Flush remaining
+    flush_pending();
 }
 
 void SelfPlayEngine::mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInference& model) {
-    // SELECTION: traverse to leaf
+    // Legacy single-iteration version - kept for compatibility but prefer run_mcts_iterations
+    auto& timers = get_timers();
+
     std::vector<uint32_t> path;
     path.reserve(64);
 
@@ -418,16 +554,9 @@ void SelfPlayEngine::mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInfe
         path.push_back(current);
         StateNode& node = pool[current];
 
-        if (node.is_terminal()) {
-            break;
-        }
+        if (node.is_terminal()) break;
+        if (!node.has_children()) break;
 
-        if (!node.has_children()) {
-            // Leaf - expand it
-            break;
-        }
-
-        // Select best child via PUCT
         MCTSConfig dummy_config;
         dummy_config.c_puct = 1.5f;
         dummy_config.fpu = 0.0f;
@@ -443,34 +572,38 @@ void SelfPlayEngine::mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInfe
     if (leaf.is_terminal()) {
         value = leaf.terminal_value;
     } else {
-        // EXPANSION: expand if not already
         if (!leaf.is_expanded()) {
+            ScopedTimer t(timers.expansion);
             expand_with_nn_priors(pool, leaf_idx, model);
         }
 
-        // EVALUATION: use NN on leaf or a child
+        StateNode* eval_node = &leaf;
         if (leaf.has_children()) {
-            // Select one child for evaluation
             MCTSConfig dummy_config;
             dummy_config.c_puct = 1.5f;
             dummy_config.fpu = 0.0f;
             uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
             if (child != NULL_NODE) {
                 path.push_back(child);
-                value = model.evaluate_node(&pool[child]);
-            } else {
-                value = model.evaluate_node(&leaf);
+                eval_node = &pool[child];
             }
+        }
+
+        // Check for cached value
+        if (eval_node->stats.has_nn_value()) {
+            value = eval_node->stats.get_nn_value();
         } else {
-            value = model.evaluate_node(&leaf);
+            ScopedTimer t(timers.nn_single_eval);
+            value = model.evaluate_node(eval_node);
+            eval_node->stats.set_nn_value(value);
         }
     }
 
-    // BACKPROPAGATION
     backpropagate(pool, path, value);
 }
 
 void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, ModelInference& model) {
+    auto& timers = get_timers();
     StateNode& node = pool[node_idx];
 
     // Use striped mutex for thread safety (future-proofing)
@@ -481,7 +614,10 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Mo
     if (node.is_expanded()) return;
 
     // Generate children
-    node.generate_valid_children();
+    {
+        ScopedTimer t(timers.generate_children);
+        node.generate_valid_children();
+    }
 
     if (!node.has_children()) return;
 
@@ -494,23 +630,30 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Mo
     }
 
     // Batch evaluate all children
-    std::vector<float> values = model.evaluate_batch(children);
+    std::vector<float> values;
+    {
+        ScopedTimer t(timers.nn_batch_eval);
+        values = model.evaluate_batch(children);
+    }
 
-    // Convert values to priors via softmax
-    // Note: child values are from opponent's perspective, so negate
+    // Cache NN values and convert to priors via softmax
+    // Note: child values are from opponent's perspective, so negate for priors
     if (!values.empty()) {
+        // First pass: compute softmax normalization (preserving raw values)
         float max_v = *std::max_element(values.begin(), values.end());
+        std::vector<float> exp_values(values.size());
         float sum = 0.0f;
-        for (float& v : values) {
-            v = std::exp(-(v - max_v));  // Negate and subtract max for stability
-            sum += v;
+        for (size_t i = 0; i < values.size(); ++i) {
+            exp_values[i] = std::exp(-(values[i] - max_v));
+            sum += exp_values[i];
         }
 
-        // Set priors on children
+        // Second pass: cache raw values and set priors
         child = node.first_child;
         size_t i = 0;
         while (child != NULL_NODE && i < values.size()) {
-            pool[child].stats.prior = values[i] / sum;
+            pool[child].stats.set_nn_value(values[i]);  // Cache raw value
+            pool[child].stats.prior = exp_values[i] / sum;
             child = pool[child].next_sibling;
             ++i;
         }
@@ -525,6 +668,340 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
         // Value from this node's perspective
         float node_value = node.is_p1_to_move() ? value : -value;
         node.stats.update(node_value);
+    }
+}
+
+// ============================================================================
+// InferenceServer-based Self-Play (for multi-threaded games)
+// ============================================================================
+
+SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server) {
+    SelfPlayResult result;
+    auto& timers = get_timers();
+
+    std::vector<uint32_t> game_path;
+    game_path.reserve(200);
+
+    uint32_t current = root_idx;
+    game_path.push_back(current);
+
+    while (current != NULL_NODE) {
+        StateNode& node = pool[current];
+
+        if (node.is_terminal()) {
+            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            break;
+        }
+
+        if (node.p1.row == 8) {
+            result.winner = 1;
+            node.set_terminal(1.0f);
+            break;
+        }
+        if (node.p2.row == 0) {
+            result.winner = -1;
+            node.set_terminal(-1.0f);
+            break;
+        }
+
+        if (!node.is_expanded()) {
+            ScopedTimer t(timers.expansion);
+            expand_with_nn_priors(pool, current, server);
+        }
+
+        if (!node.has_children()) {
+            result.winner = 0;
+            break;
+        }
+
+        {
+            ScopedTimer t(timers.mcts_iterations);
+            run_mcts_iterations(pool, current, server, config_.simulations_per_move);
+        }
+
+        float temp = (result.num_moves < config_.temperature_drop_ply)
+                     ? config_.temperature : 0.0f;
+        std::vector<std::pair<Move, float>> policy;
+        {
+            ScopedTimer t(timers.policy_compute);
+            policy = compute_policy_from_q(pool, current, temp);
+        }
+
+        if (policy.empty()) {
+            result.winner = 0;
+            break;
+        }
+
+        Move selected_move;
+        {
+            ScopedTimer t(timers.move_selection);
+            selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
+        }
+
+        uint32_t next = NULL_NODE;
+        {
+            ScopedTimer t(timers.child_lookup);
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                if (pool[child].move == selected_move) {
+                    next = child;
+                    break;
+                }
+                child = pool[child].next_sibling;
+            }
+        }
+
+        if (next == NULL_NODE) {
+            result.winner = 0;
+            break;
+        }
+
+        current = next;
+        game_path.push_back(current);
+        result.num_moves++;
+
+        if (result.num_moves > 500) {
+            result.winner = 0;
+            break;
+        }
+    }
+
+    if (result.winner != 0) {
+        ScopedTimer t(timers.backprop);
+        float value = static_cast<float>(result.winner);
+        for (size_t i = game_path.size(); i > 0; --i) {
+            uint32_t idx = game_path[i - 1];
+            StateNode& node = pool[idx];
+            float node_value = node.is_p1_to_move() ? value : -value;
+            node.stats.update(node_value);
+        }
+    }
+
+    return result;
+}
+
+void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
+                                          InferenceServer& server, int iterations) {
+    auto& timers = get_timers();
+    constexpr int EVAL_BATCH_SIZE = 64;
+
+    struct PendingEval {
+        std::vector<uint32_t> path;
+        uint32_t eval_node_idx;
+        std::future<float> future;
+    };
+    std::vector<PendingEval> pending;
+    pending.reserve(EVAL_BATCH_SIZE);
+
+    auto flush_pending = [&]() {
+        if (pending.empty()) return;
+
+        // Wait for all futures, cache the values, and backpropagate
+        for (auto& p : pending) {
+            float value = p.future.get();
+            pool[p.eval_node_idx].stats.set_nn_value(value);
+            backpropagate(pool, p.path, value);
+        }
+        pending.clear();
+    };
+
+    MCTSConfig dummy_config;
+    dummy_config.c_puct = 1.5f;
+    dummy_config.fpu = 0.0f;
+
+    for (int i = 0; i < iterations; ++i) {
+        ScopedTimer t(timers.single_mcts);
+
+        std::vector<uint32_t> path;
+        path.reserve(64);
+
+        uint32_t current = root_idx;
+        while (current != NULL_NODE) {
+            path.push_back(current);
+            StateNode& node = pool[current];
+
+            if (node.is_terminal()) break;
+            if (!node.has_children()) break;
+
+            current = select_child_puct(pool, current, dummy_config);
+        }
+
+        if (path.empty()) continue;
+
+        uint32_t leaf_idx = path.back();
+        StateNode& leaf = pool[leaf_idx];
+
+        if (leaf.is_terminal()) {
+            backpropagate(pool, path, leaf.terminal_value);
+            continue;
+        }
+
+        if (!leaf.is_expanded()) {
+            ScopedTimer t2(timers.expansion);
+            expand_with_nn_priors(pool, leaf_idx, server);
+        }
+
+        uint32_t eval_node_idx = leaf_idx;
+        if (leaf.has_children()) {
+            uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
+            if (child != NULL_NODE) {
+                path.push_back(child);
+                eval_node_idx = child;
+            }
+        }
+
+        // Check if we already have a cached NN value
+        StateNode& eval_node = pool[eval_node_idx];
+        if (eval_node.stats.has_nn_value()) {
+            // Use cached value directly
+            backpropagate(pool, path, eval_node.stats.get_nn_value());
+        } else {
+            // Submit for async evaluation
+            auto future = server.submit(&eval_node);
+            pending.push_back({std::move(path), eval_node_idx, std::move(future)});
+
+            if (pending.size() >= EVAL_BATCH_SIZE) {
+                flush_pending();
+            }
+        }
+    }
+
+    flush_pending();
+}
+
+void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
+    auto& timers = get_timers();
+    StateNode& node = pool[node_idx];
+
+    size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
+    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+
+    if (node.is_expanded()) return;
+
+    {
+        ScopedTimer t(timers.generate_children);
+        node.generate_valid_children();
+    }
+
+    if (!node.has_children()) return;
+
+    // Collect children for batch evaluation
+    std::vector<const StateNode*> children;
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        children.push_back(&pool[child]);
+        child = pool[child].next_sibling;
+    }
+
+    // Submit batch and wait for result
+    std::vector<float> values;
+    {
+        ScopedTimer t(timers.nn_batch_eval);
+        auto future = server.submit_batch(std::move(children));
+        values = future.get();
+    }
+
+    // Cache the raw NN values and convert to priors via softmax
+    if (!values.empty()) {
+        // First pass: cache raw values and compute softmax normalization
+        float max_v = *std::max_element(values.begin(), values.end());
+        std::vector<float> exp_values(values.size());
+        float sum = 0.0f;
+        for (size_t i = 0; i < values.size(); ++i) {
+            exp_values[i] = std::exp(-(values[i] - max_v));
+            sum += exp_values[i];
+        }
+
+        // Second pass: set cached values and priors
+        child = node.first_child;
+        size_t i = 0;
+        while (child != NULL_NODE && i < values.size()) {
+            pool[child].stats.set_nn_value(values[i]);  // Cache raw value
+            pool[child].stats.prior = exp_values[i] / sum;
+            child = pool[child].next_sibling;
+            ++i;
+        }
+    }
+}
+
+void SelfPlayEngine::run_multi_game(
+    NodePool& pool,
+    uint32_t root_idx,
+    InferenceServer& server,
+    int num_games,
+    int num_workers,
+    MultiGameStats& stats,
+    std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback,
+    int checkpoint_interval_games)
+{
+    stats.reset();
+    std::atomic<int> games_remaining{num_games};
+
+    std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
+              << num_workers << " workers\n";
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // Launch worker threads
+    std::vector<std::jthread> workers;
+    workers.reserve(num_workers);
+
+    for (int i = 0; i < num_workers; ++i) {
+        workers.emplace_back([this, &pool, root_idx, &server, &games_remaining, &stats, i](std::stop_token st) {
+            worker_loop(st, i, pool, root_idx, server, games_remaining, stats);
+        });
+    }
+
+    // Monitor progress and call checkpoints
+    int last_checkpoint = 0;
+    while (games_remaining.load(std::memory_order_relaxed) > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        int completed = stats.games_completed.load(std::memory_order_relaxed);
+        if (checkpoint_callback &&
+            completed - last_checkpoint >= checkpoint_interval_games) {
+            checkpoint_callback(stats, pool);
+            last_checkpoint = completed;
+        }
+    }
+
+    // Wait for all workers to finish
+    workers.clear();
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    int completed = stats.games_completed.load(std::memory_order_relaxed);
+    auto games_per_sec = elapsed > 0 ? static_cast<double>(completed) / elapsed : 0;
+
+    std::cout << "[SelfPlayEngine] Completed " << completed << " games in "
+              << elapsed << "s (" << std::fixed << std::setprecision(1)
+              << games_per_sec << " games/s)\n";
+}
+
+void SelfPlayEngine::worker_loop(
+    std::stop_token stop_token,
+    int worker_id,
+    NodePool& pool,
+    uint32_t root_idx,
+    InferenceServer& server,
+    std::atomic<int>& games_remaining,
+    MultiGameStats& stats)
+{
+    (void)worker_id;  // Could use for logging
+
+    while (!stop_token.stop_requested()) {
+        // Claim a game to play
+        int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+        if (remaining <= 0) {
+            // No more games - restore the count and exit
+            games_remaining.fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+
+        // Play one game
+        SelfPlayResult result = self_play(pool, root_idx, server);
+        stats.add_result(result);
     }
 }
 

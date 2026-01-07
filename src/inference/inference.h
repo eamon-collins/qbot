@@ -78,6 +78,9 @@ private:
     /// @param callback Called for each evaluated node
     void process_batch(const EvalCallback& callback);
 
+    /// Ensure pre-allocated buffers can hold at least `size` nodes
+    void ensure_buffer_capacity(int size);
+
     torch::jit::script::Module model_;
     torch::Device device_;
     int batch_size_;
@@ -85,6 +88,12 @@ private:
 
     /// Queue entries: (node pointer, node index)
     std::deque<std::pair<const StateNode*, uint32_t>> evaluation_queue_;
+
+    /// Pre-allocated tensor buffers (CPU pinned memory for fast GPU transfer)
+    int buffer_capacity_{0};
+    torch::Tensor pawn_buffer_;   // [capacity, 2, 9, 9]
+    torch::Tensor wall_buffer_;   // [capacity, 2, 8, 8]
+    torch::Tensor meta_buffer_;   // [capacity, 3]
 };
 
 } // namespace qbot

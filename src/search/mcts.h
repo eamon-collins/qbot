@@ -31,6 +31,7 @@
 // Include inference for NN evaluation
 #ifdef QBOT_ENABLE_INFERENCE
 #include "../inference/inference.h"
+#include "../inference/inference_server.h"
 #endif
 
 namespace qbot {
@@ -493,9 +494,42 @@ struct SelfPlayResult {
 
 #ifdef QBOT_ENABLE_INFERENCE
 
+/// Statistics for multi-threaded self-play (thread-safe accumulator)
+struct MultiGameStats {
+    std::atomic<int> p1_wins{0};
+    std::atomic<int> p2_wins{0};
+    std::atomic<int> draws{0};
+    std::atomic<int> total_moves{0};
+    std::atomic<int> games_completed{0};
+
+    void add_result(const SelfPlayResult& result) noexcept {
+        if (result.winner == 1) p1_wins.fetch_add(1, std::memory_order_relaxed);
+        else if (result.winner == -1) p2_wins.fetch_add(1, std::memory_order_relaxed);
+        else draws.fetch_add(1, std::memory_order_relaxed);
+        total_moves.fetch_add(result.num_moves, std::memory_order_relaxed);
+        games_completed.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void reset() noexcept {
+        p1_wins.store(0, std::memory_order_relaxed);
+        p2_wins.store(0, std::memory_order_relaxed);
+        draws.store(0, std::memory_order_relaxed);
+        total_moves.store(0, std::memory_order_relaxed);
+        games_completed.store(0, std::memory_order_relaxed);
+    }
+
+    // Non-copyable due to atomics
+    MultiGameStats() = default;
+    MultiGameStats(const MultiGameStats&) = delete;
+    MultiGameStats& operator=(const MultiGameStats&) = delete;
+};
+
 /// Self-play engine for generating training data
 /// Plays complete games using MCTS + NN evaluation, accumulating statistics
 /// in a persistent tree that can be dumped for training.
+///
+/// Supports multi-threaded self-play with shared inference server for
+/// better GPU utilization.
 class SelfPlayEngine {
 public:
     explicit SelfPlayEngine(SelfPlayConfig config = SelfPlayConfig{})
@@ -508,27 +542,68 @@ public:
     /// @return Game result
     SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, ModelInference& model);
 
+    /// Play a single self-play game using InferenceServer (for multi-threaded use)
+    /// @param pool Node pool (shared across workers)
+    /// @param root_idx Root node index
+    /// @param server Inference server for batched GPU evaluation
+    /// @return Game result
+    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server);
+
+    /// Run multiple self-play games in parallel
+    /// @param pool Node pool (shared across all games)
+    /// @param root_idx Root node index
+    /// @param server Inference server for batched GPU evaluation
+    /// @param num_games Total games to play
+    /// @param num_workers Number of worker threads
+    /// @param stats Output statistics (must be pre-allocated)
+    /// @param checkpoint_callback Called periodically with stats (optional)
+    void run_multi_game(
+        NodePool& pool,
+        uint32_t root_idx,
+        InferenceServer& server,
+        int num_games,
+        int num_workers,
+        MultiGameStats& stats,
+        std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
+        int checkpoint_interval_games = 10);
+
     /// Get configuration
     [[nodiscard]] const SelfPlayConfig& config() const noexcept { return config_; }
     [[nodiscard]] SelfPlayConfig& config() noexcept { return config_; }
 
 private:
-    /// Run MCTS iterations from a position
+    /// Run MCTS iterations from a position (direct model access)
     void run_mcts_iterations(NodePool& pool, uint32_t root_idx, ModelInference& model, int iterations);
+
+    /// Run MCTS iterations from a position (via inference server)
+    void run_mcts_iterations(NodePool& pool, uint32_t root_idx, InferenceServer& server, int iterations);
 
     /// Single MCTS iteration: select -> expand -> evaluate -> backprop
     void mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInference& model);
 
-    /// Expand a node and set priors using batch NN evaluation
+    /// Expand a node and set priors using batch NN evaluation (direct model)
     void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, ModelInference& model);
+
+    /// Expand a node and set priors using inference server
+    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
 
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
 
+    /// Worker thread main loop for multi-game self-play
+    void worker_loop(
+        std::stop_token stop_token,
+        int worker_id,
+        NodePool& pool,
+        uint32_t root_idx,
+        InferenceServer& server,
+        std::atomic<int>& games_remaining,
+        MultiGameStats& stats);
+
     SelfPlayConfig config_;
 
-    // Striped mutexes for expansion (same pattern as MCTSEngine)
-    static constexpr size_t NUM_EXPANSION_MUTEXES = 64;
+    // Striped mutexes for expansion - 256 for better parallelism with many workers
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 256;
     std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 };
 

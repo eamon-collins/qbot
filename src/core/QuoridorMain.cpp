@@ -11,6 +11,7 @@
 #include "../util/storage.h"
 #include "../util/gui_client.h"
 #include "../util/pathfinding.h"
+#include "../util/timer.h"
 #include "../search/mcts.h"
 #include "Game.h"
 
@@ -69,6 +70,7 @@ struct Config {
 
     // Self-play specific options
     int num_games = 1000;                        // Number of self-play games
+    int batch_size = 256;                        // Inference batch size for GPU
     float temperature = 1.0f;                    // Softmax temperature
     int temperature_drop_ply = 30;               // Ply to drop temperature to 0
 
@@ -116,6 +118,8 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Enable verbose output")
         ("games,g", po::value<int>(&config.num_games)->default_value(1000),
             "Number of self-play games")
+        ("batch-size,B", po::value<int>(&config.batch_size)->default_value(256),
+            "Inference batch size for GPU (higher = better GPU utilization)")
         ("iterations,i", po::value<int>(&config.training_iterations)->default_value(10000),
             "Training iterations (tree-building mode)")
         ("simulations,n", po::value<int>(&config.simulations_per_move)->default_value(800),
@@ -737,15 +741,6 @@ int run_selfplay(const Config& config,
         return 1;
     }
 
-    // Load model
-    std::cout << "Loading model from: " << config.model_file << "\n";
-    ModelInference model(config.model_file);
-    if (!model.is_ready()) {
-        std::cerr << "Error: Failed to load model\n";
-        return 1;
-    }
-    std::cout << "Model loaded successfully!\n\n";
-
     // Initialize the root node only if it's a fresh tree
     StateNode& root_node = (*pool)[root];
     if (!root_node.is_expanded() && !root_node.has_children()) {
@@ -763,54 +758,117 @@ int run_selfplay(const Config& config,
 
     std::cout << "Starting self-play...\n";
     std::cout << "  Games:       " << config.num_games << "\n";
+    std::cout << "  Threads:     " << config.num_threads << "\n";
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
     std::cout << "  Save file:   " << config.save_file << "\n\n";
 
-    int p1_wins = 0, p2_wins = 0, draws = 0;
-    int total_moves = 0;
-    auto start_time = std::chrono::steady_clock::now();
+    // Use multi-threaded path if threads > 1
+    if (config.num_threads > 1) {
+        // Create inference server for batched GPU access
+        std::cout << "Loading model into inference server...\n";
+        std::cout << "  Batch size: " << config.batch_size << "\n";
+        InferenceServerConfig server_config;
+        server_config.batch_size = config.batch_size;
+        server_config.max_wait_ms = 0.5;
+        InferenceServer server(config.model_file, server_config);
+        server.start();
 
-    for (int game = 0; game < config.num_games; ++game) {
-        // Play one complete game
-        SelfPlayResult result = engine.self_play(*pool, root, model);
+        auto checkpoint_callback = [&config, &pool, root](const MultiGameStats& stats, const NodePool& p) {
+            int completed = stats.games_completed.load(std::memory_order_relaxed);
+            int p1 = stats.p1_wins.load(std::memory_order_relaxed);
+            int p2 = stats.p2_wins.load(std::memory_order_relaxed);
+            int d = stats.draws.load(std::memory_order_relaxed);
+            int moves = stats.total_moves.load(std::memory_order_relaxed);
 
-        if (result.winner == 1) ++p1_wins;
-        else if (result.winner == -1) ++p2_wins;
-        else ++draws;
-        total_moves += result.num_moves;
+            std::cout << "[" << completed << "/" << config.num_games << "] "
+                      << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
+                      << " | Nodes: " << p.allocated()
+                      << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << "\n";
 
-        // Progress update
-        if ((game + 1) % 10 == 0 || game == config.num_games - 1) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-            double games_per_sec = elapsed > 0 ? static_cast<double>(game + 1) / elapsed : 0;
+            // Checkpoint save
+            if (!config.save_file.empty() && completed % config.games_per_checkpoint == 0) {
+                save_tree(const_cast<NodePool&>(p), root, config.save_file);
+            }
+        };
 
-            std::cout << "[" << (game + 1) << "/" << config.num_games << "] "
-                      << "P1: " << p1_wins << ", P2: " << p2_wins << ", Draw: " << draws
-                      << " | Nodes: " << pool->allocated()
-                      << " | Avg moves: " << (total_moves / (game + 1))
-                      << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s\n";
-        }
+        MultiGameStats stats;
+        engine.run_multi_game(
+            *pool, root, server,
+            config.num_games, config.num_threads,
+            stats, checkpoint_callback, 10);
 
-        // Checkpoint periodically
-        if ((game + 1) % config.games_per_checkpoint == 0 && !config.save_file.empty()) {
+        server.stop();
+
+        // Final save
+        if (!config.save_file.empty()) {
             save_tree(*pool, root, config.save_file);
         }
+
+        int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
+        int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
+        int draws = stats.draws.load(std::memory_order_relaxed);
+        int total_moves = stats.total_moves.load(std::memory_order_relaxed);
+
+        std::cout << "\nSelf-play complete!\n";
+        std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+        std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+        std::cout << "  Draws:   " << draws << "\n";
+        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+
+    } else {
+        // Single-threaded path (original implementation)
+        std::cout << "Loading model from: " << config.model_file << "\n";
+        ModelInference model(config.model_file);
+        if (!model.is_ready()) {
+            std::cerr << "Error: Failed to load model\n";
+            return 1;
+        }
+        std::cout << "Model loaded successfully!\n\n";
+
+        int p1_wins = 0, p2_wins = 0, draws = 0;
+        int total_moves = 0;
+        auto start_time = std::chrono::steady_clock::now();
+
+        for (int game = 0; game < config.num_games; ++game) {
+            SelfPlayResult result = engine.self_play(*pool, root, model);
+
+            if (result.winner == 1) ++p1_wins;
+            else if (result.winner == -1) ++p2_wins;
+            else ++draws;
+            total_moves += result.num_moves;
+
+            if ((game + 1) % 10 == 0 || game == config.num_games - 1) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+                double games_per_sec = elapsed > 0 ? static_cast<double>(game + 1) / elapsed : 0;
+
+                std::cout << "[" << (game + 1) << "/" << config.num_games << "] "
+                          << "P1: " << p1_wins << ", P2: " << p2_wins << ", Draw: " << draws
+                          << " | Nodes: " << pool->allocated()
+                          << " | Avg moves: " << (total_moves / (game + 1))
+                          << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s\n";
+            }
+
+            if ((game + 1) % config.games_per_checkpoint == 0 && !config.save_file.empty()) {
+                save_tree(*pool, root, config.save_file);
+            }
+        }
+
+        if (!config.save_file.empty()) {
+            save_tree(*pool, root, config.save_file);
+        }
+
+        std::cout << "\nSelf-play complete!\n";
+        std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+        std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+        std::cout << "  Draws:   " << draws << "\n";
+        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
     }
 
-    // Final save
-    std::cout << "\n";
-    if (!config.save_file.empty()) {
-        save_tree(*pool, root, config.save_file);
-    }
-
-    std::cout << "\nSelf-play complete!\n";
-    std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
-    std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
-    std::cout << "  Draws:   " << draws << "\n";
-    std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+    // Print timing breakdown
+    get_timers().print();
 
     return 0;
 }

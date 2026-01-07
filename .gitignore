@@ -13,3 +13,4 @@ __pycache__
 model/
 core.*
 tree*.out
+tree.qbot

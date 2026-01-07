@@ -463,6 +463,7 @@ private:
 };
 
 /// Helper to allocate multiple children atomically
+/// Test only workflows
 class ChildBuilder {
 public:
     explicit ChildBuilder(NodePool& pool, uint32_t parent_idx)

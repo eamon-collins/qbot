@@ -66,7 +66,9 @@ set(QBOT_LIB_SOURCES
 )
 
 if(ENABLE_INFERENCE)
-    list(APPEND QBOT_LIB_SOURCES src/inference/inference.cpp)
+    list(APPEND QBOT_LIB_SOURCES
+        src/inference/inference.cpp
+        src/inference/inference_server.cpp)
 endif()
 
 set(QBOT_MAIN_SOURCES
