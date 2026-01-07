@@ -1,12 +1,14 @@
 #include "storage.h"
 
 #include <chrono>
-#include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <queue>
-#include <unordered_map>
-#include <unordered_set>
+#include <vector>
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace qbot {
 
@@ -83,12 +85,10 @@ std::expected<void, StorageError> TreeStorage::save(
         return std::unexpected(StorageError::EmptyTree);
     }
 
-    std::printf("TreeStorage::save - pool.allocated()=%zu, root=%u\n",
-                pool.allocated(), root);
-
-    // Pass 1: BFS to collect reachable nodes and build sparse remap
+    // Pass 1: BFS to collect reachable nodes and build dense remap vector
+    // Using vector instead of unordered_map for O(1) lookup without hashing
     std::vector<uint32_t> reachable;
-    std::unordered_map<uint32_t, uint32_t> remap;  // old_idx -> new_idx
+    std::vector<uint32_t> remap(pool.capacity(), NULL_NODE);
 
     {
         std::queue<uint32_t> queue;
@@ -115,94 +115,93 @@ std::expected<void, StorageError> TreeStorage::save(
         return std::unexpected(StorageError::EmptyTree);
     }
 
-    std::printf("TreeStorage::save - BFS found %zu reachable nodes\n", reachable.size());
+    const size_t node_count = reachable.size();
+    const size_t file_size = sizeof(TreeFileHeader) + node_count * sizeof(SerializedNode);
 
-    // Debug: check for orphaned nodes
-    if (reachable.size() < pool.allocated()) {
-        std::unordered_set<uint32_t> reachable_set(reachable.begin(), reachable.end());
-        size_t printed = 0;
-        size_t parent_null = 0;
-        size_t parent_not_reachable = 0;
-        size_t parent_missing_child = 0;
-
-        for (size_t i = 0; i < pool.allocated(); ++i) {
-            if (reachable_set.find(static_cast<uint32_t>(i)) == reachable_set.end()) {
-                const StateNode& orphan = pool[static_cast<uint32_t>(i)];
-                uint32_t parent_idx = orphan.parent;
-
-                if (parent_idx == NULL_NODE) {
-                    parent_null++;
-                    if (printed < 3) {
-                        std::printf("  Orphan %zu: parent=NULL\n", i);
-                        printed++;
-                    }
-                } else if (reachable_set.find(parent_idx) == reachable_set.end()) {
-                    parent_not_reachable++;
-                    if (printed < 3) {
-                        std::printf("  Orphan %zu: parent=%u (also orphaned)\n", i, parent_idx);
-                        printed++;
-                    }
-                } else {
-                    parent_missing_child++;
-                    if (printed < 3) {
-                        const StateNode& p = pool[parent_idx];
-                        std::printf("  Orphan %zu: parent=%u is reachable, parent.first_child=%u\n",
-                                    i, parent_idx, p.first_child);
-                        printed++;
-                    }
-                }
-            }
-        }
-        std::printf("  Orphan breakdown: parent_null=%zu, parent_orphaned=%zu, parent_missing_link=%zu\n",
-                    parent_null, parent_not_reachable, parent_missing_child);
-    }
-
-    // Open file and write header
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file) {
+    // Open file with POSIX for mmap
+    int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
         if (!std::filesystem::exists(path.parent_path())) {
             return std::unexpected(StorageError::FileNotFound);
         }
         return std::unexpected(StorageError::PermissionDenied);
     }
 
-    TreeFileHeader header;
-    header.node_count = static_cast<uint32_t>(reachable.size());
-    header.root_index = 0;  // Root is always first after compaction
-    header.reserved1 = 0;   // No checksum
-    header.timestamp = static_cast<uint64_t>(
-        std::chrono::system_clock::now().time_since_epoch().count());
-
-    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-    if (!file) {
+    // Pre-allocate file to exact size (avoids fragmentation, required for mmap)
+    if (ftruncate(fd, static_cast<off_t>(file_size)) != 0) {
+        ::close(fd);
         return std::unexpected(StorageError::IoError);
     }
 
-    // Pass 2: Stream nodes directly to file
+    // mmap the file for direct memory writes
+    void* mapped = mmap(nullptr, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+        ::close(fd);
+        return std::unexpected(StorageError::IoError);
+    }
+
+    // Hint kernel about sequential write pattern
+    madvise(mapped, file_size, MADV_SEQUENTIAL);
+
+    // Write header directly to mapped memory
+    auto* header = static_cast<TreeFileHeader*>(mapped);
+    header->magic = TreeFileHeader::MAGIC;
+    header->version = TreeFileHeader::CURRENT_VERSION;
+    header->flags = 0;
+    header->node_count = static_cast<uint32_t>(node_count);
+    header->root_index = 0;  // Root is always first after compaction
+    header->reserved1 = 0;
+    header->timestamp = static_cast<uint64_t>(
+        std::chrono::system_clock::now().time_since_epoch().count());
+    std::memset(header->reserved, 0, sizeof(header->reserved));
+
+    // Get pointer to node array in mapped region
+    auto* nodes = reinterpret_cast<SerializedNode*>(
+        static_cast<char*>(mapped) + sizeof(TreeFileHeader));
+
+    // Remap helper - direct vector lookup, no hashing
     auto remap_index = [&remap](uint32_t idx) -> uint32_t {
         if (idx == NULL_NODE) return NULL_NODE;
-        auto it = remap.find(idx);
-        return (it != remap.end()) ? it->second : NULL_NODE;
+        return remap[idx];
     };
 
-    for (uint32_t old_idx : reachable) {
-        SerializedNode sn = serialize_node(pool[old_idx]);
+    // Pass 2: Serialize directly into mapped memory
+    for (size_t i = 0; i < node_count; ++i) {
+        uint32_t old_idx = reachable[i];
+        SerializedNode& sn = nodes[i];
 
-        // Remap indices
-        sn.first_child = remap_index(sn.first_child);
-        sn.next_sibling = remap_index(sn.next_sibling);
-        sn.parent = remap_index(sn.parent);
-
-        file.write(reinterpret_cast<const char*>(&sn), sizeof(sn));
-        if (!file) {
-            return std::unexpected(StorageError::IoError);
-        }
+        // Serialize node
+        const StateNode& node = pool[old_idx];
+        sn.first_child = remap_index(node.first_child);
+        sn.next_sibling = remap_index(node.next_sibling);
+        sn.parent = remap_index(node.parent);
+        sn.p1_row = node.p1.row;
+        sn.p1_col = node.p1.col;
+        sn.p1_fences = node.p1.fences;
+        sn.p2_row = node.p2.row;
+        sn.p2_col = node.p2.col;
+        sn.p2_fences = node.p2.fences;
+        sn.move_data = node.move.data;
+        sn.flags = node.flags;
+        sn.reserved = 0;
+        sn.ply = node.ply;
+        sn.fences_horizontal = node.fences.horizontal;
+        sn.fences_vertical = node.fences.vertical;
+        sn.visits = node.stats.visits.load(std::memory_order_relaxed);
+        sn.total_value = node.stats.total_value.load(std::memory_order_relaxed);
+        sn.prior = node.stats.prior;
+        sn.terminal_value = node.terminal_value;
     }
 
-    file.close();
-    if (!file) {
+    // Sync and unmap
+    if (msync(mapped, file_size, MS_SYNC) != 0) {
+        munmap(mapped, file_size);
+        ::close(fd);
         return std::unexpected(StorageError::IoError);
     }
+
+    munmap(mapped, file_size);
+    ::close(fd);
 
     return {};
 }
@@ -210,62 +209,103 @@ std::expected<void, StorageError> TreeStorage::save(
 std::expected<LoadedTree, StorageError> TreeStorage::load(
     const std::filesystem::path& path)
 {
-    // Open file
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    // Open file with POSIX for mmap
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
         if (!std::filesystem::exists(path)) {
             return std::unexpected(StorageError::FileNotFound);
         }
         return std::unexpected(StorageError::PermissionDenied);
     }
 
-    // Read header
-    TreeFileHeader header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!file) {
+    // Get file size
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        ::close(fd);
+        return std::unexpected(StorageError::IoError);
+    }
+    const size_t file_size = static_cast<size_t>(st.st_size);
+
+    if (file_size < sizeof(TreeFileHeader)) {
+        ::close(fd);
+        return std::unexpected(StorageError::InvalidFormat);
+    }
+
+    // mmap the entire file read-only
+    void* mapped = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mapped == MAP_FAILED) {
+        ::close(fd);
         return std::unexpected(StorageError::IoError);
     }
 
+    // Hint kernel about sequential read pattern
+    madvise(mapped, file_size, MADV_SEQUENTIAL);
+
+    // Read header from mapped memory
+    const auto* header = static_cast<const TreeFileHeader*>(mapped);
+
     // Validate header
-    if (header.magic != TreeFileHeader::MAGIC) {
+    if (header->magic != TreeFileHeader::MAGIC) {
+        munmap(mapped, file_size);
+        ::close(fd);
         return std::unexpected(StorageError::InvalidFormat);
     }
-    if (header.version > TreeFileHeader::CURRENT_VERSION) {
+    if (header->version > TreeFileHeader::CURRENT_VERSION) {
+        munmap(mapped, file_size);
+        ::close(fd);
         return std::unexpected(StorageError::VersionMismatch);
     }
-    if (header.node_count == 0) {
+    if (header->node_count == 0) {
+        munmap(mapped, file_size);
+        ::close(fd);
         return std::unexpected(StorageError::EmptyTree);
     }
 
-    // Create node pool with exact capacity needed
+    // Validate file size matches expected
+    const size_t expected_size = sizeof(TreeFileHeader) +
+                                  header->node_count * sizeof(SerializedNode);
+    if (file_size < expected_size) {
+        munmap(mapped, file_size);
+        ::close(fd);
+        return std::unexpected(StorageError::CorruptedData);
+    }
+
+    // Create node pool with some headroom for continued training
     NodePool::Config config;
-    config.initial_capacity = header.node_count;
-    config.enable_lru = false;  // Disable LRU for loaded trees initially
+    config.initial_capacity = header->node_count + 10'000'000;  // 10M headroom
+    config.chunk_size = 10'000'000;  // 10M growth chunks
+    config.enable_lru = false;
 
     LoadedTree result{
         .pool = std::make_unique<NodePool>(config),
-        .root = header.root_index,
-        .timestamp = header.timestamp,
+        .root = header->root_index,
+        .timestamp = header->timestamp,
     };
 
-    // Stream read: read one node at a time directly into pool
-    SerializedNode sn;
-    for (uint32_t i = 0; i < header.node_count; ++i) {
-        file.read(reinterpret_cast<char*>(&sn), sizeof(sn));
-        if (!file) {
-            return std::unexpected(StorageError::IoError);
-        }
+    // Get pointer to node array in mapped region
+    const auto* nodes = reinterpret_cast<const SerializedNode*>(
+        static_cast<const char*>(mapped) + sizeof(TreeFileHeader));
 
+    // Bulk allocate and deserialize
+    const uint32_t node_count = header->node_count;
+    for (uint32_t i = 0; i < node_count; ++i) {
         uint32_t idx = result.pool->allocate();
         if (idx == NULL_NODE) {
+            munmap(mapped, file_size);
+            ::close(fd);
             return std::unexpected(StorageError::InsufficientMemory);
         }
         // Indices should be sequential since pool is fresh
         if (idx != i) {
+            munmap(mapped, file_size);
+            ::close(fd);
             return std::unexpected(StorageError::CorruptedData);
         }
-        deserialize_node(sn, (*result.pool)[idx]);
+        deserialize_node(nodes[i], (*result.pool)[idx]);
     }
+
+    munmap(mapped, file_size);
+    ::close(fd);
 
     return result;
 }
@@ -273,8 +313,8 @@ std::expected<LoadedTree, StorageError> TreeStorage::load(
 std::expected<TreeFileHeader, StorageError> TreeStorage::read_header(
     const std::filesystem::path& path)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
         if (!std::filesystem::exists(path)) {
             return std::unexpected(StorageError::FileNotFound);
         }
@@ -282,8 +322,10 @@ std::expected<TreeFileHeader, StorageError> TreeStorage::read_header(
     }
 
     TreeFileHeader header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!file) {
+    ssize_t bytes_read = ::read(fd, &header, sizeof(header));
+    ::close(fd);
+
+    if (bytes_read != sizeof(header)) {
         return std::unexpected(StorageError::IoError);
     }
 

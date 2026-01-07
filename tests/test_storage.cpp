@@ -518,6 +518,41 @@ TEST(StorageTest, LargeTreePerformance) {
 }
 
 // ============================================================================
+// Node Integrity Tests
+// ============================================================================
+
+TEST(StorageTest, AllAllocatedNodesReachableAfterLoad) {
+    // Verifies that after save->load, all allocated nodes in the pool
+    // are reachable from the root (no orphaned nodes)
+    TempFile tmp;
+
+    // Build a tree with multiple levels
+    NodePool pool;
+    uint32_t root = build_test_tree(pool, 5, 3);  // 1+3+9+27+81+243 = 364 nodes
+
+    size_t original_allocated = pool.allocated();
+    size_t original_reachable = count_reachable_nodes(pool, root);
+
+    // Before save: all allocated nodes should be reachable
+    EXPECT_EQ(original_allocated, original_reachable);
+
+    // Save
+    ASSERT_TRUE(TreeStorage::save(tmp.path(), pool, root).has_value());
+
+    // Load
+    auto load_result = TreeStorage::load(tmp.path());
+    ASSERT_TRUE(load_result.has_value());
+
+    auto& loaded = *load_result;
+    size_t loaded_allocated = loaded.pool->allocated();
+    size_t loaded_reachable = count_reachable_nodes(*loaded.pool, loaded.root);
+
+    // After load: all allocated nodes should still be reachable
+    EXPECT_EQ(loaded_allocated, loaded_reachable);
+    EXPECT_EQ(loaded_allocated, original_allocated);
+}
+
+// ============================================================================
 // Error String Tests
 // ============================================================================
 

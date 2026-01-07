@@ -62,7 +62,7 @@ def run_qbot(tree_path: str, model_path: str | None, duration_seconds: int,
 
         # Wait for graceful shutdown (with timeout)
         try:
-            stdout, _ = proc.communicate(timeout=30)
+            stdout, _ = proc.communicate(timeout=60)
             if stdout:
                 # Print last few lines of output
                 lines = stdout.decode().strip().split('\n')
