@@ -50,10 +50,11 @@ ModelInference::state_to_tensors(const StateNode* node) const {
         }
     }
 
-    // Meta information: remaining fences for each player
-    auto meta_tensor = torch::zeros({2}, torch::kFloat32);
+    // Meta information: remaining fences for each player + turn indicator
+    auto meta_tensor = torch::zeros({3}, torch::kFloat32);
     meta_tensor[0] = static_cast<float>(node->p1.fences);
     meta_tensor[1] = static_cast<float>(node->p2.fences);
+    meta_tensor[2] = node->is_p1_to_move() ? 1.0f : 0.0f;  // Turn indicator
 
     return {pawn_tensor, wall_tensor, meta_tensor};
 }
@@ -76,7 +77,7 @@ void ModelInference::process_batch(const EvalCallback& callback) {
     // Prepare batch tensors
     auto batch_pawn = torch::zeros({current_batch_size, 2, 9, 9}, torch::kFloat32);
     auto batch_wall = torch::zeros({current_batch_size, 2, 8, 8}, torch::kFloat32);
-    auto batch_meta = torch::zeros({current_batch_size, 2}, torch::kFloat32);
+    auto batch_meta = torch::zeros({current_batch_size, 3}, torch::kFloat32);
 
     // Track which nodes are in this batch
     std::vector<uint32_t> batch_indices;

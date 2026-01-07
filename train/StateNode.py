@@ -126,17 +126,15 @@ class QuoridorDataset:
         # Wall positions from fence bitmaps
         wall = self._fences_to_wall_tensor(state.fences_horizontal, state.fences_vertical)
 
-        # Meta features (remaining fences)
-        meta = np.array([state.p1_fences, state.p2_fences], dtype=np.float32)
+        # Meta features (remaining fences + turn indicator)
+        # FLAG_P1_TO_MOVE = 0x04
+        is_p1_turn = 1.0 if (state.flags & 0x04) else 0.0
+        meta = np.array([state.p1_fences, state.p2_fences, is_p1_turn], dtype=np.float32)
 
-        # Target value: Q = total_value / visits (mean value)
-        # For terminal nodes, use terminal_value
-        # Normalize to [-1, 1] with tanh
-        if state.visits > 0:
-            q_value = state.total_value / state.visits
-        else:
-            q_value = state.terminal_value if state.terminal_value != 0 else 0.0
-        target = np.array([np.tanh(q_value)], dtype=np.float32)
+        # Target value: Q-value from P1's perspective ∈ [-1, +1]
+        # leopard outputs accumulated Q-values in terminal_value field
+        # +1 = P1 winning, -1 = P2 winning
+        target = np.array([state.terminal_value], dtype=np.float32)
 
         return (
             torch.from_numpy(pawn),

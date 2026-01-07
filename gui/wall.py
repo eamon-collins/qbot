@@ -111,8 +111,9 @@ class Walls:
         return False
 
     def can_add(self, wall):
-        return (not self.contains(wall)
-                and not self.wall_in_walls(wall.cross_wall))
+        # Only check for same-orientation overlaps here
+        # Engine handles perpendicular crossing validation
+        return not self.contains(wall)
 
     def no_wall(self, coord1, coord2):
         d = self.blocked_coords

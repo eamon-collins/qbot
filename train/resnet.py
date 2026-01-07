@@ -69,9 +69,9 @@ class QuoridorValueNet(nn.Module):
             nn.ReLU()
         )
 
-        # Meta features processing (walls remaining)
+        # Meta features processing (walls remaining + turn indicator)
         self.meta_features = nn.Sequential(
-            nn.Linear(2, 8),
+            nn.Linear(3, 8),
             nn.ReLU()
         )
 
@@ -86,7 +86,7 @@ class QuoridorValueNet(nn.Module):
     def forward(self, pawn_state, wall_state, meta_state):
         # pawn_state: batch x 2 x 9 x 9
         # wall_state: batch x 2 x 8 x 8 (horizontal and vertical walls)
-        # meta_state: batch x 2 (walls remaining for each player)
+        # meta_state: batch x 3 (walls remaining for each player + turn indicator)
 
         # Process pawn positions
         x_pawns = self.pawn_conv(pawn_state)
@@ -200,7 +200,7 @@ def main():
             # Create example inputs for tracing
             example_pawn_state = torch.zeros(1, 2, 9, 9)
             example_wall_state = torch.zeros(1, 2, 8, 8)
-            example_meta_state = torch.zeros(1, 2)
+            example_meta_state = torch.zeros(1, 3)
 
             # Use TorchScript to create a serializable version
             traced_script_module = torch.jit.trace(model, (example_pawn_state, example_wall_state, example_meta_state))

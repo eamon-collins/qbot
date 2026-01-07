@@ -62,6 +62,7 @@ set(QBOT_LIB_SOURCES
     src/util/gui_client.cpp
     src/core/Game.cpp
     src/util/pathfinding.cpp
+    src/search/mcts.cpp
 )
 
 if(ENABLE_INFERENCE)
@@ -220,6 +221,14 @@ if(BUILD_TESTS)
     if(ENABLE_INFERENCE)
         gtest_discover_tests(test_inference)
     endif()
+
+    # "tests" target - builds all test binaries
+    set(TEST_TARGETS test_storage test_game)
+    if(ENABLE_INFERENCE)
+        list(APPEND TEST_TARGETS test_inference)
+    endif()
+
+    add_custom_target(tests DEPENDS ${TEST_TARGETS})
 endif()
 
 # =============================================================================

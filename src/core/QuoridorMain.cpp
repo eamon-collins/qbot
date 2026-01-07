@@ -11,23 +11,39 @@
 #include "../util/storage.h"
 #include "../util/gui_client.h"
 #include "../util/pathfinding.h"
+#include "../search/mcts.h"
 #include "Game.h"
 
+#ifdef QBOT_ENABLE_INFERENCE
+#include "../inference/inference.h"
+#endif
+
+#include <csignal>
+
 #include <boost/program_options.hpp>
-#include <algorithm>
-#include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <optional>
-#include <random>
 #include <string>
 
 namespace po = boost::program_options;
 
 namespace qbot {
+
+// Global pointer for signal handler to stop training gracefully
+static MCTSEngine* g_mcts_engine = nullptr;
+
+void signal_handler(int signum) {
+    if (signum == SIGINT || signum == SIGTERM) {
+        std::cout << "\nReceived signal " << signum << ", stopping...\n";
+        if (g_mcts_engine) {
+            g_mcts_engine->stop();
+        }
+    }
+}
 
 enum class RunMode {
     Interactive,    // Play against human
@@ -142,10 +158,14 @@ initialize_tree(const Config& config) {
     if (!config.load_file.empty() && std::filesystem::exists(config.load_file)) {
         std::cout << "Loading tree from: " << config.load_file << "\n";
 
+        auto start = std::chrono::steady_clock::now();
         auto result = TreeStorage::load(config.load_file);
+        auto end = std::chrono::steady_clock::now();
+        auto sec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
         if (result.has_value()) {
             auto& loaded = *result;
-            std::cout << "  Loaded " << loaded.pool->allocated() << " nodes\n";
+            std::cout << "  Loaded " << loaded.pool->allocated() << " nodes in " << sec << " s\n";
             return {std::move(loaded.pool), loaded.root};
         } else {
             std::cerr << "Warning: Failed to load tree: "
@@ -167,11 +187,15 @@ initialize_tree(const Config& config) {
 bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
     std::cout << "Saving tree to: " << path << "\n";
 
+    auto start = std::chrono::steady_clock::now();
     auto result = TreeStorage::save(path, pool, root);
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
     if (result.has_value()) {
         auto file_size = std::filesystem::file_size(path);
         std::cout << "  Saved " << pool.allocated() << " nodes ("
-                  << file_size / 1024 << " KB)\n";
+                  << file_size / 1024 << " KB) in " << ms << " s\n";
         return true;
     } else {
         std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
@@ -183,122 +207,13 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
 // Game Modes
 // ============================================================================
 
-/// Check if a move is in the list of valid moves
-bool is_move_valid(const std::vector<Move>& valid_moves, Move move) {
-    return std::find_if(valid_moves.begin(), valid_moves.end(),
-        [move](const Move& m) { return m == move; }) != valid_moves.end();
-}
-
-/// Find or create a child node for the given move
-/// Returns the child index, or NULL_NODE if move is not found
-uint32_t find_or_create_child(NodePool& pool, uint32_t parent_idx, Move move) {
-    StateNode& parent = pool[parent_idx];
-
-    // First check if move exists among existing children
-    uint32_t child = parent.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].move == move) {
-            return child;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    // If not expanded yet, expand and then find the child
-    if (!parent.is_expanded()) {
-        parent.generate_valid_children(pool, parent_idx);
-    }
-
-    // Now search again
-    child = parent.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].move == move) {
-            return child;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    return NULL_NODE;
-}
-
-/// Select the best move for the bot
-/// Chooses the move with the best Q-value, randomly among ties
-Move select_bot_move(NodePool& pool, uint32_t current_idx) {
-    StateNode& current = pool[current_idx];
-
-    // Ensure children are generated
-    if (!current.is_expanded()) {
-        current.generate_valid_children(pool, current_idx);
-    }
-
-    // Collect all children with their scores
-    struct ScoredChild {
-        uint32_t idx;
-        Move move;
-        float score;
-    };
-    std::vector<ScoredChild> children;
-
-    uint32_t child_idx = current.first_child;
-    while (child_idx != NULL_NODE) {
-        StateNode& child = pool[child_idx];
-        // Q value: for bot (P2), higher Q from P1 perspective means worse for bot
-        // Since P2 wins when terminal_value = -1, we want lower Q (from P1's perspective)
-        // But the stats.Q() is from the edge perspective, which should work correctly
-        float q = child.stats.Q(0.0f);
-        children.push_back({child_idx, child.move, q});
-        child_idx = child.next_sibling;
-    }
-
-    if (children.empty()) {
-        return Move{};  // No valid moves
-    }
-
-    // Find the best score for the current player
-    // P2 (bot) wants to minimize (P1's perspective Q value)
-    // Actually, let's just pick randomly for now since we don't have trained values
-    // We'll pick randomly among all moves, weighted slightly towards pawn moves when fences are low
-    thread_local std::mt19937 rng(std::random_device{}());
-
-    // Find best score (Q value) - since Q is from edge perspective, we want highest Q
-    float best_score = -std::numeric_limits<float>::infinity();
-    for (const auto& c : children) {
-        if (c.score > best_score) {
-            best_score = c.score;
-        }
-    }
-
-    // Collect all children with best score (within epsilon for floating point)
-    std::vector<ScoredChild> best_children;
-    for (const auto& c : children) {
-        if (std::abs(c.score - best_score) < 1e-6f) {
-            best_children.push_back(c);
-        }
-    }
-
-    // Random selection among best
-    std::uniform_int_distribution<size_t> dist(0, best_children.size() - 1);
-    return best_children[dist(rng)].move;
-}
-
-/// Print a move in human-readable format
-void print_move(Move move, bool is_p1) {
-    const char* player = is_p1 ? "Human" : "Bot";
-    if (move.is_pawn()) {
-        std::cout << player << " moves pawn to ("
-                  << static_cast<int>(move.row()) << ", "
-                  << static_cast<int>(move.col()) << ")\n";
-    } else {
-        std::cout << player << " places "
-                  << (move.is_horizontal() ? "horizontal" : "vertical")
-                  << " fence at (" << static_cast<int>(move.row())
-                  << ", " << static_cast<int>(move.col()) << ")\n";
-    }
-}
-
 /// Run interactive game against human
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
                     uint32_t root) {
+    // Create Game instance from the pool
+    Game game(std::move(pool), root);
+
     // Connect to GUI
     GUIClient gui;
     GUIClient::Config gui_config;
@@ -314,8 +229,24 @@ int run_interactive(const Config& config,
     }
     std::cout << "Connected to GUI!\n\n";
 
+#ifdef QBOT_ENABLE_INFERENCE
+    // Load model for position evaluation if specified
+    std::unique_ptr<ModelInference> model;
+    if (!config.model_file.empty()) {
+        std::cout << "Loading model from: " << config.model_file << "\n";
+        model = std::make_unique<ModelInference>(config.model_file);
+        if (model->is_ready()) {
+            std::cout << "Model loaded successfully!\n\n";
+            game.set_model(model.get());
+        } else {
+            std::cerr << "Warning: Failed to load model, using Q-values instead\n\n";
+            model.reset();
+        }
+    }
+#endif
+
     // Initialize the root node with starting game state
-    StateNode& root_node = (*pool)[root];
+    StateNode& root_node = game.pool()[root];
     root_node.init_root(true);  // P1 (human) starts
 
     gui.send_start("Human", "Bot");
@@ -324,9 +255,15 @@ int run_interactive(const Config& config,
     bool game_over = false;
 
     while (!game_over) {
-        StateNode& current = (*pool)[current_idx];
+        StateNode& current = game.pool()[current_idx];
 
+        // Evaluate current position - use model if available, otherwise Q-value
         float score = current.stats.Q(0.0f);
+#ifdef QBOT_ENABLE_INFERENCE
+        if (model && model->is_ready()) {
+            score = model->evaluate_node(&current);
+        }
+#endif
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
 
         // Check for terminal state
@@ -359,8 +296,7 @@ int run_interactive(const Config& config,
                 Move move = GUIClient::to_engine_move(gui_move);
 
                 // Validate the move
-                std::vector<Move> valid_moves = current.generate_valid_moves();
-                if (!is_move_valid(valid_moves, move)) {
+                if (!current.is_move_valid(move)) {
                     std::cout << "ILLEGAL MOVE! ";
                     if (move.is_pawn()) {
                         std::cout << "Pawn move to (" << static_cast<int>(move.row())
@@ -387,10 +323,10 @@ int run_interactive(const Config& config,
                 }
 
                 valid_move = true;
-                print_move(move, true);
+                move.print("Human");
 
                 // Find or create the child node for this move
-                uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+                uint32_t next_idx = current.find_or_create_child(move);
                 if (next_idx == NULL_NODE) {
                     std::cerr << "Error: Failed to create child node for move\n";
                     return 1;
@@ -398,16 +334,16 @@ int run_interactive(const Config& config,
                 current_idx = next_idx;
             }
         } else {
-            // Bot's turn
-            Move move = select_bot_move(*pool, current_idx);
+            // Bot's turn - Game::select_best_move handles model if set
+            Move move = game.select_best_move(current_idx);
             if (!move.is_valid()) {
                 std::cerr << "Error: Bot has no valid moves\n";
                 return 1;
             }
 
-            print_move(move, false);
+            move.print("Bot");
 
-            uint32_t next_idx = find_or_create_child(*pool, current_idx, move);
+            uint32_t next_idx = current.find_or_create_child(move);
             if (next_idx == NULL_NODE) {
                 std::cerr << "Error: Failed to create child node for bot's move\n";
                 return 1;
@@ -417,79 +353,70 @@ int run_interactive(const Config& config,
     }
 
     // Send final state to GUI
-    StateNode& final_state = (*pool)[current_idx];
+    StateNode& final_state = game.pool()[current_idx];
     gui.send_gamestate(final_state, -1, final_state.terminal_value);
 
     // Optionally save tree
     if (!config.save_file.empty() && config.verbose) {
-        save_tree(*pool, root, config.save_file);
+        save_tree(game.pool(), root, config.save_file);
     }
 
     return 0;
 }
 
-/// Run self-play training
-int run_training([[maybe_unused]] const Config& config,
-                 [[maybe_unused]] std::unique_ptr<NodePool> pool,
-                 [[maybe_unused]] uint32_t root) {
-    std::cout << "\n=== Training Mode ===\n";
-    std::cout << "Games per checkpoint: " << config.games_per_checkpoint << "\n";
-    std::cout << "Total iterations:     " << config.training_iterations << "\n";
-    std::cout << "Simulations per move: " << config.simulations_per_move << "\n";
-    std::cout << "Threads:              " << config.num_threads << "\n\n";
+/// Run MCTS tree building / training
+int run_training(const Config& config,
+                 std::unique_ptr<NodePool> pool,
+                 uint32_t root) {
+    std::cout << "\n=== MCTS Training Mode ===\n";
 
-    // TODO: Implement self-play training loop
-    // This would involve:
-    // 1. Initialize game state
-    // 2. For each game:
-    //    a. Play game using MCTS (both sides)
-    //    b. Collect training data (states, policies, outcomes)
-    //    c. Update visit counts in tree
-    // 3. Periodically:
-    //    a. Save tree checkpoint
-    //    b. Train neural network on collected data (if using NN)
-    //    c. Report statistics
+    // Initialize the root node only if it's a fresh tree (not loaded)
+    StateNode& root_node = (*pool)[root];
+    if (!root_node.is_expanded() && !root_node.has_children()) {
+        root_node.init_root(true);  // P1 starts
+    }
 
-    /*
-    Trainer trainer(config);
-    trainer.set_tree(std::move(pool), root);
+    // Configure MCTS engine
+    MCTSConfig mcts_config;
+    mcts_config.num_threads = config.num_threads;
+    mcts_config.checkpoint_interval_seconds = 300;  // 5 minutes
+    mcts_config.checkpoint_path = config.save_file;
 
     if (!config.model_file.empty()) {
-        trainer.load_model(config.model_file);
+        mcts_config.model_path = config.model_file;
     }
 
-    int games_completed = 0;
-    int checkpoint_num = 0;
+    // Create engine
+    MCTSEngine engine(mcts_config);
 
-    while (games_completed < config.training_iterations) {
-        // Play a batch of games
-        auto stats = trainer.play_games(config.games_per_checkpoint, config.num_threads);
+    // Set up signal handler for graceful shutdown
+    g_mcts_engine = &engine;
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
-        games_completed += config.games_per_checkpoint;
-        checkpoint_num++;
+    // Start training
+    std::cout << "Starting MCTS tree building...\n";
+    std::cout << "Press Ctrl+C to stop and save.\n\n";
 
-        std::cout << "Checkpoint " << checkpoint_num << ":\n";
-        std::cout << "  Games:      " << games_completed << "\n";
-        std::cout << "  P1 wins:    " << stats.p1_wins << "\n";
-        std::cout << "  P2 wins:    " << stats.p2_wins << "\n";
-        std::cout << "  Avg length: " << stats.avg_game_length << " moves\n";
-        std::cout << "  Tree size:  " << trainer.pool()->allocated() << " nodes\n";
+    engine.start_training(*pool, root);
 
-        // Save checkpoint
-        std::string checkpoint_path = config.save_file + "." + std::to_string(checkpoint_num);
-        save_tree(*trainer.pool(), trainer.root(), checkpoint_path);
-
-        // Also save to main file
-        save_tree(*trainer.pool(), trainer.root(), config.save_file);
+    // Wait for training to complete (runs until signal)
+    while (engine.is_running()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::cout << "\nTraining complete!\n";
-    std::cout << "Final tree size: " << trainer.pool()->allocated() << " nodes\n";
-    */
+    // Clean up signal handler
+    g_mcts_engine = nullptr;
+    std::signal(SIGINT, SIG_DFL);
+    std::signal(SIGTERM, SIG_DFL);
 
-    std::cout << "Training mode not yet implemented.\n";
-    std::cout << "The MCTS search and game engine components need to be built first.\n";
+    // Final save
+    std::cout << "\nSaving final tree...\n";
+    if (!config.save_file.empty()) {
+        save_tree(*pool, root, config.save_file);
+    }
 
+    std::cout << "Training complete!\n";
     return 0;
 }
 

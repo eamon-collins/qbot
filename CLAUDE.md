@@ -13,7 +13,6 @@ I want high performance, efficiently multithreaded simulation and tree building,
 I want to be able to produce and load efficiently sized binary representations of the tree so that I can save intermediate steps, and eventually so I can load a pretrained tree to give the bot a head start against players.
 For many other things, like not knowing move semantics, pool allocators, any template metaprogramming or compile time optimizations at all, and favoring a terribly complex and difficult to reason with board representation, and eschewing any code safety or good tests, do the opposite of this example.
 
-
 ## Architecture Principles
 
 ### Separation of Concerns
@@ -111,6 +110,8 @@ old_src/*
 ```
 
 ## Testing Strategy
+
+Assume we are already in the conda env "qenv" which should allow us to compile and run all tests, the gui, pytorch/libtorch for compiling and training the model, and other useful things. If we need another package, ask before installing, but install with conda if possible to keep the project dependencies contained.
 
 ### Unit Tests (GoogleTest)
 - State transition correctness

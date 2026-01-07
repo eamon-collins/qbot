@@ -279,7 +279,7 @@ TEST(StorageTest, SaveAndLoadDeepTree) {
     TempFile tmp;
 
     NodePool::Config config;
-    config.capacity = 10000;
+    config.initial_capacity = 10000;
     NodePool pool(config);
 
     // Build tree: depth=4, branching=3 => 1 + 3 + 9 + 27 + 81 = 121 nodes
@@ -350,6 +350,9 @@ TEST(StorageTest, LoadInvalidFile) {
 }
 
 TEST(StorageTest, ChecksumValidation) {
+    // Checksum validation has been removed for performance.
+    // This test now verifies that files load even with corrupted data
+    // (trusting the filesystem for integrity).
     TempFile tmp;
 
     // Create and save a valid tree with some children
@@ -385,13 +388,9 @@ TEST(StorageTest, ChecksumValidation) {
         file.flush();
     }
 
-    // Load should fail with checksum error
+    // Load should succeed now (no checksum validation)
     auto result = TreeStorage::load(tmp.path());
-
-    EXPECT_FALSE(result.has_value());
-    if (!result.has_value()) {
-        EXPECT_EQ(result.error(), StorageError::ChecksumMismatch);
-    }
+    EXPECT_TRUE(result.has_value());
 }
 
 // ============================================================================
@@ -482,7 +481,7 @@ TEST(StorageTest, LargeTreePerformance) {
 
     // Build a reasonably large tree
     NodePool::Config config;
-    config.capacity = 100000;
+    config.initial_capacity = 100000;
     NodePool pool(config);
 
     // depth=6, branching=4 => 1 + 4 + 16 + 64 + 256 + 1024 + 4096 = 5461 nodes
@@ -516,6 +515,41 @@ TEST(StorageTest, LargeTreePerformance) {
     // Verify loaded tree
     size_t loaded_count = count_reachable_nodes(*load_result->pool, load_result->root);
     EXPECT_EQ(loaded_count, node_count);
+}
+
+// ============================================================================
+// Node Integrity Tests
+// ============================================================================
+
+TEST(StorageTest, AllAllocatedNodesReachableAfterLoad) {
+    // Verifies that after save->load, all allocated nodes in the pool
+    // are reachable from the root (no orphaned nodes)
+    TempFile tmp;
+
+    // Build a tree with multiple levels
+    NodePool pool;
+    uint32_t root = build_test_tree(pool, 5, 3);  // 1+3+9+27+81+243 = 364 nodes
+
+    size_t original_allocated = pool.allocated();
+    size_t original_reachable = count_reachable_nodes(pool, root);
+
+    // Before save: all allocated nodes should be reachable
+    EXPECT_EQ(original_allocated, original_reachable);
+
+    // Save
+    ASSERT_TRUE(TreeStorage::save(tmp.path(), pool, root).has_value());
+
+    // Load
+    auto load_result = TreeStorage::load(tmp.path());
+    ASSERT_TRUE(load_result.has_value());
+
+    auto& loaded = *load_result;
+    size_t loaded_allocated = loaded.pool->allocated();
+    size_t loaded_reachable = count_reachable_nodes(*loaded.pool, loaded.root);
+
+    // After load: all allocated nodes should still be reachable
+    EXPECT_EQ(loaded_allocated, loaded_reachable);
+    EXPECT_EQ(loaded_allocated, original_allocated);
 }
 
 // ============================================================================
