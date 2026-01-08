@@ -6,6 +6,44 @@
 
 namespace qbot {
 
+int move_to_action_index(const Move& move) noexcept {
+    if (!move.is_valid()) return -1;
+
+    if (move.is_pawn()) {
+        // Pawn moves: row * 9 + col (indices 0-80)
+        return move.row() * 9 + move.col();
+    } else {
+        // Fence moves
+        int base = move.is_horizontal() ? NUM_PAWN_ACTIONS : (NUM_PAWN_ACTIONS + NUM_H_WALL_ACTIONS);
+        return base + move.row() * 8 + move.col();
+    }
+}
+
+Move action_index_to_move(int action_index) noexcept {
+    if (action_index < 0 || action_index >= NUM_ACTIONS) {
+        return Move{};  // Invalid move
+    }
+
+    if (action_index < NUM_PAWN_ACTIONS) {
+        // Pawn move
+        uint8_t row = static_cast<uint8_t>(action_index / 9);
+        uint8_t col = static_cast<uint8_t>(action_index % 9);
+        return Move::pawn(row, col);
+    } else if (action_index < NUM_PAWN_ACTIONS + NUM_H_WALL_ACTIONS) {
+        // Horizontal wall
+        int wall_idx = action_index - NUM_PAWN_ACTIONS;
+        uint8_t row = static_cast<uint8_t>(wall_idx / 8);
+        uint8_t col = static_cast<uint8_t>(wall_idx % 8);
+        return Move::fence(row, col, true);
+    } else {
+        // Vertical wall
+        int wall_idx = action_index - NUM_PAWN_ACTIONS - NUM_H_WALL_ACTIONS;
+        uint8_t row = static_cast<uint8_t>(wall_idx / 8);
+        uint8_t col = static_cast<uint8_t>(wall_idx % 8);
+        return Move::fence(row, col, false);
+    }
+}
+
 ModelInference::ModelInference(const std::string& model_path, int batch_size, bool use_cuda)
     : device_(use_cuda && torch::cuda::is_available() ? torch::kCUDA : torch::kCPU)
     , batch_size_(batch_size)
@@ -27,37 +65,65 @@ ModelInference::ModelInference()
     , model_loaded_(false)
 {}
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-ModelInference::state_to_tensors(const StateNode* node) const {
-    // Pawn positions: 2 channels (P1, P2), 9x9 board
-    auto pawn_tensor = torch::zeros({2, 9, 9}, torch::kFloat32);
-    pawn_tensor[0][node->p1.row][node->p1.col] = 1.0f;
-    pawn_tensor[1][node->p2.row][node->p2.col] = 1.0f;
+void ModelInference::fill_unified_tensor(float* tensor_ptr, size_t tensor_stride,
+                                          int batch_idx, const StateNode* node) const {
+    // Tensor layout: [batch, 6, 9, 9]
+    // tensor_stride = 6 * 9 * 9 = 486
+    float* base = tensor_ptr + batch_idx * tensor_stride;
 
-    // Wall positions: 2 channels (horizontal, vertical), 8x8 intersections
-    // Our FenceGrid stores fences at intersection points directly
-    auto wall_tensor = torch::zeros({2, 8, 8}, torch::kFloat32);
+    // Determine current player and opponent based on whose turn it is
+    bool is_p1_turn = node->is_p1_to_move();
+    uint8_t my_row, my_col, my_fences;
+    uint8_t opp_row, opp_col, opp_fences;
 
-    // Extract fence positions from the bitboard representation
+    if (is_p1_turn) {
+        my_row = node->p1.row;
+        my_col = node->p1.col;
+        my_fences = node->p1.fences;
+        opp_row = node->p2.row;
+        opp_col = node->p2.col;
+        opp_fences = node->p2.fences;
+    } else {
+        my_row = node->p2.row;
+        my_col = node->p2.col;
+        my_fences = node->p2.fences;
+        opp_row = node->p1.row;
+        opp_col = node->p1.col;
+        opp_fences = node->p1.fences;
+    }
+
+    // Channel 0: Current player's pawn position (one-hot)
+    // Index = channel * 81 + row * 9 + col
+    base[0 * 81 + my_row * 9 + my_col] = 1.0f;
+
+    // Channel 1: Opponent's pawn position (one-hot)
+    base[1 * 81 + opp_row * 9 + opp_col] = 1.0f;
+
+    // Channel 2: Horizontal walls (8x8 grid padded to 9x9)
+    // Channel 3: Vertical walls (8x8 grid padded to 9x9)
     const FenceGrid& fences = node->fences;
     for (int r = 0; r < 8; ++r) {
         for (int c = 0; c < 8; ++c) {
             if (fences.has_h_fence(r, c)) {
-                wall_tensor[0][r][c] = 1.0f;
+                base[2 * 81 + r * 9 + c] = 1.0f;
             }
             if (fences.has_v_fence(r, c)) {
-                wall_tensor[1][r][c] = 1.0f;
+                base[3 * 81 + r * 9 + c] = 1.0f;
             }
         }
     }
 
-    // Meta information: remaining fences for each player + turn indicator
-    auto meta_tensor = torch::zeros({3}, torch::kFloat32);
-    meta_tensor[0] = static_cast<float>(node->p1.fences);
-    meta_tensor[1] = static_cast<float>(node->p2.fences);
-    meta_tensor[2] = node->is_p1_to_move() ? 1.0f : 0.0f;  // Turn indicator
+    // Channel 4: Current player's fences remaining / 10 (constant plane)
+    float my_fences_norm = static_cast<float>(my_fences) / 10.0f;
+    for (int i = 0; i < 81; ++i) {
+        base[4 * 81 + i] = my_fences_norm;
+    }
 
-    return {pawn_tensor, wall_tensor, meta_tensor};
+    // Channel 5: Opponent's fences remaining / 10 (constant plane)
+    float opp_fences_norm = static_cast<float>(opp_fences) / 10.0f;
+    for (int i = 0; i < 81; ++i) {
+        base[5 * 81 + i] = opp_fences_norm;
+    }
 }
 
 void ModelInference::queue_for_evaluation(const StateNode* node, uint32_t node_idx) {
@@ -75,106 +141,95 @@ void ModelInference::process_batch(const EvalCallback& callback) {
 
     int current_batch_size = std::min(static_cast<int>(evaluation_queue_.size()), batch_size_);
 
-    // Prepare batch tensors
-    auto batch_pawn = torch::zeros({current_batch_size, 2, 9, 9}, torch::kFloat32);
-    auto batch_wall = torch::zeros({current_batch_size, 2, 8, 8}, torch::kFloat32);
-    auto batch_meta = torch::zeros({current_batch_size, 3}, torch::kFloat32);
+    // Prepare unified batch tensor
+    auto batch_tensor = torch::zeros({current_batch_size, 6, 9, 9}, torch::kFloat32);
 
     // Track which nodes are in this batch
     std::vector<uint32_t> batch_indices;
     batch_indices.reserve(current_batch_size);
 
-    // Fill batch tensors
+    // Fill batch tensor
+    float* tensor_ptr = batch_tensor.data_ptr<float>();
+    constexpr size_t tensor_stride = 6 * 9 * 9;
+
     for (int i = 0; i < current_batch_size; ++i) {
         auto [node, idx] = evaluation_queue_.front();
         evaluation_queue_.pop_front();
 
-        auto [pawn, wall, meta] = state_to_tensors(node);
-        batch_pawn[i] = pawn;
-        batch_wall[i] = wall;
-        batch_meta[i] = meta;
+        // Zero this entry (tensor is already zeroed, but be safe for reuse)
+        std::memset(tensor_ptr + i * tensor_stride, 0, tensor_stride * sizeof(float));
+        fill_unified_tensor(tensor_ptr, tensor_stride, i, node);
 
         batch_indices.push_back(idx);
     }
 
-    // Move tensors to device
-    batch_pawn = batch_pawn.to(device_);
-    batch_wall = batch_wall.to(device_);
-    batch_meta = batch_meta.to(device_);
+    // Move tensor to device
+    batch_tensor = batch_tensor.to(device_);
 
     // Run inference
     std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(batch_pawn);
-    inputs.push_back(batch_wall);
-    inputs.push_back(batch_meta);
+    inputs.push_back(batch_tensor);
 
     torch::NoGradGuard no_grad;
-    auto output = model_.forward(inputs).toTensor();
+    auto output = model_.forward(inputs);
 
-    // Move output back to CPU
-    output = output.to(torch::kCPU);
+    // Handle tuple output (policy_logits, value)
+    auto output_tuple = output.toTuple();
+    auto policy_output = output_tuple->elements()[0].toTensor().to(torch::kCPU);
+    auto value_output = output_tuple->elements()[1].toTensor().to(torch::kCPU);
 
     // Call callback for each result
     for (int i = 0; i < current_batch_size; ++i) {
-        float value = output[i].item<float>();
+        EvalResult result;
 
-        // Handle NaN values
-        if (std::isnan(value)) {
-            value = 0.0f;
+        // Extract value (squeeze if needed)
+        float value = value_output[i].item<float>();
+        result.value = std::isnan(value) ? 0.0f : value;
+
+        // Extract policy logits
+        auto policy_slice = policy_output[i];
+        for (int a = 0; a < NUM_ACTIONS; ++a) {
+            result.policy[a] = policy_slice[a].item<float>();
         }
 
-        callback(batch_indices[i], value);
+        callback(batch_indices[i], result);
     }
 }
 
-float ModelInference::evaluate_node(const StateNode* node) {
-    // Reuse batch path for consistency and to benefit from same optimizations
-    // Single-node eval is inherently slow on GPU due to poor utilization
+EvalResult ModelInference::evaluate_node(const StateNode* node) {
+    // Create single-item batch
     auto options = torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(device_.is_cuda());
-    auto batch_pawn = torch::zeros({1, 2, 9, 9}, options);
-    auto batch_wall = torch::zeros({1, 2, 8, 8}, options);
-    auto batch_meta = torch::zeros({1, 3}, options);
+    auto batch_tensor = torch::zeros({1, 6, 9, 9}, options);
 
-    // Fill directly via accessors
-    auto pawn_acc = batch_pawn.accessor<float, 4>();
-    auto wall_acc = batch_wall.accessor<float, 4>();
-    auto meta_acc = batch_meta.accessor<float, 2>();
-
-    pawn_acc[0][0][node->p1.row][node->p1.col] = 1.0f;
-    pawn_acc[0][1][node->p2.row][node->p2.col] = 1.0f;
-
-    const FenceGrid& fences = node->fences;
-    for (int r = 0; r < 8; ++r) {
-        for (int c = 0; c < 8; ++c) {
-            if (fences.has_h_fence(r, c)) {
-                wall_acc[0][0][r][c] = 1.0f;
-            }
-            if (fences.has_v_fence(r, c)) {
-                wall_acc[0][1][r][c] = 1.0f;
-            }
-        }
-    }
-
-    meta_acc[0][0] = static_cast<float>(node->p1.fences);
-    meta_acc[0][1] = static_cast<float>(node->p2.fences);
-    meta_acc[0][2] = node->is_p1_to_move() ? 1.0f : 0.0f;
+    // Fill tensor
+    float* tensor_ptr = batch_tensor.data_ptr<float>();
+    constexpr size_t tensor_stride = 6 * 9 * 9;
+    fill_unified_tensor(tensor_ptr, tensor_stride, 0, node);
 
     // Move to device
-    batch_pawn = batch_pawn.to(device_, /*non_blocking=*/true);
-    batch_wall = batch_wall.to(device_, /*non_blocking=*/true);
-    batch_meta = batch_meta.to(device_, /*non_blocking=*/true);
+    batch_tensor = batch_tensor.to(device_, /*non_blocking=*/true);
 
+    // Run inference
     std::vector<torch::jit::IValue> inputs;
-    inputs.reserve(3);
-    inputs.push_back(batch_pawn);
-    inputs.push_back(batch_wall);
-    inputs.push_back(batch_meta);
+    inputs.push_back(batch_tensor);
 
     torch::NoGradGuard no_grad;
-    auto output = model_.forward(inputs).toTensor();
+    auto output = model_.forward(inputs);
 
-    float value = output.to(torch::kCPU).data_ptr<float>()[0];
-    return std::isnan(value) ? 0.0f : value;
+    // Handle tuple output (policy_logits, value)
+    auto output_tuple = output.toTuple();
+    auto policy_output = output_tuple->elements()[0].toTensor().to(torch::kCPU);
+    auto value_output = output_tuple->elements()[1].toTensor().to(torch::kCPU);
+
+    EvalResult result;
+    float value = value_output[0].item<float>();
+    result.value = std::isnan(value) ? 0.0f : value;
+
+    for (int a = 0; a < NUM_ACTIONS; ++a) {
+        result.policy[a] = policy_output[0][a].item<float>();
+    }
+
+    return result;
 }
 
 void ModelInference::ensure_buffer_capacity(int size) {
@@ -185,16 +240,15 @@ void ModelInference::ensure_buffer_capacity(int size) {
     while (new_capacity < size) new_capacity *= 2;
 
     auto options = torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(device_.is_cuda());
-    pawn_buffer_ = torch::zeros({new_capacity, 2, 9, 9}, options);
-    wall_buffer_ = torch::zeros({new_capacity, 2, 8, 8}, options);
-    meta_buffer_ = torch::zeros({new_capacity, 3}, options);
-    output_buffer_ = torch::empty({new_capacity}, options);  // Pinned for fast GPU->CPU
+    unified_buffer_ = torch::zeros({new_capacity, 6, 9, 9}, options);
+    value_output_buffer_ = torch::empty({new_capacity}, options);
+    policy_output_buffer_ = torch::empty({new_capacity, NUM_ACTIONS}, options);
     buffer_capacity_ = new_capacity;
 }
 
-std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateNode*>& nodes) {
+std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const StateNode*>& nodes) {
     auto& timers = get_timers();
-    std::vector<float> results;
+    std::vector<EvalResult> results;
     if (nodes.empty()) return results;
 
     const int batch_size = static_cast<int>(nodes.size());
@@ -210,59 +264,23 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
     {
         ScopedTimer t(timers.tensor_fill);
 
-        // Get raw pointers for fast zeroing and filling
-        float* pawn_ptr = pawn_buffer_.data_ptr<float>();
-        float* wall_ptr = wall_buffer_.data_ptr<float>();
-        float* meta_ptr = meta_buffer_.data_ptr<float>();
+        float* tensor_ptr = unified_buffer_.data_ptr<float>();
+        constexpr size_t tensor_stride = 6 * 9 * 9;
 
-        // Zero the buffers for this batch (only the part we'll use)
-        const size_t pawn_stride = 2 * 9 * 9;
-        const size_t wall_stride = 2 * 8 * 8;
-        const size_t meta_stride = 3;
-
-        std::memset(pawn_ptr, 0, batch_size * pawn_stride * sizeof(float));
-        std::memset(wall_ptr, 0, batch_size * wall_stride * sizeof(float));
-        std::memset(meta_ptr, 0, batch_size * meta_stride * sizeof(float));
+        // Zero the buffer for this batch
+        std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(float));
 
         // Fill the tensors
         for (int i = 0; i < batch_size; ++i) {
-            const StateNode* node = nodes[i];
-
-            // Pawn positions: buffer[i][channel][row][col]
-            // Index = i * (2*9*9) + channel * (9*9) + row * 9 + col
-            float* pawn_base = pawn_ptr + i * pawn_stride;
-            pawn_base[0 * 81 + node->p1.row * 9 + node->p1.col] = 1.0f;  // P1
-            pawn_base[1 * 81 + node->p2.row * 9 + node->p2.col] = 1.0f;  // P2
-
-            // Wall positions: buffer[i][channel][row][col]
-            float* wall_base = wall_ptr + i * wall_stride;
-            const FenceGrid& fences = node->fences;
-            for (int r = 0; r < 8; ++r) {
-                for (int c = 0; c < 8; ++c) {
-                    if (fences.has_h_fence(r, c)) {
-                        wall_base[0 * 64 + r * 8 + c] = 1.0f;
-                    }
-                    if (fences.has_v_fence(r, c)) {
-                        wall_base[1 * 64 + r * 8 + c] = 1.0f;
-                    }
-                }
-            }
-
-            // Meta: [p1_fences, p2_fences, is_p1_turn]
-            float* meta_base = meta_ptr + i * meta_stride;
-            meta_base[0] = static_cast<float>(node->p1.fences);
-            meta_base[1] = static_cast<float>(node->p2.fences);
-            meta_base[2] = node->is_p1_to_move() ? 1.0f : 0.0f;
+            fill_unified_tensor(tensor_ptr, tensor_stride, i, nodes[i]);
         }
     }
 
-    // Slice buffers to actual batch size and move to GPU (async)
-    torch::Tensor batch_pawn, batch_wall, batch_meta;
+    // Slice buffer to actual batch size and move to GPU (async)
+    torch::Tensor batch_tensor;
     {
         ScopedTimer t(timers.tensor_to_gpu);
-        batch_pawn = pawn_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
-        batch_wall = wall_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
-        batch_meta = meta_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
+        batch_tensor = unified_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
     }
 
     // Sync to measure actual upload time
@@ -272,17 +290,19 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
     }
 
     // Run inference (async launch)
-    torch::Tensor output;
+    torch::Tensor policy_output, value_output;
     {
         ScopedTimer t(timers.model_forward);
         std::vector<torch::jit::IValue> inputs;
-        inputs.reserve(3);
-        inputs.push_back(batch_pawn);
-        inputs.push_back(batch_wall);
-        inputs.push_back(batch_meta);
+        inputs.push_back(batch_tensor);
 
         torch::NoGradGuard no_grad;
-        output = model_.forward(inputs).toTensor();
+        auto output = model_.forward(inputs);
+
+        // Handle tuple output (policy_logits, value)
+        auto output_tuple = output.toTuple();
+        policy_output = output_tuple->elements()[0].toTensor();
+        value_output = output_tuple->elements()[1].toTensor();
     }
 
     // Sync to measure actual forward time
@@ -291,11 +311,11 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
         torch::cuda::synchronize();
     }
 
-    // Copy output to pinned CPU buffer (async)
-    // Flatten in case model returns [batch, 1] instead of [batch]
+    // Copy outputs to pinned CPU buffers (async)
     {
         ScopedTimer t(timers.tensor_to_cpu);
-        output_buffer_.slice(0, 0, batch_size).copy_(output.flatten(), /*non_blocking=*/true);
+        value_output_buffer_.slice(0, 0, batch_size).copy_(value_output.flatten(), /*non_blocking=*/true);
+        policy_output_buffer_.slice(0, 0, batch_size).copy_(policy_output, /*non_blocking=*/true);
     }
 
     // Sync to measure actual download time
@@ -304,13 +324,31 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
         torch::cuda::synchronize();
     }
 
-    const float* output_ptr = output_buffer_.data_ptr<float>();
+    // Extract results
+    const float* value_ptr = value_output_buffer_.data_ptr<float>();
+    const float* policy_ptr = policy_output_buffer_.data_ptr<float>();
+
     for (int i = 0; i < batch_size; ++i) {
-        float value = output_ptr[i];
-        results[i] = std::isnan(value) ? 0.0f : value;
+        float value = value_ptr[i];
+        results[i].value = std::isnan(value) ? 0.0f : value;
+
+        const float* policy_row = policy_ptr + i * NUM_ACTIONS;
+        for (int a = 0; a < NUM_ACTIONS; ++a) {
+            results[i].policy[a] = policy_row[a];
+        }
     }
 
     return results;
+}
+
+std::vector<float> ModelInference::evaluate_batch_values(const std::vector<const StateNode*>& nodes) {
+    auto results = evaluate_batch(nodes);
+    std::vector<float> values;
+    values.reserve(results.size());
+    for (const auto& r : results) {
+        values.push_back(r.value);
+    }
+    return values;
 }
 
 void ModelInference::print_diagnostics() {

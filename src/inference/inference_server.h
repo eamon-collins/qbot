@@ -25,10 +25,16 @@
 
 namespace qbot {
 
-/// Single evaluation request
+/// Single evaluation request (value only, for backwards compatibility)
 struct EvalRequest {
     const StateNode* node;
     std::promise<float> promise;
+};
+
+/// Single evaluation request with full result (policy + value)
+struct FullEvalRequest {
+    const StateNode* node;
+    std::promise<EvalResult> promise;
 };
 
 /// Batch evaluation request (for computing priors on children)
@@ -78,9 +84,13 @@ public:
         return running_.load(std::memory_order_acquire);
     }
 
-    /// Submit a single node for evaluation
+    /// Submit a single node for evaluation (value only)
     /// Returns a future that will contain the value estimate
     [[nodiscard]] std::future<float> submit(const StateNode* node);
+
+    /// Submit a single node for full evaluation (policy + value)
+    /// Returns a future that will contain the complete EvalResult
+    [[nodiscard]] std::future<EvalResult> submit_full(const StateNode* node);
 
     /// Submit a batch of nodes for evaluation (e.g., all children for priors)
     /// Returns a future that will contain all value estimates
@@ -118,6 +128,7 @@ private:
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::deque<EvalRequest> single_queue_;
+    std::deque<FullEvalRequest> full_eval_queue_;  // For policy + value requests
     std::deque<BatchEvalRequest> batch_queue_;
 
     // Statistics

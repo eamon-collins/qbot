@@ -8,11 +8,13 @@
 /// - Early termination when both players out of fences
 /// - Time-based checkpointing
 /// - Self-play mode for training data generation
+/// - Training sample collection with MCTS visit distributions
 
 #include "../tree/node_pool.h"
 #include "../tree/StateNode.h"
 #include "../util/pathfinding.h"
 #include "../util/storage.h"
+#include "../util/training_samples.h"
 
 #include <array>
 #include <atomic>
@@ -337,7 +339,7 @@ inline void remove_virtual_loss(
         auto* model = static_cast<ModelInference*>(inference);
         if (model->is_ready()) {
             stats.nn_evaluations.fetch_add(1, std::memory_order_relaxed);
-            return model->evaluate_node(&node);
+            return model->evaluate_node(&node).value;
         }
     }
 #endif
@@ -539,15 +541,19 @@ public:
     /// @param pool Node pool (persistent across games)
     /// @param root_idx Root node index
     /// @param model Neural network for evaluation
+    /// @param collector Optional training sample collector (if nullptr, no samples collected)
     /// @return Game result
-    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, ModelInference& model);
+    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, ModelInference& model,
+                             TrainingSampleCollector* collector = nullptr);
 
     /// Play a single self-play game using InferenceServer (for multi-threaded use)
     /// @param pool Node pool (shared across workers)
     /// @param root_idx Root node index
     /// @param server Inference server for batched GPU evaluation
+    /// @param collector Optional training sample collector (if nullptr, no samples collected)
     /// @return Game result
-    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server);
+    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server,
+                             TrainingSampleCollector* collector = nullptr);
 
     /// Run multiple self-play games in parallel
     /// @param pool Node pool (shared across all games)

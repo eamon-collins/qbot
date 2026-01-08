@@ -116,20 +116,20 @@ const char* DEFAULT_MODEL_PATH = "/home/eamon/repos/qbot/model/tree.pt";
 const char* TEST_MODEL_PATH = "/tmp/test_model.pt";
 
 bool create_test_model() {
+    // Create model with new unified input format (6 channels, current-player-perspective)
     const char* script = R"(
 import sys
 sys.path.insert(0, '/home/eamon/repos/qbot/train')
 import torch
-from resnet import QuoridorValueNet
+from resnet import QuoridorNet
 
-model = QuoridorValueNet()
+model = QuoridorNet()
 model.eval()
 
-example_pawn = torch.zeros(1, 2, 9, 9)
-example_wall = torch.zeros(1, 2, 8, 8)
-example_meta = torch.zeros(1, 3)
+# Create example input with unified 6-channel format (current-player-perspective)
+example_input = torch.zeros(1, 6, 9, 9)
 
-traced = torch.jit.trace(model, (example_pawn, example_wall, example_meta))
+traced = torch.jit.trace(model, example_input)
 traced.save('/tmp/test_model.pt')
 print('Model saved successfully')
 )";
@@ -195,7 +195,7 @@ TEST_F(InferenceBenchmark, BatchSizes) {
         std::cout << "║  Model: " << std::left << std::setw(62) << model_path.substr(model_path.find_last_of('/') + 1) << "║\n";
         std::cout << "║  Device: " << std::left << std::setw(61) << (torch::cuda::is_available() ? "CUDA" : "CPU") << "║\n";
         std::cout << "╠═════════════╦═══════════════╦═══════════════╦═════════════════════════╣\n";
-        std::cout << "║ Batch Size  ║   Total (ms)  ║  Per Node(µs) ║     Throughput (n/s)    ║\n";
+        std::cout << "║ Batch Size  ║   Total (ms)  ║  Per Node(us) ║     Throughput (n/s)    ║\n";
         std::cout << "╠═════════════╬═══════════════╬═══════════════╬═════════════════════════╣\n";
 
         std::vector<int> batch_sizes = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512};

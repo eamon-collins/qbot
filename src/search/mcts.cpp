@@ -300,13 +300,20 @@ void MCTSEngine::print_stats(const NodePool& pool) const {
 
 #ifdef QBOT_ENABLE_INFERENCE
 
-SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, ModelInference& model) {
+SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, ModelInference& model,
+                                          TrainingSampleCollector* collector) {
     SelfPlayResult result;
     auto& timers = get_timers();
 
     // Track the path through the game (for potential backprop)
     std::vector<uint32_t> game_path;
     game_path.reserve(200);  // Typical game length
+
+    // Track positions where we collected samples (for post-game value assignment)
+    std::vector<uint32_t> sample_positions;
+    if (collector) {
+        sample_positions.reserve(200);
+    }
 
     uint32_t current = root_idx;
     game_path.push_back(current);
@@ -349,6 +356,11 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         {
             ScopedTimer t(timers.mcts_iterations);
             run_mcts_iterations(pool, current, model, config_.simulations_per_move);
+        }
+
+        // Collect training sample AFTER MCTS search (has visit distribution)
+        if (collector) {
+            sample_positions.push_back(current);
         }
 
         // Compute policy from Q-values
@@ -419,6 +431,14 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         }
     }
 
+    // Now that we know the game outcome, add all samples with correct value targets
+    if (collector && result.winner != 0) {
+        float game_outcome = static_cast<float>(result.winner);
+        for (uint32_t pos : sample_positions) {
+            collector->add_sample(pool, pos, game_outcome);
+        }
+    }
+
     return result;
 }
 
@@ -463,7 +483,7 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
             std::vector<float> values;
             {
                 ScopedTimer t(timers.nn_single_eval);
-                values = model.evaluate_batch(nodes_to_eval);
+                values = model.evaluate_batch_values(nodes_to_eval);
             }
 
             // Cache and backpropagate
@@ -596,7 +616,8 @@ void SelfPlayEngine::mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInfe
             value = eval_node->stats.get_nn_value();
         } else {
             ScopedTimer t(timers.nn_single_eval);
-            value = model.evaluate_node(eval_node);
+            auto result = model.evaluate_node(eval_node);
+            value = result.value;
             eval_node->stats.set_nn_value(value);
         }
     }
@@ -615,6 +636,17 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Mo
     // Double-check after acquiring lock
     if (node.is_expanded()) return;
 
+    // Evaluate parent to get policy logits BEFORE generating children
+    // This gives us the policy distribution over all possible actions
+    EvalResult parent_eval;
+    {
+        ScopedTimer t(timers.nn_single_eval);
+        parent_eval = model.evaluate_node(&node);
+    }
+
+    // Cache the parent's value (from current player's perspective)
+    node.stats.set_nn_value(parent_eval.value);
+
     // Generate children
     {
         ScopedTimer t(timers.generate_children);
@@ -623,42 +655,36 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Mo
 
     if (!node.has_children()) return;
 
-    // Collect all children for batch evaluation
-    std::vector<const StateNode*> children;
+    // Collect policy logits for valid moves and apply softmax
+    // First pass: find max logit for numerical stability and collect child info
+    std::vector<std::pair<uint32_t, int>> child_actions;  // (child_idx, action_idx)
+    float max_logit = -std::numeric_limits<float>::infinity();
+
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
-        children.push_back(&pool[child]);
+        int action_idx = move_to_action_index(pool[child].move);
+        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+            child_actions.emplace_back(child, action_idx);
+            max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
+        }
         child = pool[child].next_sibling;
     }
 
-    // Batch evaluate all children
-    std::vector<float> values;
-    {
-        ScopedTimer t(timers.nn_batch_eval);
-        values = model.evaluate_batch(children);
+    if (child_actions.empty()) return;
+
+    // Second pass: compute softmax over valid moves only
+    float sum_exp = 0.0f;
+    std::vector<float> exp_logits(child_actions.size());
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        int action_idx = child_actions[i].second;
+        exp_logits[i] = std::exp(parent_eval.policy[action_idx] - max_logit);
+        sum_exp += exp_logits[i];
     }
 
-    // Cache NN values and convert to priors via softmax
-    // Note: child values are from opponent's perspective, so negate for priors
-    if (!values.empty()) {
-        // First pass: compute softmax normalization (preserving raw values)
-        float max_v = *std::max_element(values.begin(), values.end());
-        std::vector<float> exp_values(values.size());
-        float sum = 0.0f;
-        for (size_t i = 0; i < values.size(); ++i) {
-            exp_values[i] = std::exp(-(values[i] - max_v));
-            sum += exp_values[i];
-        }
-
-        // Second pass: cache raw values and set priors
-        child = node.first_child;
-        size_t i = 0;
-        while (child != NULL_NODE && i < values.size()) {
-            pool[child].stats.set_nn_value(values[i]);  // Cache raw value
-            pool[child].stats.prior = exp_values[i] / sum;
-            child = pool[child].next_sibling;
-            ++i;
-        }
+    // Third pass: set priors on children
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        uint32_t child_idx = child_actions[i].first;
+        pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
     }
 }
 
@@ -677,12 +703,19 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
 // InferenceServer-based Self-Play (for multi-threaded games)
 // ============================================================================
 
-SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server) {
+SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server,
+                                          TrainingSampleCollector* collector) {
     SelfPlayResult result;
     auto& timers = get_timers();
 
     std::vector<uint32_t> game_path;
     game_path.reserve(200);
+
+    // Track positions where we collected samples (for post-game value assignment)
+    std::vector<uint32_t> sample_positions;
+    if (collector) {
+        sample_positions.reserve(200);
+    }
 
     uint32_t current = root_idx;
     game_path.push_back(current);
@@ -720,6 +753,11 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
         {
             ScopedTimer t(timers.mcts_iterations);
             run_mcts_iterations(pool, current, server, config_.simulations_per_move);
+        }
+
+        // Collect training sample AFTER MCTS search (has visit distribution)
+        if (collector) {
+            sample_positions.push_back(current);
         }
 
         float temp = (result.num_moves < config_.temperature_drop_ply)
@@ -778,6 +816,14 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
             StateNode& node = pool[idx];
             float node_value = node.is_p1_to_move() ? value : -value;
             node.stats.update(node_value);
+        }
+    }
+
+    // Now that we know the game outcome, add all samples with correct value targets
+    if (collector && result.winner != 0) {
+        float game_outcome = static_cast<float>(result.winner);
+        for (uint32_t pos : sample_positions) {
+            collector->add_sample(pool, pos, game_outcome);
         }
     }
 
@@ -882,6 +928,18 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
 
     if (node.is_expanded()) return;
 
+    // Evaluate parent to get policy logits BEFORE generating children
+    EvalResult parent_eval;
+    {
+        ScopedTimer t(timers.nn_single_eval);
+        auto future = server.submit_full(&node);
+        parent_eval = future.get();
+    }
+
+    // Cache the parent's value (from current player's perspective)
+    node.stats.set_nn_value(parent_eval.value);
+
+    // Generate children
     {
         ScopedTimer t(timers.generate_children);
         node.generate_valid_children();
@@ -889,42 +947,36 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
 
     if (!node.has_children()) return;
 
-    // Collect children for batch evaluation
-    std::vector<const StateNode*> children;
+    // Collect policy logits for valid moves and apply softmax
+    // First pass: find max logit for numerical stability and collect child info
+    std::vector<std::pair<uint32_t, int>> child_actions;  // (child_idx, action_idx)
+    float max_logit = -std::numeric_limits<float>::infinity();
+
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
-        children.push_back(&pool[child]);
+        int action_idx = move_to_action_index(pool[child].move);
+        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+            child_actions.emplace_back(child, action_idx);
+            max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
+        }
         child = pool[child].next_sibling;
     }
 
-    // Submit batch and wait for result
-    std::vector<float> values;
-    {
-        ScopedTimer t(timers.nn_batch_eval);
-        auto future = server.submit_batch(std::move(children));
-        values = future.get();
+    if (child_actions.empty()) return;
+
+    // Second pass: compute softmax over valid moves only
+    float sum_exp = 0.0f;
+    std::vector<float> exp_logits(child_actions.size());
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        int action_idx = child_actions[i].second;
+        exp_logits[i] = std::exp(parent_eval.policy[action_idx] - max_logit);
+        sum_exp += exp_logits[i];
     }
 
-    // Cache the raw NN values and convert to priors via softmax
-    if (!values.empty()) {
-        // First pass: cache raw values and compute softmax normalization
-        float max_v = *std::max_element(values.begin(), values.end());
-        std::vector<float> exp_values(values.size());
-        float sum = 0.0f;
-        for (size_t i = 0; i < values.size(); ++i) {
-            exp_values[i] = std::exp(-(values[i] - max_v));
-            sum += exp_values[i];
-        }
-
-        // Second pass: set cached values and priors
-        child = node.first_child;
-        size_t i = 0;
-        while (child != NULL_NODE && i < values.size()) {
-            pool[child].stats.set_nn_value(values[i]);  // Cache raw value
-            pool[child].stats.prior = exp_values[i] / sum;
-            child = pool[child].next_sibling;
-            ++i;
-        }
+    // Third pass: set priors on children
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        uint32_t child_idx = child_actions[i].first;
+        pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
     }
 }
 

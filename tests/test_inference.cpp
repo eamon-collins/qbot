@@ -23,22 +23,20 @@ const char* TEST_MODEL_PATH = "/tmp/test_model.pt";
 
 // Create a fresh model with current architecture for testing
 bool create_test_model() {
-    // Python script to create and export a fresh model
+    // Python script to create and export a fresh model with new unified input format
     const char* script = R"(
 import sys
 sys.path.insert(0, '/home/eamon/repos/qbot/train')
 import torch
-from resnet import QuoridorValueNet
+from resnet import QuoridorNet
 
-model = QuoridorValueNet()
+model = QuoridorNet()
 model.eval()
 
-# Create example inputs with current dimensions (meta has 3 elements now)
-example_pawn = torch.zeros(1, 2, 9, 9)
-example_wall = torch.zeros(1, 2, 8, 8)
-example_meta = torch.zeros(1, 3)
+# Create example input with unified 6-channel format (current-player-perspective)
+example_input = torch.zeros(1, 6, 9, 9)
 
-traced = torch.jit.trace(model, (example_pawn, example_wall, example_meta))
+traced = torch.jit.trace(model, example_input)
 traced.save('/tmp/test_model.pt')
 print('Model saved successfully')
 )";
@@ -175,17 +173,27 @@ TEST_F(InferenceTest, EvaluateRandomLeafNode) {
 
         ASSERT_TRUE(inference.is_ready()) << "Model should be loaded";
 
-        float score = inference.evaluate_node(&leaf);
+        EvalResult result = inference.evaluate_node(&leaf);
 
         if (verbose) {
             std::cout << "\n--- Evaluation Result ---" << std::endl;
-            std::cout << "Score: " << score << std::endl;
+            std::cout << "Value: " << result.value << std::endl;
+            std::cout << "Policy (first 10 actions): ";
+            for (int i = 0; i < 10; ++i) {
+                std::cout << result.policy[i] << " ";
+            }
+            std::cout << "..." << std::endl;
             std::cout << "========================================\n" << std::endl;
         }
 
-        // Score should be a valid number (not NaN or Inf)
-        EXPECT_FALSE(std::isnan(score)) << "Score should not be NaN";
-        EXPECT_FALSE(std::isinf(score)) << "Score should not be Inf";
+        // Value should be a valid number (not NaN or Inf)
+        EXPECT_FALSE(std::isnan(result.value)) << "Value should not be NaN";
+        EXPECT_FALSE(std::isinf(result.value)) << "Value should not be Inf";
+
+        // Policy should have valid values
+        for (int i = 0; i < NUM_ACTIONS; ++i) {
+            EXPECT_FALSE(std::isnan(result.policy[i])) << "Policy[" << i << "] should not be NaN";
+        }
 
     } catch (const c10::Error& e) {
         GTEST_SKIP() << "Failed to load model: " << e.what();
@@ -232,9 +240,9 @@ TEST_F(InferenceTest, BatchEvaluation) {
         EXPECT_EQ(inference.queue_size(), num_to_eval);
 
         // Collect results
-        std::vector<std::pair<uint32_t, float>> results;
-        inference.flush_queue([&results](uint32_t idx, float value) {
-            results.emplace_back(idx, value);
+        std::vector<std::pair<uint32_t, EvalResult>> results;
+        inference.flush_queue([&results](uint32_t idx, const EvalResult& result) {
+            results.emplace_back(idx, result);
         });
 
         EXPECT_EQ(results.size(), num_to_eval);
@@ -244,16 +252,16 @@ TEST_F(InferenceTest, BatchEvaluation) {
             std::cout << "\n========== Batch Evaluation Test ==========" << std::endl;
             std::cout << "Evaluated " << results.size() << " nodes in batch" << std::endl;
             std::cout << "\nResults:" << std::endl;
-            for (const auto& [idx, score] : results) {
-                std::cout << "  Node " << idx << ": " << score << std::endl;
+            for (const auto& [idx, result] : results) {
+                std::cout << "  Node " << idx << ": value=" << result.value << std::endl;
             }
             std::cout << "==========================================\n" << std::endl;
         }
 
-        // All scores should be valid
-        for (const auto& [idx, score] : results) {
-            EXPECT_FALSE(std::isnan(score)) << "Score for node " << idx << " should not be NaN";
-            EXPECT_FALSE(std::isinf(score)) << "Score for node " << idx << " should not be Inf";
+        // All values should be valid
+        for (const auto& [idx, result] : results) {
+            EXPECT_FALSE(std::isnan(result.value)) << "Value for node " << idx << " should not be NaN";
+            EXPECT_FALSE(std::isinf(result.value)) << "Value for node " << idx << " should not be Inf";
         }
 
     } catch (const c10::Error& e) {

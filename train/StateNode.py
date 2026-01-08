@@ -6,7 +6,201 @@ from typing import Optional
 import logging
 from io import BufferedReader
 import os
+import struct
 
+# Action space constants (must match resnet.py)
+NUM_PAWN_ACTIONS = 81   # 9x9 board destinations
+NUM_WALL_ACTIONS = 128  # 8x8 * 2 orientations
+NUM_ACTIONS = NUM_PAWN_ACTIONS + NUM_WALL_ACTIONS  # 209 total
+
+
+# =============================================================================
+# Training Sample Format (.qsamples files)
+# =============================================================================
+# These contain pre-computed training samples with MCTS visit distributions.
+# This is the preferred format for AlphaZero-style training.
+
+# struct TrainingSampleHeader { // 64 bytes
+#     uint32_t magic = 0x51534D50;  // "QSMP"
+#     uint16_t version = 1;
+#     uint16_t flags = 0;
+#     uint32_t sample_count;
+#     uint32_t reserved1;
+#     uint64_t timestamp;
+#     uint8_t reserved[40];
+# };
+
+QSMP_MAGIC = 0x51534D50
+QSMP_HEADER_SIZE = 64
+
+# struct CompactState { // 24 bytes
+#     uint8_t p1_row, p1_col, p2_row, p2_col;  // 4 bytes
+#     uint8_t p1_fences, p2_fences;             // 2 bytes
+#     uint8_t flags, reserved;                  // 2 bytes
+#     uint64_t fences_horizontal;               // 8 bytes
+#     uint64_t fences_vertical;                 // 8 bytes
+# };
+
+# struct TrainingSample { // 864 bytes
+#     CompactState state;                       // 24 bytes
+#     float policy[209];                        // 836 bytes
+#     float value;                              // 4 bytes
+# };
+
+TRAINING_SAMPLE_SIZE = 864
+
+
+class TrainingSampleDataset:
+    """
+    Dataset loader for .qsamples files containing pre-computed training samples.
+
+    These files contain state + MCTS visit distribution + game outcome, making
+    them ideal for AlphaZero-style training where policy targets come from
+    MCTS search rather than move labels.
+
+    Output format per sample:
+        state: (6, 9, 9) tensor - current-player-perspective board representation
+        policy_target: (209,) tensor - MCTS visit distribution
+        value_target: (1,) tensor - game outcome from current player's view
+    """
+
+    def __init__(self, samples_path: str, batch_size: int):
+        self.samples_path = samples_path
+        self.batch_size = batch_size
+        self.file = None
+
+    def __enter__(self):
+        self.file = open(self.samples_path, 'rb')
+        # Read and validate header
+        header_data = self.file.read(QSMP_HEADER_SIZE)
+        if len(header_data) < QSMP_HEADER_SIZE:
+            raise ValueError(f"Invalid .qsamples file: too short")
+
+        magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
+        if magic != QSMP_MAGIC:
+            raise ValueError(f"Invalid .qsamples file: bad magic {hex(magic)}")
+        if version > 1:
+            raise ValueError(f"Unsupported .qsamples version: {version}")
+
+        self.sample_count = sample_count
+        logging.info(f"Opened {self.samples_path}: {sample_count} samples")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.file:
+            self.file.close()
+
+    def _parse_sample(self, data: bytes) -> tuple:
+        """Parse a single TrainingSample from bytes."""
+        # CompactState (24 bytes)
+        p1_row, p1_col, p2_row, p2_col = struct.unpack('BBBB', data[0:4])
+        p1_fences, p2_fences = struct.unpack('BB', data[4:6])
+        flags = data[6]
+        # reserved = data[7]
+        fences_h, fences_v = struct.unpack('<QQ', data[8:24])
+
+        # Policy (209 floats = 836 bytes)
+        policy = np.frombuffer(data[24:24+NUM_ACTIONS*4], dtype=np.float32).copy()
+
+        # Value (1 float = 4 bytes)
+        value = struct.unpack('<f', data[24+NUM_ACTIONS*4:24+NUM_ACTIONS*4+4])[0]
+
+        # Convert to tensor format
+        state = self._state_to_tensor(
+            p1_row, p1_col, p2_row, p2_col,
+            p1_fences, p2_fences, flags,
+            fences_h, fences_v
+        )
+
+        return (
+            torch.from_numpy(state),
+            torch.from_numpy(policy),
+            torch.tensor([value], dtype=torch.float32)
+        )
+
+    def _state_to_tensor(self, p1_row, p1_col, p2_row, p2_col,
+                         p1_fences, p2_fences, flags,
+                         fences_h, fences_v) -> np.ndarray:
+        """Convert compact state to 6-channel tensor."""
+        tensor = np.zeros((6, 9, 9), dtype=np.float32)
+
+        # FLAG_P1_TO_MOVE = 0x04
+        is_p1_turn = (flags & 0x04) != 0
+
+        # Determine current player and opponent
+        if is_p1_turn:
+            my_row, my_col, my_fences = p1_row, p1_col, p1_fences
+            opp_row, opp_col, opp_fences = p2_row, p2_col, p2_fences
+        else:
+            my_row, my_col, my_fences = p2_row, p2_col, p2_fences
+            opp_row, opp_col, opp_fences = p1_row, p1_col, p1_fences
+
+        # Channel 0: Current player's pawn
+        tensor[0, my_row, my_col] = 1.0
+
+        # Channel 1: Opponent's pawn
+        tensor[1, opp_row, opp_col] = 1.0
+
+        # Channel 2: Horizontal walls
+        for r in range(8):
+            for c in range(8):
+                if (fences_h >> (r * 8 + c)) & 1:
+                    tensor[2, r, c] = 1.0
+
+        # Channel 3: Vertical walls
+        for r in range(8):
+            for c in range(8):
+                if (fences_v >> (r * 8 + c)) & 1:
+                    tensor[3, r, c] = 1.0
+
+        # Channel 4: Current player's fences
+        tensor[4, :, :] = my_fences / 10.0
+
+        # Channel 5: Opponent's fences
+        tensor[5, :, :] = opp_fences / 10.0
+
+        return tensor
+
+    def generate_batches(self):
+        """Generate batches of training data."""
+        if not self.file:
+            raise RuntimeError("Dataset not initialized with context manager")
+
+        states, policies, values = [], [], []
+
+        for _ in range(self.sample_count):
+            sample_data = self.file.read(TRAINING_SAMPLE_SIZE)
+            if len(sample_data) < TRAINING_SAMPLE_SIZE:
+                break
+
+            state_t, policy_t, value_t = self._parse_sample(sample_data)
+            states.append(state_t)
+            policies.append(policy_t)
+            values.append(value_t)
+
+            if len(states) == self.batch_size:
+                yield (
+                    torch.stack(states),
+                    torch.stack(policies),
+                    torch.stack(values)
+                )
+                states, policies, values = [], [], []
+
+        # Yield remaining samples
+        if states:
+            yield (
+                torch.stack(states),
+                torch.stack(policies),
+                torch.stack(values)
+            )
+
+
+# =============================================================================
+# Legacy Tree Format (.qbot files)
+# =============================================================================
+# These are pruned tree files containing SerializedNode structs.
+# Policy targets are approximated (uniform distribution) since visit counts
+# aren't stored per-child.
 
 # Mirror the C++ SerializedNode structure from storage.h
 # struct SerializedNode {
@@ -66,6 +260,18 @@ DEFAULT_LEOPARD_PATH = os.path.join(os.path.dirname(__file__), "..", "build", "l
 
 
 class QuoridorDataset:
+    """
+    Dataset loader for Quoridor training data.
+
+    Reads binary SerializedNode structs via leopard and converts to tensors.
+    All states are presented from the current player's perspective.
+
+    Output format per sample:
+        state: (6, 9, 9) tensor - current-player-perspective board representation
+        policy_target: (209,) tensor - MCTS visit distribution (placeholder for now)
+        value_target: (1,) tensor - game outcome from current player's view
+    """
+
     def __init__(self, load_model: Optional[str], batch_size: int, leopard_path: str = DEFAULT_LEOPARD_PATH):
         self.load_model = load_model
         self.batch_size = batch_size
@@ -92,62 +298,103 @@ class QuoridorDataset:
             self.process.terminate()
             self.process.wait()
 
-    def _fences_to_wall_tensor(self, horizontal: int, vertical: int) -> np.ndarray:
+    def _state_to_unified_tensor(self, state: SerializedNode) -> np.ndarray:
         """
-        Convert 64-bit fence bitmaps to 2x8x8 wall tensor.
+        Convert SerializedNode to current-player-perspective 6-channel 9x9 tensor.
 
-        The FenceGrid stores fences at intersection points:
-        - bit r*8+c = fence placed at intersection (r,c)
-        - horizontal[r,c] blocks movement between rows r and r+1
-        - vertical[r,c] blocks movement between columns c and c+1
+        The board is always presented from the CURRENT PLAYER's perspective:
+        - Channel 0 is always "my" pawn, Channel 1 is always opponent's pawn
+        - When it's P2's turn, we swap P1/P2 positions and fence counts
+
+        Channels:
+            [0] Current player's pawn position (one-hot)
+            [1] Opponent's pawn position (one-hot)
+            [2] Horizontal walls (padded 8x8 -> 9x9, last row/col = 0)
+            [3] Vertical walls (padded 8x8 -> 9x9, last row/col = 0)
+            [4] Current player's fences remaining / 10 (constant plane)
+            [5] Opponent's fences remaining / 10 (constant plane)
         """
-        wall_tensor = np.zeros((2, 8, 8), dtype=np.float32)
+        tensor = np.zeros((6, 9, 9), dtype=np.float32)
 
+        # FLAG_P1_TO_MOVE = 0x04
+        is_p1_turn = (state.flags & 0x04) != 0
+
+        # Determine current player and opponent based on whose turn it is
+        if is_p1_turn:
+            my_row, my_col, my_fences = state.p1_row, state.p1_col, state.p1_fences
+            opp_row, opp_col, opp_fences = state.p2_row, state.p2_col, state.p2_fences
+        else:
+            my_row, my_col, my_fences = state.p2_row, state.p2_col, state.p2_fences
+            opp_row, opp_col, opp_fences = state.p1_row, state.p1_col, state.p1_fences
+
+        # Channel 0: Current player's pawn position (one-hot)
+        tensor[0, my_row, my_col] = 1.0
+
+        # Channel 1: Opponent's pawn position (one-hot)
+        tensor[1, opp_row, opp_col] = 1.0
+
+        # Channel 2: Horizontal walls (8x8 grid, padded to 9x9)
         for r in range(8):
             for c in range(8):
                 bit_idx = r * 8 + c
-                if (horizontal >> bit_idx) & 1:
-                    wall_tensor[0, r, c] = 1
-                if (vertical >> bit_idx) & 1:
-                    wall_tensor[1, r, c] = 1
+                if (state.fences_horizontal >> bit_idx) & 1:
+                    tensor[2, r, c] = 1.0
 
-        return wall_tensor
+        # Channel 3: Vertical walls (8x8 grid, padded to 9x9)
+        for r in range(8):
+            for c in range(8):
+                bit_idx = r * 8 + c
+                if (state.fences_vertical >> bit_idx) & 1:
+                    tensor[3, r, c] = 1.0
+
+        # Channel 4: Current player's fences remaining (normalized, constant plane)
+        tensor[4, :, :] = my_fences / 10.0
+
+        # Channel 5: Opponent's fences remaining (normalized, constant plane)
+        tensor[5, :, :] = opp_fences / 10.0
+
+        return tensor
+
+    def _create_policy_target(self, state: SerializedNode) -> np.ndarray:
+        """
+        Create policy target tensor.
+
+        NOTE: The current storage format doesn't include per-child visit counts,
+        which are needed for proper policy training. This is a placeholder that
+        creates a uniform distribution. Proper policy targets will require C++
+        changes to store MCTS visit distributions.
+
+        For now, we use uniform distribution over all actions. This will be
+        replaced once the C++ side stores visit counts.
+        """
+        # Placeholder: uniform distribution over all actions
+        # In proper AlphaZero, this would be visit_counts / sum(visit_counts)
+        policy = np.ones(NUM_ACTIONS, dtype=np.float32) / NUM_ACTIONS
+        return policy
 
     def _state_to_tensors(self, state: SerializedNode):
-        # Create pawn state tensor (2 x 9 x 9)
-        pawn = np.zeros((2, 9, 9), dtype=np.float32)
+        """Convert SerializedNode to training tensors."""
+        # Unified state tensor
+        state_tensor = self._state_to_unified_tensor(state)
 
-        # P1 pawn position
-        pawn[0, state.p1_row, state.p1_col] = 1
+        # Policy target (placeholder - see _create_policy_target)
+        policy_target = self._create_policy_target(state)
 
-        # P2 pawn position
-        pawn[1, state.p2_row, state.p2_col] = 1
-
-        # Wall positions from fence bitmaps
-        wall = self._fences_to_wall_tensor(state.fences_horizontal, state.fences_vertical)
-
-        # Meta features (remaining fences + turn indicator)
-        # FLAG_P1_TO_MOVE = 0x04
-        is_p1_turn = 1.0 if (state.flags & 0x04) else 0.0
-        meta = np.array([state.p1_fences, state.p2_fences, is_p1_turn], dtype=np.float32)
-
-        # Target value: Q-value from P1's perspective ∈ [-1, +1]
-        # leopard outputs accumulated Q-values in terminal_value field
-        # +1 = P1 winning, -1 = P2 winning
-        target = np.array([state.terminal_value], dtype=np.float32)
+        # Value target: Q-value from current player's perspective in [-1, +1]
+        value_target = np.array([state.terminal_value], dtype=np.float32)
 
         return (
-            torch.from_numpy(pawn),
-            torch.from_numpy(wall),
-            torch.from_numpy(meta),
-            torch.from_numpy(target)
+            torch.from_numpy(state_tensor),
+            torch.from_numpy(policy_target),
+            torch.from_numpy(value_target)
         )
 
     def generate_batches(self):
+        """Generate batches of training data."""
         if not self.process:
             raise RuntimeError("Dataset not initialized with context manager")
 
-        pawns, walls, metas, targets = [], [], [], []
+        states, policies, values = [], [], []
 
         # Set up buffers for efficient ctypes reading
         node_size = ctypes.sizeof(SerializedNode)
@@ -174,34 +421,31 @@ class QuoridorDataset:
                     offset = 0
                     continue
 
-                state = SerializedNode.from_address(buf_addr + offset)
-                pawn, wall, meta, target = self._state_to_tensors(state)
+                node = SerializedNode.from_address(buf_addr + offset)
+                state_t, policy_t, value_t = self._state_to_tensors(node)
 
-                pawns.append(pawn)
-                walls.append(wall)
-                metas.append(meta)
-                targets.append(target)
+                states.append(state_t)
+                policies.append(policy_t)
+                values.append(value_t)
 
                 offset += node_size
 
-                if len(pawns) == self.batch_size:
+                if len(states) == self.batch_size:
                     yield (
-                        torch.stack(pawns),
-                        torch.stack(walls),
-                        torch.stack(metas),
-                        torch.stack(targets)
+                        torch.stack(states),
+                        torch.stack(policies),
+                        torch.stack(values)
                     )
-                    pawns, walls, metas, targets = [], [], [], []
+                    states, policies, values = [], [], []
 
             except Exception as e:
                 logging.error(f"Error processing state: {e}")
                 raise e
 
         # Yield remaining samples
-        if pawns:
+        if states:
             yield (
-                torch.stack(pawns),
-                torch.stack(walls),
-                torch.stack(metas),
-                torch.stack(targets)
+                torch.stack(states),
+                torch.stack(policies),
+                torch.stack(values)
             )

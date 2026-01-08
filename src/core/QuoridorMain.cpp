@@ -336,7 +336,7 @@ int run_interactive(const Config& config,
         float score = current.stats.Q(0.0f);
 #ifdef QBOT_ENABLE_INFERENCE
         if (model && model->is_ready()) {
-            score = model->evaluate_node(&current);
+            score = model->evaluate_node(&current).value;
         }
 #endif
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
@@ -543,7 +543,7 @@ int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simu
                 child = pool[child].next_sibling;
             }
 
-            std::vector<float> values = current_model.evaluate_batch(children);
+            std::vector<float> values = current_model.evaluate_batch_values(children);
             if (!values.empty()) {
                 float max_v = *std::max_element(values.begin(), values.end());
                 float sum = 0.0f;
@@ -599,7 +599,7 @@ int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simu
             } else {
                 // Evaluate with the model for the player at this position
                 ModelInference& eval_model = leaf_node.is_p1_to_move() ? model_p1 : model_p2;
-                value = eval_model.evaluate_node(&leaf_node);
+                value = eval_model.evaluate_node(&leaf_node).value;
             }
 
             // Backpropagate
@@ -776,13 +776,25 @@ int run_selfplay(const Config& config,
 
     SelfPlayEngine engine(sp_config);
 
+    // Determine samples file path (same as save_file but with .qsamples extension)
+    std::string samples_file;
+    if (!config.save_file.empty()) {
+        std::filesystem::path p(config.save_file);
+        samples_file = (p.parent_path() / p.stem()).string() + ".qsamples";
+    }
+
+    // Create training sample collector
+    TrainingSampleCollector collector;
+    collector.reserve(config.num_games * 100);  // ~100 moves per game estimate
+
     std::cout << "Starting self-play...\n";
     std::cout << "  Games:       " << config.num_games << "\n";
     std::cout << "  Threads:     " << config.num_threads << "\n";
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
-    std::cout << "  Save file:   " << config.save_file << "\n\n";
+    std::cout << "  Tree file:   " << config.save_file << "\n";
+    std::cout << "  Samples:     " << samples_file << "\n\n";
 
     // Use multi-threaded path if threads > 1
     if (config.num_threads > 1) {
@@ -817,6 +829,12 @@ int run_selfplay(const Config& config,
             config.num_games, config.num_threads,
             stats, checkpoint_callback, 10);
 
+        // Capture server stats before stopping
+        size_t total_requests = server.total_requests();
+        size_t total_batches = server.total_batches();
+        double avg_batch_size = total_batches > 0
+            ? static_cast<double>(total_requests) / total_batches : 0.0;
+
         server.stop();
 
         // Final save (pruned to only game-path nodes)
@@ -834,6 +852,8 @@ int run_selfplay(const Config& config,
         std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:   " << draws << "\n";
         std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+        std::cout << "  Avg batch size: " << std::fixed << std::setprecision(1) << avg_batch_size
+                  << " (" << total_requests << " requests / " << total_batches << " batches)\n";
 
     } else {
         // Single-threaded path (original implementation)
@@ -850,7 +870,7 @@ int run_selfplay(const Config& config,
         auto start_time = std::chrono::steady_clock::now();
 
         for (int game = 0; game < config.num_games; ++game) {
-            SelfPlayResult result = engine.self_play(*pool, root, model);
+            SelfPlayResult result = engine.self_play(*pool, root, model, &collector);
 
             if (result.winner == 1) ++p1_wins;
             else if (result.winner == -1) ++p2_wins;
@@ -865,6 +885,7 @@ int run_selfplay(const Config& config,
                 std::cout << "[" << (game + 1) << "/" << config.num_games << "] "
                           << "P1: " << p1_wins << ", P2: " << p2_wins << ", Draw: " << draws
                           << " | Nodes: " << pool->allocated()
+                          << " | Samples: " << collector.size()
                           << " | Avg moves: " << (total_moves / (game + 1))
                           << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s\n";
             }
@@ -884,6 +905,17 @@ int run_selfplay(const Config& config,
         std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:   " << draws << "\n";
         std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+    }
+
+    // Save training samples
+    if (!samples_file.empty() && collector.size() > 0) {
+        auto result = TrainingSampleStorage::save(samples_file, collector.samples());
+        if (!result) {
+            std::cerr << "Warning: Failed to save training samples: "
+                      << to_string(result.error()) << "\n";
+        } else {
+            std::cout << "Saved " << collector.size() << " training samples to " << samples_file << "\n";
+        }
     }
 
     // Print timing breakdown

@@ -69,6 +69,21 @@ std::future<float> InferenceServer::submit(const StateNode* node) {
     return future;
 }
 
+std::future<EvalResult> InferenceServer::submit_full(const StateNode* node) {
+    std::promise<EvalResult> promise;
+    auto future = promise.get_future();
+
+    {
+        std::lock_guard lock(queue_mutex_);
+        full_eval_queue_.push_back({node, std::move(promise)});
+    }
+
+    total_requests_.fetch_add(1, std::memory_order_relaxed);
+    queue_cv_.notify_one();
+
+    return future;
+}
+
 std::future<std::vector<float>> InferenceServer::submit_batch(
     std::vector<const StateNode*> nodes)
 {
@@ -101,6 +116,7 @@ void InferenceServer::inference_loop() {
 
             queue_cv_.wait_until(lock, deadline, [this] {
                 return !single_queue_.empty() ||
+                       !full_eval_queue_.empty() ||
                        !batch_queue_.empty() ||
                        stop_requested_.load(std::memory_order_acquire);
             });
@@ -119,6 +135,7 @@ void InferenceServer::process_pending() {
 
     // Collect all pending requests
     std::vector<EvalRequest> singles;
+    std::vector<FullEvalRequest> full_evals;
     std::vector<BatchEvalRequest> batches;
 
     {
@@ -131,6 +148,13 @@ void InferenceServer::process_pending() {
             single_queue_.pop_front();
         }
 
+        // Take all full eval requests (up to batch size)
+        while (!full_eval_queue_.empty() &&
+               full_evals.size() < static_cast<size_t>(config_.batch_size)) {
+            full_evals.push_back(std::move(full_eval_queue_.front()));
+            full_eval_queue_.pop_front();
+        }
+
         // Take all batch requests
         while (!batch_queue_.empty()) {
             batches.push_back(std::move(batch_queue_.front()));
@@ -138,6 +162,28 @@ void InferenceServer::process_pending() {
         }
     }
 
+    // Process full eval requests first (they need complete EvalResult with policy)
+    if (!full_evals.empty()) {
+        std::vector<const StateNode*> full_nodes;
+        full_nodes.reserve(full_evals.size());
+        for (const auto& req : full_evals) {
+            full_nodes.push_back(req.node);
+        }
+
+        std::vector<EvalResult> full_results;
+        {
+            ScopedTimer t(timers.nn_batch_eval);
+            full_results = model_.evaluate_batch(full_nodes);
+        }
+
+        for (size_t i = 0; i < full_evals.size(); ++i) {
+            full_evals[i].promise.set_value(std::move(full_results[i]));
+        }
+
+        total_batches_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Process value-only requests (singles and batches)
     // Combine singles and batches into one mega-batch for better GPU utilization
     std::vector<const StateNode*> all_nodes;
     size_t singles_count = 0;
@@ -165,7 +211,7 @@ void InferenceServer::process_pending() {
     std::vector<float> all_values;
     {
         ScopedTimer t(timers.nn_batch_eval);
-        all_values = model_.evaluate_batch(all_nodes);
+        all_values = model_.evaluate_batch_values(all_nodes);
     }
 
     // Distribute results to singles

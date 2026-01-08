@@ -60,6 +60,7 @@ set(QBOT_LIB_SOURCES
     src/tree/StateNode.cpp
     src/util/storage.cpp
     src/util/gui_client.cpp
+    src/util/training_samples.cpp
     src/core/Game.cpp
     src/util/pathfinding.cpp
     src/search/mcts.cpp
