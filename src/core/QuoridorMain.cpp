@@ -532,31 +532,38 @@ int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simu
 
         // Expand if needed
         if (!node.is_expanded()) {
+            // Get policy from parent's perspective using current player's model
+            EvalResult parent_eval = current_model.evaluate_node(&node);
+
             node.generate_valid_children();
             if (!node.has_children()) return 0;  // Error
 
-            // Set priors using current model
-            std::vector<const StateNode*> children;
+            // Set priors from parent's policy logits (softmax over legal moves only)
+            std::vector<std::pair<uint32_t, int>> child_actions;
+            float max_logit = -std::numeric_limits<float>::infinity();
+
             uint32_t child = node.first_child;
             while (child != NULL_NODE) {
-                children.push_back(&pool[child]);
+                int action_idx = move_to_action_index(pool[child].move);
+                if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+                    child_actions.emplace_back(child, action_idx);
+                    max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
+                }
                 child = pool[child].next_sibling;
             }
 
-            std::vector<float> values = current_model.evaluate_batch_values(children);
-            if (!values.empty()) {
-                float max_v = *std::max_element(values.begin(), values.end());
-                float sum = 0.0f;
-                for (float& v : values) {
-                    v = std::exp(-(v - max_v));
-                    sum += v;
+            if (!child_actions.empty()) {
+                float sum_exp = 0.0f;
+                std::vector<float> exp_logits(child_actions.size());
+                for (size_t i = 0; i < child_actions.size(); ++i) {
+                    int action_idx = child_actions[i].second;
+                    exp_logits[i] = std::exp(parent_eval.policy[action_idx] - max_logit);
+                    sum_exp += exp_logits[i];
                 }
-                child = node.first_child;
-                size_t i = 0;
-                while (child != NULL_NODE && i < values.size()) {
-                    pool[child].stats.prior = values[i] / sum;
-                    child = pool[child].next_sibling;
-                    ++i;
+
+                for (size_t i = 0; i < child_actions.size(); ++i) {
+                    uint32_t child_idx = child_actions[i].first;
+                    pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
                 }
             }
         }
@@ -593,19 +600,23 @@ int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simu
             // Evaluate leaf
             uint32_t leaf = path.back();
             StateNode& leaf_node = pool[leaf];
-            float value;
+            float p1_value;  // Value from P1's absolute perspective
             if (leaf_node.is_terminal()) {
-                value = leaf_node.terminal_value;
+                // terminal_value is already from P1's perspective
+                p1_value = leaf_node.terminal_value;
             } else {
                 // Evaluate with the model for the player at this position
                 ModelInference& eval_model = leaf_node.is_p1_to_move() ? model_p1 : model_p2;
-                value = eval_model.evaluate_node(&leaf_node).value;
+                float leaf_value = eval_model.evaluate_node(&leaf_node).value;
+                // leaf_value is from current player's perspective, convert to P1's
+                p1_value = leaf_node.is_p1_to_move() ? leaf_value : -leaf_value;
             }
 
-            // Backpropagate
+            // Backpropagate using P1's absolute perspective
             for (size_t j = path.size(); j > 0; --j) {
                 StateNode& n = pool[path[j-1]];
-                float node_value = n.is_p1_to_move() ? value : -value;
+                // Convert P1's perspective to this node's current player's perspective
+                float node_value = n.is_p1_to_move() ? p1_value : -p1_value;
                 n.stats.update(node_value);
             }
         }
@@ -842,6 +853,12 @@ int run_selfplay(const Config& config,
             save_tree_pruned(*pool, root, config.save_file);
         }
 
+        // Extract training samples from the completed game tree
+        auto tree_samples = extract_samples_from_tree(*pool, root);
+        for (auto& sample : tree_samples) {
+            collector.add_sample_direct(std::move(sample));
+        }
+
         int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
         int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
         int draws = stats.draws.load(std::memory_order_relaxed);
@@ -852,6 +869,7 @@ int run_selfplay(const Config& config,
         std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:   " << draws << "\n";
         std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+        std::cout << "  Samples: " << collector.size() << "\n";
         std::cout << "  Avg batch size: " << std::fixed << std::setprecision(1) << avg_batch_size
                   << " (" << total_requests << " requests / " << total_batches << " batches)\n";
 

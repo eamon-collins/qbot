@@ -147,11 +147,11 @@ def export_model(model: QuoridorValueNet, export_path: str) -> bool:
         model.eval()
         model.cpu()
 
-        example_pawn = torch.zeros(1, 2, 9, 9)
-        example_wall = torch.zeros(1, 2, 8, 8)
-        example_meta = torch.zeros(1, 3)
+        # New 6-channel input format: (batch, 6, 9, 9)
+        # Channels: my_pawn, opp_pawn, h_walls, v_walls, my_fences, opp_fences
+        example_input = torch.zeros(1, 6, 9, 9)
 
-        traced = torch.jit.trace(model, (example_pawn, example_wall, example_meta))
+        traced = torch.jit.trace(model, example_input)
         traced.save(export_path)
 
         return True
@@ -365,6 +365,15 @@ def main():
 
         logging.info(f"Tree has {num_games} terminal nodes")
 
+        # Derive .qsamples path from tree path
+        samples_path = tree_path.with_suffix('.qsamples')
+        if not samples_path.exists():
+            logging.error(f"Training samples not found at {samples_path}")
+            logging.error("Self-play should generate .qsamples files automatically")
+            continue
+
+        logging.info(f"Using training samples: {samples_path}")
+
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
 
@@ -374,7 +383,7 @@ def main():
             if torch.cuda.is_available():
                 model.cuda()
 
-        if not train_model(model, str(tree_path), args.epochs, args.batch_size):
+        if not train_model(model, str(samples_path), args.epochs, args.batch_size):
             logging.error("Training failed, skipping iteration...")
             continue
 

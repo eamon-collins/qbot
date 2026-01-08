@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <unordered_map>
 
 namespace qbot {
 
@@ -188,9 +189,129 @@ void TrainingSampleCollector::add_sample(const NodePool& pool, uint32_t node_idx
     samples_.push_back(sample);
 }
 
+void TrainingSampleCollector::add_sample_direct(TrainingSample sample) {
+    std::lock_guard lock(mutex_);
+    samples_.push_back(std::move(sample));
+}
+
 std::vector<TrainingSample> TrainingSampleCollector::take_samples() noexcept {
     std::lock_guard lock(mutex_);
     return std::move(samples_);
+}
+
+// ============================================================================
+// Tree Sample Extraction
+// ============================================================================
+
+namespace {
+
+/// Recursively compute the expected value of a node by following visit-weighted paths
+/// Returns value from P1's perspective (+1 = P1 wins)
+float compute_node_value(const NodePool& pool, uint32_t node_idx,
+                         std::unordered_map<uint32_t, float>& value_cache) {
+    // Check cache first
+    auto it = value_cache.find(node_idx);
+    if (it != value_cache.end()) {
+        return it->second;
+    }
+
+    const StateNode& node = pool[node_idx];
+
+    // Terminal nodes have a known value
+    if (node.is_terminal()) {
+        float value = node.terminal_value;
+        value_cache[node_idx] = value;
+        return value;
+    }
+
+    // No children - can't compute value
+    if (!node.has_children()) {
+        value_cache[node_idx] = 0.0f;
+        return 0.0f;
+    }
+
+    // Compute weighted average of children's values based on visit counts
+    float weighted_sum = 0.0f;
+    uint32_t total_visits = 0;
+
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
+        if (visits > 0) {
+            float child_value = compute_node_value(pool, child, value_cache);
+            weighted_sum += visits * child_value;
+            total_visits += visits;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    float value = (total_visits > 0) ? (weighted_sum / total_visits) : 0.0f;
+    value_cache[node_idx] = value;
+    return value;
+}
+
+/// Extract samples from a subtree via DFS
+void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
+                         std::unordered_map<uint32_t, float>& value_cache,
+                         std::vector<TrainingSample>& samples) {
+    const StateNode& node = pool[node_idx];
+
+    // Skip terminal nodes (no policy target)
+    if (node.is_terminal()) {
+        return;
+    }
+
+    // Skip nodes without children (no policy target)
+    if (!node.has_children()) {
+        return;
+    }
+
+    // Check if this node has any visit counts (was used in search)
+    uint32_t total_visits = 0;
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        total_visits += pool[child].stats.visits.load(std::memory_order_relaxed);
+        child = pool[child].next_sibling;
+    }
+
+    // Only extract sample if the node was actually searched
+    if (total_visits > 0) {
+        TrainingSample sample;
+        sample.state = extract_compact_state(node);
+        sample.policy = extract_visit_distribution(pool, node_idx);
+
+        // Get value from P1's perspective, then convert to current player's perspective
+        float p1_value = compute_node_value(pool, node_idx, value_cache);
+        sample.value = node.is_p1_to_move() ? p1_value : -p1_value;
+
+        samples.push_back(sample);
+    }
+
+    // Recurse to children
+    child = node.first_child;
+    while (child != NULL_NODE) {
+        extract_samples_dfs(pool, child, value_cache, samples);
+        child = pool[child].next_sibling;
+    }
+}
+
+} // anonymous namespace
+
+std::vector<TrainingSample> extract_samples_from_tree(
+    const NodePool& pool, uint32_t root_idx)
+{
+    std::vector<TrainingSample> samples;
+    samples.reserve(pool.allocated() / 2);  // Rough estimate
+
+    std::unordered_map<uint32_t, float> value_cache;
+    value_cache.reserve(pool.allocated());
+
+    extract_samples_dfs(pool, root_idx, value_cache, samples);
+
+    std::cout << "[extract_samples_from_tree] Extracted " << samples.size()
+              << " samples from tree with " << pool.allocated() << " nodes\n";
+
+    return samples;
 }
 
 } // namespace qbot

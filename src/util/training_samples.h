@@ -164,6 +164,14 @@ public:
     }
 };
 
+/// Extract training samples from a pruned game tree
+/// Traverses the tree and extracts samples from all non-terminal nodes with children
+/// @param pool Node pool containing the tree
+/// @param root_idx Root node index
+/// @return Vector of extracted training samples
+[[nodiscard]] std::vector<TrainingSample> extract_samples_from_tree(
+    const NodePool& pool, uint32_t root_idx);
+
 /// Collector for gathering training samples during self-play
 /// Thread-safe for use with multi-threaded self-play
 class TrainingSampleCollector {
@@ -176,6 +184,9 @@ public:
     /// @param node_idx Index of the position node
     /// @param game_outcome Final game outcome (+1 P1 win, -1 P2 win, 0 draw)
     void add_sample(const NodePool& pool, uint32_t node_idx, float game_outcome);
+
+    /// Add a pre-constructed sample directly
+    void add_sample_direct(TrainingSample sample);
 
     /// Get collected samples
     [[nodiscard]] const std::vector<TrainingSample>& samples() const noexcept { return samples_; }
