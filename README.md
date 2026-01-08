@@ -8,8 +8,8 @@ cmake ..
 make              # Debug build (qbot)
 make fast         # Optimized build (-O3 -march=native -flto)
 make leopard      # Tree file dumper for training
-make test_game    # Build game tests
-make test_storage # Build storage tests
+make tests        # Build all unit tests (debug)
+make benchmarks   # Build benchmarks (optimized) - requires ENABLE_INFERENCE
 ```
 
 With neural network inference (requires libtorch):
@@ -19,19 +19,54 @@ cmake .. -DENABLE_INFERENCE=ON
 make
 ```
 
-## Run Tests
+## Testing
+
+Unit tests are built with debug flags (`-g -O0`) and registered with CTest.
 
 ```bash
-# All tests
+# Run all tests via CTest
+ctest
+
+# Run with verbose output
+ctest -V
+
+# Run specific test suites
+ctest -R Game        # GameTest.*
+ctest -R Storage     # StorageTest.*
+ctest -R Inference   # InferenceTest.* (requires ENABLE_INFERENCE)
+
+# Run tests directly with GoogleTest (more control)
 ./test_game
 ./test_storage
+./test_inference     # requires ENABLE_INFERENCE
 
 # Useful specific tests (verbose output when run alone)
-# builds a tree for 3 seconds and prints how many nodes it created
 ./test_game --gtest_filter=GameTest.BenchmarkBuildTree
-# builds tree at random with low branching factor until someone wins, then prints whole game path.
 ./test_game --gtest_filter=GameTest.BuildTreeUntilWinAndPrintPath
 ```
+
+## Benchmarks
+
+Benchmarks are built with full optimizations (`-O3 -march=native -flto`) and are **not** registered with CTest (won't run during `ctest`). This ensures accurate performance measurements.
+
+```bash
+# Build benchmarks (requires ENABLE_INFERENCE)
+make benchmarks
+
+# Run all inference benchmarks
+./bench_inference
+
+# Run specific benchmarks
+./bench_inference --gtest_filter="InferenceBenchmark.BatchSizes"
+./bench_inference --gtest_filter="InferenceBenchmark.QueueLatency"
+```
+
+**Available benchmarks:**
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BatchSizes` | Measures inference throughput at batch sizes 1-512, reports per-node latency and throughput |
+| `QueueLatency` | Measures end-to-end latency from queue submission to result callback at various internal batch sizes |
 
 ## GUI Visualization
 
