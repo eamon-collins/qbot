@@ -196,35 +196,21 @@ if(BUILD_TESTS)
     target_link_options(test_game PRIVATE -flto)
 
     if(ENABLE_INFERENCE)
-        # Regular inference tests - debug build for ctest
         add_executable(test_inference tests/test_inference.cpp)
-        target_link_libraries(test_inference PRIVATE qbot_lib_debug GTest::gtest_main)
-        target_compile_options(test_inference PRIVATE -g -O0)
-
-        # Inference benchmarks - optimized build, NOT registered with ctest
-        add_executable(bench_inference tests/bench_inference.cpp)
-        target_link_libraries(bench_inference PRIVATE qbot_lib_fast GTest::gtest_main)
-        target_compile_options(bench_inference PRIVATE -O3 -DNDEBUG -march=native -flto)
-        target_link_options(bench_inference PRIVATE -flto)
-        set_target_properties(bench_inference PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-        )
+        target_link_libraries(test_inference PRIVATE qbot_lib_fast GTest::gtest_main)
+        target_compile_options(test_inference PRIVATE -O3 -DNDEBUG -march=native -flto)
+        target_link_options(test_inference PRIVATE -flto)
     endif()
 
-    # Debug test builds
-    add_executable(test_storage_debug tests/test_storage.cpp)
-    target_link_libraries(test_storage_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_storage_debug PRIVATE -g -O0)
-
-    add_executable(test_game_debug tests/test_game.cpp)
-    target_link_libraries(test_game_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_game_debug PRIVATE -g -O0)
-
-    if(ENABLE_INFERENCE)
-        add_executable(test_inference_debug tests/test_inference.cpp)
-        target_link_libraries(test_inference_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-        target_compile_options(test_inference_debug PRIVATE -g -O0)
-    endif()
+    # Benchmarks - optimized build, NOT registered with ctest
+    # Game benchmarks always available; inference benchmarks require ENABLE_INFERENCE
+    add_executable(benchmarks tests/benchmarks.cpp)
+    target_link_libraries(benchmarks PRIVATE qbot_lib_fast GTest::gtest_main)
+    target_compile_options(benchmarks PRIVATE -O3 -DNDEBUG -march=native -flto)
+    target_link_options(benchmarks PRIVATE -flto)
+    set_target_properties(benchmarks PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
 
     include(GoogleTest)
     gtest_discover_tests(test_storage)
@@ -241,12 +227,6 @@ if(BUILD_TESTS)
 
     add_custom_target(tests DEPENDS ${TEST_TARGETS})
 
-    # "benchmarks" target - builds benchmark binaries (optimized, not run by ctest)
-    if(ENABLE_INFERENCE)
-        add_custom_target(benchmarks DEPENDS bench_inference
-            COMMENT "Building optimized benchmark binaries (run directly, not via ctest)"
-        )
-    endif()
 endif()
 
 # =============================================================================

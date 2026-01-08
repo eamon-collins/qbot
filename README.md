@@ -41,7 +41,6 @@ ctest -R Inference   # InferenceTest.* (requires ENABLE_INFERENCE)
 ./test_inference     # requires ENABLE_INFERENCE
 
 # Useful specific tests (verbose output when run alone)
-./test_game --gtest_filter=GameTest.BenchmarkBuildTree
 ./test_game --gtest_filter=GameTest.BuildTreeUntilWinAndPrintPath
 ```
 
@@ -50,23 +49,23 @@ ctest -R Inference   # InferenceTest.* (requires ENABLE_INFERENCE)
 Benchmarks are built with full optimizations (`-O3 -march=native -flto`) and are **not** registered with CTest (won't run during `ctest`). This ensures accurate performance measurements.
 
 ```bash
-# Build benchmarks (requires ENABLE_INFERENCE)
+# Build benchmarks
 make benchmarks
 
-# Run all inference benchmarks
-./bench_inference
+# Run all benchmarks
+./benchmarks
 
 # Run specific benchmarks
-./bench_inference --gtest_filter="InferenceBenchmark.BatchSizes"
-./bench_inference --gtest_filter="InferenceBenchmark.QueueLatency"
+./benchmarks --gtest_filter="GameBenchmark.BuildTree"
+./benchmarks --gtest_filter="InferenceBenchmark.BatchSizes"
 ```
 
 **Available benchmarks:**
 
 | Benchmark | Description |
 |-----------|-------------|
-| `BatchSizes` | Measures inference throughput at batch sizes 1-512, reports per-node latency and throughput |
-| `QueueLatency` | Measures end-to-end latency from queue submission to result callback at various internal batch sizes |
+| `GameBenchmark.BuildTree` | Measures tree building throughput (nodes/sec) over 3 seconds |
+| `InferenceBenchmark.BatchSizes` | Measures NN inference throughput at batch sizes 1-512 (requires ENABLE_INFERENCE) |
 
 ## GUI Visualization
 

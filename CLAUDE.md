@@ -104,9 +104,10 @@ train/
   train_loop.py          # AlphaZero loop: run_selfplay → train_model → run_arena → promote/reject
 
 tests/
-  test_state.cpp
-  test_mcts.cpp
-  test_tree.cpp
+  test_game.cpp         # Unit tests for Game, tree building, terminal detection
+  test_storage.cpp      # Unit tests for binary tree serialization
+  test_inference.cpp    # Unit tests for NN inference (requires ENABLE_INFERENCE)
+  benchmarks.cpp        # Performance benchmarks (not run by ctest): ./benchmarks
 ```
 
 ## Old Code
@@ -134,6 +135,9 @@ Assume we are already in the conda env "qenv" which should allow us to compile a
 - Random game sequences always terminate
 - Wall blocking never creates unreachable goals
 - Visit counts monotonically increase
+
+### Benchmarks
+Run `./benchmarks` from the build directory to measure performance (e.g., `./benchmarks --gtest_filter="GameBenchmark.BuildTree"`).
 
 ## Build System
 

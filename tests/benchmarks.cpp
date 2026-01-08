@@ -1,6 +1,12 @@
-#include "inference/inference.h"
+// Benchmarks - built with full optimizations, NOT registered with ctest
+// Run directly: ./benchmarks
+
 #include "core/Game.h"
 #include "tree/StateNode.h"
+
+#ifdef QBOT_ENABLE_INFERENCE
+#include "inference/inference.h"
+#endif
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -8,10 +14,101 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <queue>
 #include <random>
+#include <sstream>
 #include <vector>
 
 using namespace qbot;
+
+// ============================================================================
+// Game Benchmarks (always available)
+// ============================================================================
+
+class GameBenchmark : public ::testing::Test {
+protected:
+    void SetUp() override {
+        GameConfig config;
+        config.pool_capacity = 5'000'000;
+        game_ = std::make_unique<Game>(config);
+    }
+
+    uint32_t create_root() {
+        uint32_t root_idx = game_->pool().allocate();
+        EXPECT_NE(root_idx, NULL_NODE);
+        game_->pool()[root_idx].init_root(true);
+        game_->set_root(root_idx);
+        return root_idx;
+    }
+
+    size_t count_tree_nodes(uint32_t root_idx) {
+        if (root_idx == NULL_NODE) return 0;
+        size_t count = 0;
+        std::queue<uint32_t> queue;
+        queue.push(root_idx);
+        while (!queue.empty()) {
+            uint32_t idx = queue.front();
+            queue.pop();
+            count++;
+            uint32_t child = game_->pool()[idx].first_child;
+            while (child != NULL_NODE) {
+                queue.push(child);
+                child = game_->pool()[child].next_sibling;
+            }
+        }
+        return count;
+    }
+
+    std::unique_ptr<Game> game_;
+};
+
+TEST_F(GameBenchmark, BuildTree) {
+    uint32_t root = create_root();
+
+    constexpr float branching_factor = 0.5f;
+    constexpr std::time_t time_limit_sec = 3;
+    constexpr size_t node_limit = 5'000'000;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    size_t created = game_->build_tree(root, branching_factor, time_limit_sec, node_limit);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+    double nodes_per_sec = (created * 1'000'000.0) / duration_us;
+    double us_per_node = static_cast<double>(duration_us) / created;
+
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════════╗\n";
+    std::cout << "║              Game Tree Build Benchmark                    ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
+    std::cout << "║  Parameters:                                              ║\n";
+    std::cout << "║    branching_factor: " << std::left << std::setw(36) << branching_factor << "║\n";
+    std::cout << "║    time_limit:       " << std::left << std::setw(33) << std::to_string(time_limit_sec) + " sec" << "║\n";
+    std::cout << "║    node_limit:       " << std::left << std::setw(36) << node_limit << "║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
+    std::cout << "║  Results:                                                 ║\n";
+    std::cout << "║    Nodes created:    " << std::left << std::setw(36) << created << "║\n";
+    std::cout << "║    Time elapsed:     " << std::left << std::setw(33) << std::to_string(duration_ms) + " ms" << "║\n";
+    std::cout << "║    Throughput:       " << std::left << std::setw(30) << std::to_string(static_cast<int>(nodes_per_sec)) + " nodes/sec" << "║\n";
+    std::ostringstream per_node_str;
+    per_node_str << std::fixed << std::setprecision(2) << us_per_node << " us/node";
+    std::cout << "║    Per-node time:    " << std::left << std::setw(36) << per_node_str.str() << "║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
+    std::cout << "\n";
+
+    EXPECT_GT(created, 0) << "Should create nodes";
+
+    size_t counted = count_tree_nodes(root);
+    EXPECT_EQ(counted, created + 1) << "Tree count should match";
+}
+
+// ============================================================================
+// Inference Benchmarks (requires QBOT_ENABLE_INFERENCE)
+// ============================================================================
+
+#ifdef QBOT_ENABLE_INFERENCE
 
 namespace {
 
@@ -80,7 +177,6 @@ protected:
     std::unique_ptr<Game> game_;
 };
 
-// Benchmark test for measuring inference latency at various batch sizes
 TEST_F(InferenceBenchmark, BatchSizes) {
     std::string model_path = get_model_path();
     if (model_path.empty()) {
@@ -89,7 +185,7 @@ TEST_F(InferenceBenchmark, BatchSizes) {
     }
 
     try {
-        ModelInference inference(model_path, 512, true);  // Max batch size
+        ModelInference inference(model_path, 512, true);
         ASSERT_TRUE(inference.is_ready());
 
         std::cout << "\n";
@@ -159,87 +255,4 @@ TEST_F(InferenceBenchmark, BatchSizes) {
     }
 }
 
-// Extended benchmark with submission latency measurement (queue -> result)
-TEST_F(InferenceBenchmark, QueueLatency) {
-    std::string model_path = get_model_path();
-    if (model_path.empty()) {
-        GTEST_SKIP() << "No model available (requires Python with PyTorch)";
-        return;
-    }
-
-    try {
-        std::vector<int> internal_batch_sizes = {8, 16, 32, 64, 128};
-        std::vector<int> submission_counts = {1, 10, 50, 100, 200};
-
-        std::cout << "\n";
-        std::cout << "╔══════════════════════════════════════════════════════════════════════════════╗\n";
-        std::cout << "║                      Queue Submission Latency Benchmark                      ║\n";
-        std::cout << "║   Measures time from queue_for_evaluation() to receiving callback result     ║\n";
-        std::cout << "╠══════════════════════════════════════════════════════════════════════════════╣\n";
-
-        for (int internal_batch : internal_batch_sizes) {
-            ModelInference inference(model_path, internal_batch, true);
-            ASSERT_TRUE(inference.is_ready());
-
-            std::cout << "║  Internal batch size: " << std::left << std::setw(55) << internal_batch << "║\n";
-            std::cout << "╠════════════════╦════════════════╦════════════════╦════════════════════════╣\n";
-            std::cout << "║  Nodes Queued  ║  Total (ms)    ║  Per Node (µs) ║  Throughput (n/s)      ║\n";
-            std::cout << "╠════════════════╬════════════════╬════════════════╬════════════════════════╣\n";
-
-            for (int num_nodes : submission_counts) {
-                std::vector<StateNode> nodes(num_nodes);
-                std::mt19937 rng(123);
-                for (int i = 0; i < num_nodes; ++i) {
-                    nodes[i].init_root(true);
-                    nodes[i].p1.row = rng() % 9;
-                    nodes[i].p1.col = rng() % 9;
-                    nodes[i].p2.row = rng() % 9;
-                    nodes[i].p2.col = rng() % 9;
-                }
-
-                constexpr int RUNS = 5;
-                double total_time_us = 0.0;
-                int total_results = 0;
-
-                for (int r = 0; r < RUNS; ++r) {
-                    auto start = std::chrono::high_resolution_clock::now();
-
-                    for (int i = 0; i < num_nodes; ++i) {
-                        inference.queue_for_evaluation(&nodes[i], static_cast<uint32_t>(i));
-                    }
-
-                    std::vector<float> results;
-                    results.reserve(num_nodes);
-                    inference.flush_queue([&results](uint32_t /*idx*/, float value) {
-                        results.push_back(value);
-                    });
-
-                    auto end = std::chrono::high_resolution_clock::now();
-                    auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-                    total_time_us += static_cast<double>(duration_us);
-                    total_results += static_cast<int>(results.size());
-                }
-
-                ASSERT_EQ(total_results, num_nodes * RUNS);
-
-                double avg_time_us = total_time_us / RUNS;
-                double avg_time_ms = avg_time_us / 1000.0;
-                double per_node_us = avg_time_us / num_nodes;
-                double throughput = 1'000'000.0 / per_node_us;
-
-                std::cout << "║ " << std::right << std::setw(13) << num_nodes << "  ║ "
-                          << std::right << std::setw(13) << std::fixed << std::setprecision(3) << avg_time_ms << "  ║ "
-                          << std::right << std::setw(13) << std::fixed << std::setprecision(2) << per_node_us << "  ║ "
-                          << std::right << std::setw(21) << std::fixed << std::setprecision(0) << throughput << "   ║\n";
-            }
-
-            std::cout << "╠════════════════╩════════════════╩════════════════╩════════════════════════╣\n";
-        }
-
-        std::cout << "╚══════════════════════════════════════════════════════════════════════════════╝\n";
-        std::cout << "\n";
-
-    } catch (const c10::Error& e) {
-        GTEST_SKIP() << "Failed to load model: " << e.what();
-    }
-}
+#endif  // QBOT_ENABLE_INFERENCE
