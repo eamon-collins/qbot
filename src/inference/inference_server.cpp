@@ -1,6 +1,7 @@
 #include "inference_server.h"
 
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 
 namespace qbot {
@@ -45,8 +46,12 @@ void InferenceServer::stop() {
 
     running_.store(false, std::memory_order_release);
 
-    std::cout << "[InferenceServer] Stopped. Total requests: " << total_requests_.load()
-              << ", batches: " << total_batches_.load() << "\n";
+    size_t requests = total_requests_.load();
+    size_t batches = total_batches_.load();
+    double avg_batch = batches > 0 ? static_cast<double>(requests) / batches : 0.0;
+    std::cout << "[InferenceServer] Stopped. Total requests: " << requests
+              << ", batches: " << batches
+              << ", avg batch size: " << std::fixed << std::setprecision(1) << avg_batch << "\n";
 }
 
 std::future<float> InferenceServer::submit(const StateNode* node) {
@@ -91,9 +96,8 @@ void InferenceServer::inference_loop() {
         {
             std::unique_lock lock(queue_mutex_);
 
-            // Wait until we have requests or stop is requested
             auto deadline = std::chrono::steady_clock::now() +
-                           std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms*1000));
+                           std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
 
             queue_cv_.wait_until(lock, deadline, [this] {
                 return !single_queue_.empty() ||

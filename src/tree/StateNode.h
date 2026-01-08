@@ -337,9 +337,10 @@ struct alignas(64) StateNode {
 
     // State flags
     uint8_t flags{0};
-    static constexpr uint8_t FLAG_EXPANDED   = 0x01;  // Children have been generated
-    static constexpr uint8_t FLAG_TERMINAL   = 0x02;  // Game over at this node
-    static constexpr uint8_t FLAG_P1_TO_MOVE = 0x04;  // Player 1's turn (else P2)
+    static constexpr uint8_t FLAG_EXPANDED     = 0x01;  // Children have been generated
+    static constexpr uint8_t FLAG_TERMINAL     = 0x02;  // Game over at this node
+    static constexpr uint8_t FLAG_P1_TO_MOVE   = 0x04;  // Player 1's turn (else P2)
+    static constexpr uint8_t FLAG_ON_GAME_PATH = 0x08;  // Node was visited in actual game
 
     // Terminal value (only valid if FLAG_TERMINAL is set)
     // +1.0 = P1 wins, -1.0 = P2 wins, 0.0 = draw (if applicable)
@@ -453,6 +454,10 @@ struct alignas(64) StateNode {
         flags |= FLAG_TERMINAL;
         terminal_value = value;
     }
+
+    [[nodiscard]] bool is_on_game_path() const noexcept { return flags & FLAG_ON_GAME_PATH; }
+    void set_on_game_path() noexcept { flags |= FLAG_ON_GAME_PATH; }
+    void clear_on_game_path() noexcept { flags &= ~FLAG_ON_GAME_PATH; }
 
     /// Get current player reference
     [[nodiscard]] const Player& current_player() const noexcept {

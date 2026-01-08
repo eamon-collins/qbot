@@ -188,6 +188,7 @@ void ModelInference::ensure_buffer_capacity(int size) {
     pawn_buffer_ = torch::zeros({new_capacity, 2, 9, 9}, options);
     wall_buffer_ = torch::zeros({new_capacity, 2, 8, 8}, options);
     meta_buffer_ = torch::zeros({new_capacity, 3}, options);
+    output_buffer_ = torch::empty({new_capacity}, options);  // Pinned for fast GPU->CPU
     buffer_capacity_ = new_capacity;
 }
 
@@ -255,7 +256,7 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
         }
     }
 
-    // Slice buffers to actual batch size and move to GPU
+    // Slice buffers to actual batch size and move to GPU (async)
     torch::Tensor batch_pawn, batch_wall, batch_meta;
     {
         ScopedTimer t(timers.tensor_to_gpu);
@@ -264,7 +265,13 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
         batch_meta = meta_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
     }
 
-    // Run inference
+    // Sync to measure actual upload time
+    if (device_.is_cuda()) {
+        ScopedTimer t(timers.gpu_sync_upload);
+        torch::cuda::synchronize();
+    }
+
+    // Run inference (async launch)
     torch::Tensor output;
     {
         ScopedTimer t(timers.model_forward);
@@ -278,13 +285,26 @@ std::vector<float> ModelInference::evaluate_batch(const std::vector<const StateN
         output = model_.forward(inputs).toTensor();
     }
 
-    // Move output to CPU
-    {
-        ScopedTimer t(timers.tensor_to_cpu);
-        output = output.to(torch::kCPU).contiguous();
+    // Sync to measure actual forward time
+    if (device_.is_cuda()) {
+        ScopedTimer t(timers.gpu_sync_forward);
+        torch::cuda::synchronize();
     }
 
-    const float* output_ptr = output.data_ptr<float>();
+    // Copy output to pinned CPU buffer (async)
+    // Flatten in case model returns [batch, 1] instead of [batch]
+    {
+        ScopedTimer t(timers.tensor_to_cpu);
+        output_buffer_.slice(0, 0, batch_size).copy_(output.flatten(), /*non_blocking=*/true);
+    }
+
+    // Sync to measure actual download time
+    if (device_.is_cuda()) {
+        ScopedTimer t(timers.gpu_sync_download);
+        torch::cuda::synchronize();
+    }
+
+    const float* output_ptr = output_buffer_.data_ptr<float>();
     for (int i = 0; i < batch_size; ++i) {
         float value = output_ptr[i];
         results[i] = std::isnan(value) ? 0.0f : value;

@@ -73,12 +73,15 @@ struct SelfPlayTimers {
     TimerAccumulator nn_single_eval;   // NN single node evaluation
     TimerAccumulator generate_children;// generate_valid_children
 
-    // Detailed inference breakdown
+    // Detailed inference breakdown (with explicit CUDA syncs for accuracy)
     TimerAccumulator tensor_alloc;     // torch::zeros calls
     TimerAccumulator tensor_fill;      // filling tensor data
-    TimerAccumulator tensor_to_gpu;    // .to(device_) transfer
-    TimerAccumulator model_forward;    // model_.forward()
-    TimerAccumulator tensor_to_cpu;    // output.to(kCPU)
+    TimerAccumulator tensor_to_gpu;    // .to(device_) launch
+    TimerAccumulator gpu_sync_upload;  // sync after upload completes
+    TimerAccumulator model_forward;    // model_.forward() launch
+    TimerAccumulator gpu_sync_forward; // sync after forward completes (actual GPU compute)
+    TimerAccumulator tensor_to_cpu;    // copy to CPU launch
+    TimerAccumulator gpu_sync_download;// sync after download completes
 
     void reset() noexcept {
         expansion.reset();
@@ -94,8 +97,11 @@ struct SelfPlayTimers {
         tensor_alloc.reset();
         tensor_fill.reset();
         tensor_to_gpu.reset();
+        gpu_sync_upload.reset();
         model_forward.reset();
+        gpu_sync_forward.reset();
         tensor_to_cpu.reset();
+        gpu_sync_download.reset();
     }
 
     void print() const {
@@ -118,12 +124,15 @@ struct SelfPlayTimers {
         print_line("move_selection", move_selection);
         print_line("child_lookup", child_lookup);
         print_line("backprop", backprop);
-        std::cout << "--- Inference Detail ---\n";
+        std::cout << "--- Inference Detail (with CUDA syncs) ---\n";
         print_line("  tensor_alloc", tensor_alloc);
         print_line("  tensor_fill", tensor_fill);
         print_line("  tensor_to_gpu", tensor_to_gpu);
+        print_line("  gpu_sync_upload", gpu_sync_upload);
         print_line("  model_forward", model_forward);
+        print_line("  gpu_sync_forward", gpu_sync_forward);
         print_line("  tensor_to_cpu", tensor_to_cpu);
+        print_line("  gpu_sync_download", gpu_sync_download);
         std::cout << "==================================\n\n";
     }
 };

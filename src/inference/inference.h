@@ -88,12 +88,14 @@ private:
 
     /// Queue entries: (node pointer, node index)
     std::deque<std::pair<const StateNode*, uint32_t>> evaluation_queue_;
+    std::vector<torch::jit::IValue> inputs_internal_; 
 
     /// Pre-allocated tensor buffers (CPU pinned memory for fast GPU transfer)
     int buffer_capacity_{0};
     torch::Tensor pawn_buffer_;   // [capacity, 2, 9, 9]
     torch::Tensor wall_buffer_;   // [capacity, 2, 8, 8]
     torch::Tensor meta_buffer_;   // [capacity, 3]
+    torch::Tensor output_buffer_; // [capacity] - pinned CPU buffer for GPU->CPU transfer
 };
 
 } // namespace qbot

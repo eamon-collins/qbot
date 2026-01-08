@@ -258,6 +258,26 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
     }
 }
 
+/// Save only nodes that were part of actual games (pruned)
+bool save_tree_pruned(const NodePool& pool, uint32_t root, const std::string& path) {
+    std::cout << "Saving pruned tree to: " << path << "\n";
+
+    auto start = std::chrono::steady_clock::now();
+    auto result = TreeStorage::save_pruned(path, pool, root);
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
+    if (result.has_value()) {
+        auto file_size = std::filesystem::file_size(path);
+        std::cout << "  Pruned " << pool.allocated() << " -> " << result.value()
+                  << " nodes (" << file_size / 1024 << " KB) in " << ms << " s\n";
+        return true;
+    } else {
+        std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
+        return false;
+    }
+}
+
 // ============================================================================
 // Game Modes
 // ============================================================================
@@ -767,11 +787,9 @@ int run_selfplay(const Config& config,
     // Use multi-threaded path if threads > 1
     if (config.num_threads > 1) {
         // Create inference server for batched GPU access
-        std::cout << "Loading model into inference server...\n";
-        std::cout << "  Batch size: " << config.batch_size << "\n";
         InferenceServerConfig server_config;
         server_config.batch_size = config.batch_size;
-        server_config.max_wait_ms = 0.5;
+        server_config.max_wait_ms = 0.1;
         InferenceServer server(config.model_file, server_config);
         server.start();
 
@@ -801,9 +819,9 @@ int run_selfplay(const Config& config,
 
         server.stop();
 
-        // Final save
+        // Final save (pruned to only game-path nodes)
         if (!config.save_file.empty()) {
-            save_tree(*pool, root, config.save_file);
+            save_tree_pruned(*pool, root, config.save_file);
         }
 
         int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
@@ -856,8 +874,9 @@ int run_selfplay(const Config& config,
             }
         }
 
+        // Final save (pruned to only game-path nodes)
         if (!config.save_file.empty()) {
-            save_tree(*pool, root, config.save_file);
+            save_tree_pruned(*pool, root, config.save_file);
         }
 
         std::cout << "\nSelf-play complete!\n";

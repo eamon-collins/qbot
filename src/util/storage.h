@@ -119,6 +119,16 @@ public:
         const NodePool& pool,
         uint32_t root);
 
+    /// Save only nodes marked as on_game_path (pruned tree)
+    /// @param path Output file path
+    /// @param pool Node pool containing the tree
+    /// @param root Root node index
+    /// @return Success or error, and number of nodes saved
+    [[nodiscard]] static std::expected<size_t, StorageError> save_pruned(
+        const std::filesystem::path& path,
+        const NodePool& pool,
+        uint32_t root);
+
     /// Load a tree from a file
     /// @param path Input file path
     /// @return Loaded tree or error

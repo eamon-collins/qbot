@@ -310,6 +310,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
     uint32_t current = root_idx;
     game_path.push_back(current);
+    pool[current].set_on_game_path();
 
     while (current != NULL_NODE) {
         StateNode& node = pool[current];
@@ -393,6 +394,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
         current = next;
         game_path.push_back(current);
+        pool[current].set_on_game_path();
         result.num_moves++;
 
         // Safety limit
@@ -684,6 +686,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
 
     uint32_t current = root_idx;
     game_path.push_back(current);
+    pool[current].set_on_game_path();
 
     while (current != NULL_NODE) {
         StateNode& node = pool[current];
@@ -758,6 +761,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
 
         current = next;
         game_path.push_back(current);
+        pool[current].set_on_game_path();
         result.num_moves++;
 
         if (result.num_moves > 500) {
