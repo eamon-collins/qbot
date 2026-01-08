@@ -81,22 +81,28 @@ For bounded memory scenarios:
 ```
 src/
   core/
-    types.h          # Move, Position, Player types
-    Game.h           # Game state (no tree logic)
-    Game.cpp
+    Game.h/cpp           # Game controller: manages tree, GUI connection, move selection
+    QuoridorMain.cpp     # CLI entry point with boost::program_options, run modes (interactive/train/selfplay/arena)
   tree/
-    Node.h           # TreeNode with edge statistics
-    node_pool.h      # Memory-bounded node allocation
-    Tree.h           # MCTS tree operations
-    Tree.cpp
+    StateNode.h/cpp      # Core game state node with Move, Player, FenceGrid structs, EdgeStats atomics, PUCT selection
+    node_pool.h          # Chunked lock-free node pool with CAS allocation, LRU tracking, auto-growth
   search/
-    mcts.h           # MCTS algorithm
-    mcts.cpp
-    selection.h      # UCB/PUCT selection policies
-    evaluation.h     # Rollout and NN evaluation interface
-  ipc/
-    protocol.h       # UI communication protocol
-    protocol.cpp
+    mcts.h/cpp           # Parallel MCTS engine: virtual loss, memory bounds, SelfPlayEngine, MCTSEngine classes
+  inference/
+    inference.h/cpp      # TorchScript model wrapper: state→tensor conversion, batched GPU inference
+    inference_server.h/cpp # Async inference server: thread-safe queue, batches requests for GPU efficiency
+  util/
+    pathfinding.h/cpp    # A* pathfinder for fence validation (ensures no player gets blocked)
+    gui_client.h/cpp     # WebSocket client for standalone GUI (JSON protocol)
+    storage.h/cpp        # Binary tree serialization: TreeFileHeader, SerializedNode, save/load/prune
+    timer.h              # ScopedTimer and TimerAccumulator for profiling self-play performance
+    leopard.cpp          # CLI tool that streams SerializedNodes to stdout for Python training
+
+train/
+  resnet.py              # QuoridorValueNet: dual-tower ResNet (pawn + wall features) → value head
+  StateNode.py           # QuoridorDataset: reads binary tree via leopard subprocess, yields PyTorch batches
+  train_loop.py          # AlphaZero loop: run_selfplay → train_model → run_arena → promote/reject
+
 tests/
   test_state.cpp
   test_mcts.cpp

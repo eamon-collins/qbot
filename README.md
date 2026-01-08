@@ -179,12 +179,51 @@ The arena alternates which model plays as P1/P2 for fairness. If the candidate w
 
 #### Automated Training Loop
 
-Use `train_loop.py` to automate the self-play → train → evaluate cycle:
+Use `train_loop.py` to automate the full AlphaZero training cycle:
 
+1. **Self-play**: Generate games using current best model, save to `samples/tree_X.qbot`
+2. **Train**: Train candidate model on generated data, export to `model/candidate.pt`
+3. **Arena**: Evaluate candidate vs current_best
+   - If candidate wins ≥55%: promotes to `model/current_best.pt`
+   - If candidate loses: discards candidate, continues with current_best
+
+**Quick test run:**
 ```bash
 cd train/
-python train_loop.py --iterations 10 --games 500 --simulations 800 --epochs 50
+python train_loop.py \
+    --iterations 3 \
+    --games 10 \
+    --simulations 100 \
+    --epochs 5 \
+    --arena-games 20 \
+    --arena-sims 50 \
+    --threads 4
 ```
+
+**Production run:**
+```bash
+python train_loop.py --iterations 100 --games 500 --simulations 800 --epochs 50 --threads 8
+```
+
+**Key paths:**
+- `samples/tree_0.qbot`, `tree_1.qbot`, ... (numbered tree files per iteration)
+- `model/current_best.pt` (TorchScript model for C++ inference)
+- `model/current_best.model` (PyTorch weights for continued training)
+- `model/candidate.pt` / `candidate.model` (temporary candidate during evaluation)
+
+**Options:**
+- `--iterations N` - Number of training iterations (default: 100)
+- `--games N` - Self-play games per iteration (default: 500)
+- `--simulations N` - MCTS sims per move in self-play (default: 800)
+- `--epochs N` - Training epochs per iteration (default: 50)
+- `--arena-games N` - Games for arena evaluation (default: 100)
+- `--arena-sims N` - MCTS sims per move in arena (default: 400)
+- `--win-threshold F` - Win rate for promotion (default: 0.55)
+- `--skip-arena` - Always promote candidate (useful for initial bootstrapping)
+- `--samples-dir DIR` - Directory for tree files (default: samples)
+- `--model-dir DIR` - Directory for models (default: model)
+
+The loop automatically resumes from the last iteration by scanning existing tree files.
 
 ### Tree Memory Limits
 
