@@ -358,6 +358,9 @@ struct SelfPlayConfig {
     float temperature = 1.0f;              // Softmax temperature for move selection
     int temperature_drop_ply = 30;         // After this ply, use temperature → 0
     bool stochastic = true;                // True = sample from policy, False = argmax
+    bool progressive_expansion = false;    // True = create children on demand, False = batch expand
+    float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
+    float fpu = 0.0f;                      // First play urgency (for progressive mode)
 };
 
 /// Compute policy distribution from child Q-values
@@ -629,6 +632,18 @@ private:
 
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
+
+    // === Progressive expansion methods ===
+
+    /// Compute valid action mask and policy priors without creating children
+    /// Thread-safe, only computed once per node
+    void compute_priors_progressive(NodePool& pool, uint32_t node_idx, InferenceServer& server);
+
+    /// Select best action using PUCT over all valid actions (including unmade children)
+    /// Creates the child if it doesn't exist yet
+    /// @return Child index if selection/creation succeeded, NULL_NODE otherwise
+    uint32_t select_and_expand_progressive(NodePool& pool, uint32_t node_idx,
+                                           float c_puct = 1.5f, float fpu = 0.0f);
 
     /// Worker thread main loop for multi-game self-play
     void worker_loop(

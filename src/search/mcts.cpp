@@ -700,6 +700,129 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
 }
 
 // ============================================================================
+// Progressive Expansion Methods
+// ============================================================================
+
+void SelfPlayEngine::compute_priors_progressive(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
+    StateNode& node = pool[node_idx];
+
+    // Compute valid action mask (with pathfinding) - thread-safe, only done once
+    node.compute_valid_action_mask();
+
+    // Check if priors already set
+    if (node.priors_set.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Submit GPU request OUTSIDE mutex - allows other threads to submit while we wait
+    // This enables batching in the inference server
+    auto future = server.submit_full(&node);
+    EvalResult eval = future.get();  // Block here, but other threads can submit requests
+
+    // Now acquire mutex just for the short critical section
+    size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
+    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+
+    // Double-check after acquiring lock - another thread might have finished first
+    if (node.priors_set.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Cache the NN value
+    node.stats.set_nn_value(eval.value);
+
+    // Compute softmax over valid actions only
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < StateNode::NUM_ACTIONS; ++i) {
+        if (node.is_action_valid(i)) {
+            max_logit = std::max(max_logit, eval.policy[i]);
+        }
+    }
+
+    float sum_exp = 0.0f;
+    for (int i = 0; i < StateNode::NUM_ACTIONS; ++i) {
+        if (node.is_action_valid(i)) {
+            node.policy_priors[i] = std::exp(eval.policy[i] - max_logit);
+            sum_exp += node.policy_priors[i];
+        } else {
+            node.policy_priors[i] = 0.0f;
+        }
+    }
+
+    // Normalize
+    if (sum_exp > 0.0f) {
+        for (int i = 0; i < StateNode::NUM_ACTIONS; ++i) {
+            node.policy_priors[i] /= sum_exp;
+        }
+    }
+
+    node.priors_set.store(true, std::memory_order_release);
+}
+
+uint32_t SelfPlayEngine::select_and_expand_progressive(NodePool& pool, uint32_t node_idx,
+                                                        float c_puct, float fpu) {
+    StateNode& node = pool[node_idx];
+
+    // Ensure valid moves and priors are computed
+    if (!node.priors_set.load(std::memory_order_acquire)) {
+        return NULL_NODE;
+    }
+
+    // Build action_idx -> child_idx map in O(num_children) instead of O(num_actions * num_children)
+    std::array<uint32_t, StateNode::NUM_ACTIONS> action_to_child;
+    action_to_child.fill(NULL_NODE);
+
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        int action_idx = move_to_action_index(pool[child].move);
+        if (action_idx >= 0 && action_idx < StateNode::NUM_ACTIONS) {
+            action_to_child[action_idx] = child;
+        }
+        child = pool[child].next_sibling;
+    }
+
+    uint32_t parent_visits = node.stats.visits.load(std::memory_order_relaxed);
+    float sqrt_parent = std::sqrt(static_cast<float>(parent_visits));
+
+    float best_score = -std::numeric_limits<float>::infinity();
+    int best_action = -1;
+    uint32_t best_child = NULL_NODE;
+
+    // Iterate over valid actions with O(1) child lookup
+    for (int action_idx = 0; action_idx < StateNode::NUM_ACTIONS; ++action_idx) {
+        if (!node.is_action_valid(action_idx)) continue;
+
+        float prior = node.policy_priors[action_idx];
+        uint32_t child_idx = action_to_child[action_idx];
+
+        float q, n_with_vl;
+        if (child_idx != NULL_NODE) {
+            q = pool[child_idx].stats.Q(fpu);
+            n_with_vl = static_cast<float>(pool[child_idx].stats.N_with_virtual());
+        } else {
+            q = fpu;
+            n_with_vl = 0.0f;
+        }
+
+        float u = c_puct * prior * sqrt_parent / (1.0f + n_with_vl);
+        float score = q + u;
+
+        if (score > best_score) {
+            best_score = score;
+            best_action = action_idx;
+            best_child = child_idx;
+        }
+    }
+
+    // If best action has no child yet, create it
+    if (best_child == NULL_NODE && best_action >= 0) {
+        best_child = node.add_child_for_action(best_action);
+    }
+
+    return best_child;
+}
+
+// ============================================================================
 // InferenceServer-based Self-Play (for multi-threaded games)
 // ============================================================================
 
@@ -740,12 +863,25 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
             break;
         }
 
-        if (!node.is_expanded()) {
-            ScopedTimer t(timers.expansion);
-            expand_with_nn_priors(pool, current, server);
+        if (config_.progressive_expansion) {
+            // Progressive mode: compute priors but don't create all children
+            if (!node.priors_set.load(std::memory_order_acquire)) {
+                ScopedTimer t(timers.expansion);
+                compute_priors_progressive(pool, current, server);
+            }
+        } else {
+            // Batch mode: expand all children at once
+            if (!node.is_expanded()) {
+                ScopedTimer t(timers.expansion);
+                expand_with_nn_priors(pool, current, server);
+            }
         }
 
-        if (!node.has_children()) {
+        // Check for valid moves (either via children or via mask)
+        bool has_valid_moves = config_.progressive_expansion
+            ? node.valid_moves_computed.load(std::memory_order_acquire)
+            : node.has_children();
+        if (!has_valid_moves) {
             result.winner = 0;
             break;
         }
@@ -866,14 +1002,39 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         path.reserve(64);
 
         uint32_t current = root_idx;
-        while (current != NULL_NODE) {
-            path.push_back(current);
-            StateNode& node = pool[current];
 
-            if (node.is_terminal()) break;
-            if (!node.has_children()) break;
+        if (config_.progressive_expansion) {
+            // Progressive mode: traverse using priors, creating children on demand
+            while (current != NULL_NODE) {
+                path.push_back(current);
+                StateNode& node = pool[current];
 
-            current = select_child_puct(pool, current, dummy_config);
+                if (node.is_terminal()) break;
+
+                // Ensure priors are computed for this node
+                if (!node.priors_set.load(std::memory_order_acquire)) {
+                    ScopedTimer t2(timers.expansion);
+                    compute_priors_progressive(pool, current, server);
+                }
+
+                // Select best action (may create a new child)
+                uint32_t next = select_and_expand_progressive(pool, current,
+                                                               config_.c_puct, config_.fpu);
+                if (next == NULL_NODE) break;
+
+                current = next;
+            }
+        } else {
+            // Original mode: batch expansion
+            while (current != NULL_NODE) {
+                path.push_back(current);
+                StateNode& node = pool[current];
+
+                if (node.is_terminal()) break;
+                if (!node.has_children()) break;
+
+                current = select_child_puct(pool, current, dummy_config);
+            }
         }
 
         if (path.empty()) continue;
@@ -886,13 +1047,15 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
             continue;
         }
 
-        if (!leaf.is_expanded()) {
+        if (!config_.progressive_expansion && !leaf.is_expanded()) {
             ScopedTimer t2(timers.expansion);
             expand_with_nn_priors(pool, leaf_idx, server);
         }
 
         uint32_t eval_node_idx = leaf_idx;
-        if (leaf.has_children()) {
+        // In batch mode, select a child from the newly expanded leaf to evaluate.
+        // In progressive mode, children were already selected during traversal.
+        if (!config_.progressive_expansion && leaf.has_children()) {
             uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
             if (child != NULL_NODE) {
                 path.push_back(child);
