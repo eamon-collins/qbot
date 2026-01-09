@@ -573,6 +573,37 @@ public:
         std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
         int checkpoint_interval_games = 10);
 
+    /// Play a single arena game between two models
+    /// Uses shared pool but does NOT cache NN values (different models produce different values)
+    /// @param pool Node pool (shared across games)
+    /// @param root_idx Root node index
+    /// @param server_p1 Inference server for player 1's model
+    /// @param server_p2 Inference server for player 2's model
+    /// @return Game result (winner from P1's perspective: +1 P1 wins, -1 P2 wins, 0 error)
+    SelfPlayResult arena_game(NodePool& pool, uint32_t root_idx,
+                              InferenceServer& server_p1, InferenceServer& server_p2);
+
+    /// Run multiple arena games in parallel
+    /// Uses shared pool but does NOT cache NN values (different models produce different values)
+    /// @param pool Node pool (shared across all games)
+    /// @param root_idx Root node index
+    /// @param server_p1 Inference server for player 1's model (candidate in even games)
+    /// @param server_p2 Inference server for player 2's model (current in even games)
+    /// @param num_games Total games to play
+    /// @param num_workers Number of worker threads
+    /// @param stats Output statistics
+    /// @param checkpoint_callback Called periodically with stats (optional)
+    void run_multi_arena(
+        NodePool& pool,
+        uint32_t root_idx,
+        InferenceServer& server_p1,
+        InferenceServer& server_p2,
+        int num_games,
+        int num_workers,
+        MultiGameStats& stats,
+        std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
+        int checkpoint_interval_games = 10);
+
     /// Get configuration
     [[nodiscard]] const SelfPlayConfig& config() const noexcept { return config_; }
     [[nodiscard]] SelfPlayConfig& config() noexcept { return config_; }
@@ -593,6 +624,9 @@ private:
     /// Expand a node and set priors using inference server
     void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
 
+    /// Refresh priors on an already-expanded node's children using the given server
+    void refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
+
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
 
@@ -604,6 +638,24 @@ private:
         uint32_t root_idx,
         InferenceServer& server,
         std::atomic<int>& games_remaining,
+        MultiGameStats& stats);
+
+    /// Run MCTS iterations for arena with two servers (routes to correct model per player)
+    void run_arena_mcts_iterations(
+        NodePool& pool, uint32_t root_idx,
+        InferenceServer& server_p1, InferenceServer& server_p2,
+        int iterations);
+
+    /// Worker thread main loop for multi-game arena
+    void arena_worker_loop(
+        std::stop_token stop_token,
+        int worker_id,
+        NodePool& pool,
+        uint32_t root_idx,
+        InferenceServer& server_p1,
+        InferenceServer& server_p2,
+        std::atomic<int>& games_remaining,
+        std::atomic<int>& game_counter,
         MultiGameStats& stats);
 
     SelfPlayConfig config_;

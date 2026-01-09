@@ -643,6 +643,7 @@ int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simu
     return 0;  // Draw (too many moves)
 }
 
+
 /// Run arena evaluation: candidate model vs current model
 int run_arena(const Config& config) {
     std::cout << "\n=== Arena Mode ===\n";
@@ -657,66 +658,85 @@ int run_arena(const Config& config) {
         return 1;
     }
 
-    // Load both models
     std::cout << "Loading current model: " << config.model_file << "\n";
-    ModelInference current_model(config.model_file);
-    if (!current_model.is_ready()) {
-        std::cerr << "Error: Failed to load current model\n";
-        return 1;
-    }
-
     std::cout << "Loading candidate model: " << config.candidate_model << "\n";
-    ModelInference candidate_model(config.candidate_model);
-    if (!candidate_model.is_ready()) {
-        std::cerr << "Error: Failed to load candidate model\n";
-        return 1;
-    }
 
     std::cout << "\nStarting arena evaluation...\n";
     std::cout << "  Games: " << config.arena_games << "\n";
+    std::cout << "  Threads: " << config.num_threads << "\n";
     std::cout << "  Sims/move: " << config.simulations_per_move << "\n";
+    std::cout << "  Temperature: " << config.temperature << " (drops at ply " << config.temperature_drop_ply << ")\n";
     std::cout << "  Win threshold: " << (config.win_threshold * 100) << "%\n\n";
 
-    int candidate_wins = 0;
-    int current_wins = 0;
-    int draws = 0;
+    // Create shared tree for all arena games
+    NodePool pool;
+    uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
+    pool[root].init_root(true);  // P1 starts
+
+    // Configure self-play engine for arena play (uses temperature from command line)
+    SelfPlayConfig sp_config;
+    sp_config.simulations_per_move = config.simulations_per_move;
+    sp_config.temperature = config.temperature;
+    sp_config.temperature_drop_ply = config.temperature_drop_ply;
+    sp_config.stochastic = true;  // Use stochastic selection when temperature > 0
+
+    SelfPlayEngine engine(sp_config);
+
+    // Create inference servers for both models
+    InferenceServerConfig server_config;
+    server_config.batch_size = config.batch_size;
+    server_config.max_wait_ms = 0.1;
+
+    // Candidate server (will be P1 in even games, tracked as p1_wins)
+    InferenceServer candidate_server(config.candidate_model, server_config);
+    candidate_server.start();
+
+    // Current model server (will be P2 in even games, tracked as p2_wins)
+    InferenceServer current_server(config.model_file, server_config);
+    current_server.start();
 
     auto start_time = std::chrono::steady_clock::now();
 
-    // Play games, alternating which model is P1/P2
-    for (int game = 0; game < config.arena_games; ++game) {
-        bool candidate_is_p1 = (game % 2 == 0);
-        int result;
+    // Progress callback
+    auto checkpoint_callback = [&config, &start_time](const MultiGameStats& stats, const NodePool& p) {
+        int completed = stats.games_completed.load(std::memory_order_relaxed);
+        int cw = stats.p1_wins.load(std::memory_order_relaxed);   // candidate wins
+        int curr = stats.p2_wins.load(std::memory_order_relaxed); // current wins
+        int d = stats.draws.load(std::memory_order_relaxed);
 
-        if (candidate_is_p1) {
-            result = play_arena_game(candidate_model, current_model, config.simulations_per_move);
-            // result > 0 means P1 (candidate) won
-            if (result > 0) ++candidate_wins;
-            else if (result < 0) ++current_wins;
-            else ++draws;
-        } else {
-            result = play_arena_game(current_model, candidate_model, config.simulations_per_move);
-            // result > 0 means P1 (current) won
-            if (result > 0) ++current_wins;
-            else if (result < 0) ++candidate_wins;
-            else ++draws;
-        }
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        double games_per_sec = elapsed > 0 ? static_cast<double>(completed) / elapsed : 0;
 
-        // Progress update
-        if ((game + 1) % 10 == 0 || game == config.arena_games - 1) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-            double games_per_sec = elapsed > 0 ? static_cast<double>(game + 1) / elapsed : 0;
+        int decisive = cw + curr;
+        float rate = decisive > 0 ? static_cast<float>(cw) / decisive : 0.0f;
 
-            float candidate_rate = static_cast<float>(candidate_wins) / (game + 1 - draws);
-            std::cout << "[" << (game + 1) << "/" << config.arena_games << "] "
-                      << "Candidate: " << candidate_wins << ", Current: " << current_wins
-                      << ", Draws: " << draws
-                      << " | Win rate: " << std::fixed << std::setprecision(1)
-                      << (candidate_rate * 100) << "%"
-                      << " | " << std::setprecision(2) << games_per_sec << " g/s\n";
-        }
-    }
+        std::cout << "[" << completed << "/" << config.arena_games << "] "
+                  << "Candidate: " << cw << ", Current: " << curr
+                  << ", Draws: " << d
+                  << " | Win rate: " << std::fixed << std::setprecision(1)
+                  << (rate * 100) << "%"
+                  << " | " << std::setprecision(2) << games_per_sec << " g/s"
+                  << " | Nodes: " << p.allocated() << "\n";
+    };
+
+    MultiGameStats stats;
+    engine.run_multi_arena(
+        pool, root,
+        candidate_server, current_server,
+        config.arena_games, config.num_threads,
+        stats, checkpoint_callback, 10);
+
+    candidate_server.stop();
+    current_server.stop();
+
+    // Extract results: p1_wins = candidate wins, p2_wins = current wins
+    int candidate_wins = stats.p1_wins.load(std::memory_order_relaxed);
+    int current_wins = stats.p2_wins.load(std::memory_order_relaxed);
+    int draws = stats.draws.load(std::memory_order_relaxed);
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
 
     // Calculate final win rate (excluding draws)
     int decisive_games = candidate_wins + current_wins;
@@ -730,6 +750,7 @@ int run_arena(const Config& config) {
     std::cout << "  Draws:          " << draws << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
               << (candidate_win_rate * 100) << "%\n";
+    std::cout << "  Time:           " << elapsed << "s\n";
 
     // Check if candidate should replace current
     if (candidate_win_rate >= config.win_threshold) {

@@ -980,6 +980,47 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     }
 }
 
+void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
+    StateNode& node = pool[node_idx];
+
+    if (!node.has_children()) return;
+
+    // Evaluate the node to get fresh policy logits
+    auto future = server.submit_full(&node);
+    EvalResult eval = future.get();
+
+    // Collect policy logits for valid moves and apply softmax
+    std::vector<std::pair<uint32_t, int>> child_actions;
+    float max_logit = -std::numeric_limits<float>::infinity();
+
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        int action_idx = move_to_action_index(pool[child].move);
+        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+            child_actions.emplace_back(child, action_idx);
+            max_logit = std::max(max_logit, eval.policy[action_idx]);
+        }
+        child = pool[child].next_sibling;
+    }
+
+    if (child_actions.empty()) return;
+
+    // Compute softmax over valid moves only
+    float sum_exp = 0.0f;
+    std::vector<float> exp_logits(child_actions.size());
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        int action_idx = child_actions[i].second;
+        exp_logits[i] = std::exp(eval.policy[action_idx] - max_logit);
+        sum_exp += exp_logits[i];
+    }
+
+    // Update priors on children
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        uint32_t child_idx = child_actions[i].first;
+        pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
+    }
+}
+
 void SelfPlayEngine::run_multi_game(
     NodePool& pool,
     uint32_t root_idx,
@@ -1059,6 +1100,322 @@ void SelfPlayEngine::worker_loop(
         SelfPlayResult result = self_play(pool, root_idx, server);
         stats.add_result(result);
     }
+}
+
+// ============================================================================
+// Arena Implementation (two models playing against each other)
+// ============================================================================
+
+/// Helper to get the correct server based on whose turn it is
+inline InferenceServer& get_server_for_player(
+    const StateNode& node,
+    InferenceServer& server_p1,
+    InferenceServer& server_p2) {
+    return node.is_p1_to_move() ? server_p1 : server_p2;
+}
+
+/// Run MCTS iterations for arena mode with two servers
+void SelfPlayEngine::run_arena_mcts_iterations(
+    NodePool& pool, uint32_t root_idx,
+    InferenceServer& server_p1, InferenceServer& server_p2,
+    int iterations)
+{
+    auto& timers = get_timers();
+    constexpr int EVAL_BATCH_SIZE = 32;  // Smaller batches since we split between two servers
+
+    struct PendingEval {
+        std::vector<uint32_t> path;
+        uint32_t eval_node_idx;
+        std::future<float> future;
+    };
+    std::vector<PendingEval> pending;
+    pending.reserve(EVAL_BATCH_SIZE);
+
+    auto flush_pending = [&]() {
+        if (pending.empty()) return;
+
+        for (auto& p : pending) {
+            float leaf_value = p.future.get();
+            // leaf_value is from current player's perspective at eval_node
+            // Convert to P1's absolute perspective for backprop
+            StateNode& eval_node = pool[p.eval_node_idx];
+            float p1_value = eval_node.is_p1_to_move() ? leaf_value : -leaf_value;
+            // NOTE: Don't cache NN values in arena - different models produce different values
+            backpropagate(pool, p.path, p1_value);
+        }
+        pending.clear();
+    };
+
+    MCTSConfig dummy_config;
+    dummy_config.c_puct = 1.5f;
+    dummy_config.fpu = 0.0f;
+
+    for (int i = 0; i < iterations; ++i) {
+        ScopedTimer t(timers.single_mcts);
+
+        std::vector<uint32_t> path;
+        path.reserve(64);
+
+        uint32_t current = root_idx;
+        while (current != NULL_NODE) {
+            path.push_back(current);
+            StateNode& node = pool[current];
+
+            if (node.is_terminal()) break;
+            if (!node.has_children()) break;
+
+            current = select_child_puct(pool, current, dummy_config);
+        }
+
+        if (path.empty()) continue;
+
+        uint32_t leaf_idx = path.back();
+        StateNode& leaf = pool[leaf_idx];
+
+        if (leaf.is_terminal()) {
+            // terminal_value is from P1's perspective
+            backpropagate(pool, path, leaf.terminal_value);
+            continue;
+        }
+
+        if (!leaf.is_expanded()) {
+            ScopedTimer t2(timers.expansion);
+            // Expand using the server for the player at this position
+            InferenceServer& server = get_server_for_player(leaf, server_p1, server_p2);
+            expand_with_nn_priors(pool, leaf_idx, server);
+        }
+
+        uint32_t eval_node_idx = leaf_idx;
+        if (leaf.has_children()) {
+            uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
+            if (child != NULL_NODE) {
+                path.push_back(child);
+                eval_node_idx = child;
+            }
+        }
+
+        // In arena, always evaluate fresh - don't use cached values since
+        // different models produce different values for the same position
+        StateNode& eval_node = pool[eval_node_idx];
+        InferenceServer& server = get_server_for_player(eval_node, server_p1, server_p2);
+        auto future = server.submit(&eval_node);
+        pending.push_back({std::move(path), eval_node_idx, std::move(future)});
+
+        if (pending.size() >= EVAL_BATCH_SIZE) {
+            flush_pending();
+        }
+    }
+
+    flush_pending();
+}
+
+SelfPlayResult SelfPlayEngine::arena_game(
+    NodePool& pool, uint32_t root_idx,
+    InferenceServer& server_p1, InferenceServer& server_p2)
+{
+    auto& timers = get_timers();
+    SelfPlayResult result;
+    result.winner = 0;
+    result.num_moves = 0;
+
+    std::vector<uint32_t> game_path;
+    game_path.reserve(200);
+    game_path.push_back(root_idx);
+    pool[root_idx].set_on_game_path();
+
+    uint32_t current = root_idx;
+
+    while (current != NULL_NODE) {
+        StateNode& node = pool[current];
+
+        // Check terminal
+        if (node.is_terminal()) {
+            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            break;
+        }
+        if (node.p1.row == 8) {
+            result.winner = 1;
+            break;
+        }
+        if (node.p2.row == 0) {
+            result.winner = -1;
+            break;
+        }
+
+        // Refresh priors on existing children using the model for the player whose turn it is
+        // This is critical for arena: priors may have been set by a different model in a previous game
+        InferenceServer& current_server = node.is_p1_to_move() ? server_p1 : server_p2;
+        if (node.has_children()) {
+            refresh_priors(pool, current, current_server);
+        }
+
+        // Run MCTS with both servers
+        {
+            ScopedTimer t(timers.mcts_iterations);
+            run_arena_mcts_iterations(pool, current, server_p1, server_p2, config_.simulations_per_move);
+        }
+
+        // Use temperature for exploration early, then drop to deterministic
+        float temp = (result.num_moves < config_.temperature_drop_ply)
+                     ? config_.temperature : 0.0f;
+        bool stochastic = (temp > 0.0f);
+
+        std::vector<std::pair<Move, float>> policy;
+        {
+            ScopedTimer t(timers.policy_compute);
+            policy = compute_policy_from_q(pool, current, temp);
+        }
+
+        if (policy.empty()) {
+            result.winner = 0;
+            break;
+        }
+
+        Move selected_move;
+        {
+            ScopedTimer t(timers.move_selection);
+            selected_move = select_move_from_policy(policy, stochastic);
+        }
+
+        uint32_t next = NULL_NODE;
+        {
+            ScopedTimer t(timers.child_lookup);
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                if (pool[child].move == selected_move) {
+                    next = child;
+                    break;
+                }
+                child = pool[child].next_sibling;
+            }
+        }
+
+        if (next == NULL_NODE) {
+            result.winner = 0;
+            break;
+        }
+
+        current = next;
+        game_path.push_back(current);
+        pool[current].set_on_game_path();
+        result.num_moves++;
+
+        if (result.num_moves > 500) {
+            result.winner = 0;
+            break;
+        }
+    }
+
+    // Backpropagate final result
+    if (result.winner != 0) {
+        ScopedTimer t(timers.backprop);
+        float value = static_cast<float>(result.winner);
+        for (size_t i = game_path.size(); i > 0; --i) {
+            uint32_t idx = game_path[i - 1];
+            StateNode& node = pool[idx];
+            float node_value = node.is_p1_to_move() ? value : -value;
+            node.stats.update(node_value);
+        }
+    }
+
+    return result;
+}
+
+void SelfPlayEngine::arena_worker_loop(
+    std::stop_token stop_token,
+    int worker_id,
+    NodePool& pool,
+    uint32_t root_idx,
+    InferenceServer& server_p1,
+    InferenceServer& server_p2,
+    std::atomic<int>& games_remaining,
+    std::atomic<int>& game_counter,
+    MultiGameStats& stats)
+{
+    (void)worker_id;
+
+    while (!stop_token.stop_requested()) {
+        int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+        if (remaining <= 0) {
+            games_remaining.fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+
+        // Alternate which model is P1 based on game number
+        int game_num = game_counter.fetch_add(1, std::memory_order_relaxed);
+        bool swap_players = (game_num % 2 == 1);
+
+        SelfPlayResult result;
+        if (swap_players) {
+            // Swap: server_p2 plays as P1, server_p1 plays as P2
+            result = arena_game(pool, root_idx, server_p2, server_p1);
+            // Invert winner since we swapped the models
+            result.winner = -result.winner;
+        } else {
+            result = arena_game(pool, root_idx, server_p1, server_p2);
+        }
+
+        stats.add_result(result);
+    }
+}
+
+void SelfPlayEngine::run_multi_arena(
+    NodePool& pool,
+    uint32_t root_idx,
+    InferenceServer& server_p1,
+    InferenceServer& server_p2,
+    int num_games,
+    int num_workers,
+    MultiGameStats& stats,
+    std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback,
+    int checkpoint_interval_games)
+{
+    stats.reset();
+    std::atomic<int> games_remaining{num_games};
+    std::atomic<int> game_counter{0};
+
+    std::cout << "[SelfPlayEngine] Starting arena: " << num_games << " games with "
+              << num_workers << " workers\n";
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // Launch worker threads
+    std::vector<std::jthread> workers;
+    workers.reserve(num_workers);
+
+    for (int i = 0; i < num_workers; ++i) {
+        workers.emplace_back([this, &pool, root_idx, &server_p1, &server_p2,
+                              &games_remaining, &game_counter, &stats, i](std::stop_token st) {
+            arena_worker_loop(st, i, pool, root_idx, server_p1, server_p2,
+                              games_remaining, game_counter, stats);
+        });
+    }
+
+    // Monitor progress
+    int last_checkpoint = 0;
+    while (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        int completed = stats.games_completed.load(std::memory_order_relaxed);
+        if (checkpoint_callback &&
+            completed - last_checkpoint >= checkpoint_interval_games) {
+            checkpoint_callback(stats, pool);
+            last_checkpoint = completed;
+        }
+    }
+
+    // Wait for all workers to finish
+    workers.clear();
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    int completed = stats.games_completed.load(std::memory_order_relaxed);
+    auto games_per_sec = elapsed > 0 ? static_cast<double>(completed) / elapsed : 0;
+
+    std::cout << "[SelfPlayEngine] Arena completed " << completed << " games in "
+              << elapsed << "s (" << std::fixed << std::setprecision(1)
+              << games_per_sec << " games/s)\n";
 }
 
 #endif // QBOT_ENABLE_INFERENCE

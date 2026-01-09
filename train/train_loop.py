@@ -174,8 +174,9 @@ def save_checkpoint(model: QuoridorValueNet, checkpoint_path: str) -> bool:
         return False
 
 
-def run_arena(current_model: str, candidate_model: str, num_games: int,
-              simulations: int, win_threshold: float = 0.55) -> tuple[bool, bool]:
+def run_arena(current_model: str, candidate_model: str, num_threads: int, num_games: int,
+              simulations: int, win_threshold: float = 0.55,
+              temperature: float = 1.0, temp_drop_ply: int = 30) -> tuple[bool, bool]:
     """
     Run arena evaluation between candidate and current model.
     Returns (success, candidate_won).
@@ -191,9 +192,12 @@ def run_arena(current_model: str, candidate_model: str, num_games: int,
         "--arena",
         "-m", current_model,
         "--candidate", candidate_model,
+        "-t", str(num_threads),
         "--arena-games", str(num_games),
         "-n", str(simulations),
         "--win-threshold", str(win_threshold),
+        "--temperature", str(temperature),
+        "--temp-drop", str(temp_drop_ply),
     ]
 
     logging.info(f"Running arena: {' '.join(cmd)}")
@@ -261,6 +265,12 @@ def main():
                         help='Number of arena games for evaluation')
     parser.add_argument('--arena-sims', type=int, default=400, dest='arena_sims',
                         help='MCTS simulations per move in arena')
+    parser.add_argument('--arena-temperature', type=float, default=0.2,
+                        dest='arena_temperature',
+                        help='Temperature for arena move selection')
+    parser.add_argument('--arena-temp-drop', type=int, default=30,
+                        dest='arena_temp_drop',
+                        help='Ply at which arena drops temperature to 0')
     parser.add_argument('--win-threshold', type=float, default=0.55,
                         dest='win_threshold',
                         help='Win rate threshold for model promotion')
@@ -308,6 +318,7 @@ def main():
     logging.info(f"Epochs:          {args.epochs} per iteration")
     logging.info(f"Threads:         {args.threads}")
     logging.info(f"Arena games:     {args.arena_games}")
+    logging.info(f"Arena temp:      {args.arena_temperature} (drops at ply {args.arena_temp_drop})")
     logging.info(f"Win threshold:   {args.win_threshold * 100}%")
     logging.info("=" * 60)
 
@@ -399,8 +410,9 @@ def main():
         else:
             logging.info(f"[Phase 3] Arena evaluation ({args.arena_games} games)...")
             arena_success, candidate_won = run_arena(
-                str(current_best_pt), str(candidate_pt),
-                args.arena_games, args.arena_sims, args.win_threshold
+                str(current_best_pt), str(candidate_pt), args.threads,
+                args.arena_games, args.arena_sims, args.win_threshold,
+                args.arena_temperature, args.arena_temp_drop
             )
 
             if not arena_success:
