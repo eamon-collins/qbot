@@ -73,6 +73,7 @@ struct Config {
     int batch_size = 256;                        // Inference batch size for GPU
     float temperature = 1.0f;                    // Softmax temperature
     int temperature_drop_ply = 30;               // Ply to drop temperature to 0
+    bool progressive = false;                    // Progressive expansion mode
 
     // Arena specific options
     std::string candidate_model;                 // Candidate model to evaluate
@@ -127,7 +128,9 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         ("temperature", po::value<float>(&config.temperature)->default_value(1.0f),
             "Softmax temperature for move selection")
         ("temp-drop", po::value<int>(&config.temperature_drop_ply)->default_value(30),
-            "Ply to drop temperature to 0");
+            "Ply to drop temperature to 0")
+        ("progressive", po::bool_switch(&config.progressive),
+            "Use progressive expansion (on-demand child creation)");
 
     po::variables_map vm;
     try {
@@ -192,6 +195,7 @@ void Config::print(std::ostream& os) const {
         os << "  Sims/move:      " << simulations_per_move << "\n";
         os << "  Temperature:    " << temperature << "\n";
         os << "  Temp drop ply:  " << temperature_drop_ply << "\n";
+        os << "  Progressive:    " << (progressive ? "yes" : "no") << "\n";
     }
     if (mode == RunMode::Arena) {
         os << "  Current model:  " << model_file << "\n";
@@ -805,6 +809,7 @@ int run_selfplay(const Config& config,
     sp_config.temperature = config.temperature;
     sp_config.temperature_drop_ply = config.temperature_drop_ply;
     sp_config.stochastic = true;
+    sp_config.progressive_expansion = config.progressive;
 
     SelfPlayEngine engine(sp_config);
 
@@ -825,6 +830,7 @@ int run_selfplay(const Config& config,
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
+    std::cout << "  Progressive: " << (config.progressive ? "yes" : "no") << "\n";
     std::cout << "  Tree file:   " << config.save_file << "\n";
     std::cout << "  Samples:     " << samples_file << "\n\n";
 
