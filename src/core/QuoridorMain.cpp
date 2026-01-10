@@ -74,6 +74,7 @@ struct Config {
     float temperature = 1.0f;                    // Softmax temperature
     int temperature_drop_ply = 30;               // Ply to drop temperature to 0
     bool progressive = false;                    // Progressive expansion mode
+    size_t max_memory_gb = 40;                   // Max memory for node pool in GB
 
     // Arena specific options
     std::string candidate_model;                 // Candidate model to evaluate
@@ -130,7 +131,9 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         ("temp-drop", po::value<int>(&config.temperature_drop_ply)->default_value(30),
             "Ply to drop temperature to 0")
         ("progressive", po::bool_switch(&config.progressive),
-            "Use progressive expansion (on-demand child creation)");
+            "Use progressive expansion (on-demand child creation)")
+        ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(40),
+            "Max memory for node pool in GB (resets pool at 80%)");
 
     po::variables_map vm;
     try {
@@ -831,6 +834,7 @@ int run_selfplay(const Config& config,
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
     std::cout << "  Progressive: " << (config.progressive ? "yes" : "no") << "\n";
+    std::cout << "  Max memory:  " << config.max_memory_gb << " GB (resets at 80%)\n";
     std::cout << "  Tree file:   " << config.save_file << "\n";
     std::cout << "  Samples:     " << samples_file << "\n\n";
 
@@ -843,7 +847,12 @@ int run_selfplay(const Config& config,
         InferenceServer server(config.model_file, server_config);
         server.start();
 
-        auto checkpoint_callback = [&config, &pool, root](const MultiGameStats& stats, const NodePool& p) {
+        // Configure memory bounds for pool reset
+        TreeBoundsConfig bounds;
+        bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
+        bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
+
+        auto checkpoint_callback = [&config](const MultiGameStats& stats, const NodePool& p) {
             int completed = stats.games_completed.load(std::memory_order_relaxed);
             int p1 = stats.p1_wins.load(std::memory_order_relaxed);
             int p2 = stats.p2_wins.load(std::memory_order_relaxed);
@@ -854,18 +863,15 @@ int run_selfplay(const Config& config,
                       << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
                       << " | Nodes: " << p.allocated()
                       << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << "\n";
-
-            // Checkpoint save
-            if (!config.save_file.empty() && completed % config.games_per_checkpoint == 0) {
-                save_tree(const_cast<NodePool&>(p), root, config.save_file);
-            }
         };
 
         MultiGameStats stats;
         engine.run_multi_game(
             *pool, root, server,
             config.num_games, config.num_threads,
-            stats, checkpoint_callback, 10);
+            stats, bounds, &collector,
+            samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
+            checkpoint_callback, 10);
 
         // Capture server stats before stopping
         size_t total_requests = server.total_requests();
@@ -875,12 +881,12 @@ int run_selfplay(const Config& config,
 
         server.stop();
 
-        // Final save (pruned to only game-path nodes)
+        // Final save (pruned to only game-path nodes from current tree)
         if (!config.save_file.empty()) {
             save_tree_pruned(*pool, root, config.save_file);
         }
 
-        // Extract training samples from the completed game tree
+        // Extract final training samples from the last tree (if any remain)
         auto tree_samples = extract_samples_from_tree(*pool, root);
         for (auto& sample : tree_samples) {
             collector.add_sample_direct(std::move(sample));

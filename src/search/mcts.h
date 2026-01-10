@@ -328,10 +328,14 @@ inline void remove_virtual_loss(
         return node.terminal_value;
     }
 
-    // Early termination when fences exhausted - use path distance heuristic
-    if (node.p1.fences == 0 && node.p2.fences == 0) {
-        return early_terminate_no_fences(node);
-    }
+    // DISABLED for training: Early termination when fences exhausted distorts
+    // incentives by encouraging players to spend all fences quickly.
+    // We want the model to learn full endgame dynamics.
+    // Kept for reference - may re-enable for arena/inference mode.
+    //
+    // if (node.p1.fences == 0 && node.p2.fences == 0) {
+    //     return early_terminate_no_fences(node);
+    // }
 
 #ifdef QBOT_ENABLE_INFERENCE
     // Use neural network evaluation if available
@@ -559,20 +563,29 @@ public:
                              TrainingSampleCollector* collector = nullptr);
 
     /// Run multiple self-play games in parallel
+    /// Supports memory-bounded operation: when pool reaches 80% of memory limit,
+    /// workers pause, samples are extracted, pool is reset, and games continue.
     /// @param pool Node pool (shared across all games)
-    /// @param root_idx Root node index
+    /// @param root_idx Root node index (will be updated on pool reset)
     /// @param server Inference server for batched GPU evaluation
     /// @param num_games Total games to play
     /// @param num_workers Number of worker threads
     /// @param stats Output statistics (must be pre-allocated)
+    /// @param bounds Memory bounds configuration (triggers reset at soft_limit_ratio)
+    /// @param collector Training sample collector to accumulate samples across pool resets
+    /// @param samples_file Path for intermediate qsamples saves (empty to disable)
     /// @param checkpoint_callback Called periodically with stats (optional)
+    /// @param checkpoint_interval_games Games between checkpoint callbacks
     void run_multi_game(
         NodePool& pool,
-        uint32_t root_idx,
+        uint32_t& root_idx,
         InferenceServer& server,
         int num_games,
         int num_workers,
         MultiGameStats& stats,
+        const TreeBoundsConfig& bounds,
+        TrainingSampleCollector* collector,
+        const std::filesystem::path& samples_file,
         std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
         int checkpoint_interval_games = 10);
 
@@ -634,7 +647,8 @@ private:
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
 
     // === Progressive expansion methods ===
-
+    // Disabled by default - define QBOT_ENABLE_PROGRESSIVE to re-enable.
+#ifdef QBOT_ENABLE_PROGRESSIVE
     /// Compute valid action mask and policy priors without creating children
     /// Thread-safe, only computed once per node
     void compute_priors_progressive(NodePool& pool, uint32_t node_idx, InferenceServer& server);
@@ -644,6 +658,7 @@ private:
     /// @return Child index if selection/creation succeeded, NULL_NODE otherwise
     uint32_t select_and_expand_progressive(NodePool& pool, uint32_t node_idx,
                                            float c_puct = 1.5f, float fpu = 0.0f);
+#endif
 
     /// Worker thread main loop for multi-game self-play
     void worker_loop(

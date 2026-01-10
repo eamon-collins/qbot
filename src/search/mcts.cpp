@@ -409,10 +409,24 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        // Safety limit
-        if (result.num_moves > 500) {
-            result.winner = 0;  // Draw - too long
-            break;
+        // Games with 100+ total moves get a half-value based on who's closer to goal.
+        // This provides a learning signal while discouraging overly long games.
+        if (result.num_moves >= 100) {
+            result.winner = 0;  // Counts as draw for stats
+            // Backprop half-value based on path distance
+            float half_value = 0.5f * early_terminate_no_fences(pool[current]);
+            for (size_t i = game_path.size(); i > 0; --i) {
+                uint32_t idx = game_path[i - 1];
+                StateNode& node = pool[idx];
+                float node_value = node.is_p1_to_move() ? half_value : -half_value;
+                node.stats.update(node_value);
+            }
+            if (collector) {
+                for (uint32_t pos : sample_positions) {
+                    collector->add_sample(pool, pos, half_value);
+                }
+            }
+            return result;
         }
     }
 
@@ -701,7 +715,10 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
 
 // ============================================================================
 // Progressive Expansion Methods
+// Disabled by default - define QBOT_ENABLE_PROGRESSIVE to re-enable.
 // ============================================================================
+
+#ifdef QBOT_ENABLE_PROGRESSIVE
 
 void SelfPlayEngine::compute_priors_progressive(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
     StateNode& node = pool[node_idx];
@@ -822,6 +839,8 @@ uint32_t SelfPlayEngine::select_and_expand_progressive(NodePool& pool, uint32_t 
     return best_child;
 }
 
+#endif // QBOT_ENABLE_PROGRESSIVE
+
 // ============================================================================
 // InferenceServer-based Self-Play (for multi-threaded games)
 // ============================================================================
@@ -863,13 +882,16 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
             break;
         }
 
+#ifdef QBOT_ENABLE_PROGRESSIVE
         if (config_.progressive_expansion) {
             // Progressive mode: compute priors but don't create all children
             if (!node.priors_set.load(std::memory_order_acquire)) {
                 ScopedTimer t(timers.expansion);
                 compute_priors_progressive(pool, current, server);
             }
-        } else {
+        } else
+#endif
+        {
             // Batch mode: expand all children at once
             if (!node.is_expanded()) {
                 ScopedTimer t(timers.expansion);
@@ -878,9 +900,13 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
         }
 
         // Check for valid moves (either via children or via mask)
+#ifdef QBOT_ENABLE_PROGRESSIVE
         bool has_valid_moves = config_.progressive_expansion
             ? node.valid_moves_computed.load(std::memory_order_acquire)
             : node.has_children();
+#else
+        bool has_valid_moves = node.has_children();
+#endif
         if (!has_valid_moves) {
             result.winner = 0;
             break;
@@ -938,9 +964,22 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Infe
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        if (result.num_moves > 500) {
-            result.winner = 0;
-            break;
+        // Games with 100+ total moves get a half-value based on who's closer to goal.
+        if (result.num_moves >= 100) {
+            result.winner = 0;  // Counts as draw for stats
+            float half_value = 0.5f * early_terminate_no_fences(pool[current]);
+            for (size_t i = game_path.size(); i > 0; --i) {
+                uint32_t idx = game_path[i - 1];
+                StateNode& node = pool[idx];
+                float node_value = node.is_p1_to_move() ? half_value : -half_value;
+                node.stats.update(node_value);
+            }
+            if (collector) {
+                for (uint32_t pos : sample_positions) {
+                    collector->add_sample(pool, pos, half_value);
+                }
+            }
+            return result;
         }
     }
 
@@ -1003,6 +1042,7 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
 
         uint32_t current = root_idx;
 
+#ifdef QBOT_ENABLE_PROGRESSIVE
         if (config_.progressive_expansion) {
             // Progressive mode: traverse using priors, creating children on demand
             while (current != NULL_NODE) {
@@ -1024,7 +1064,9 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
 
                 current = next;
             }
-        } else {
+        } else
+#endif
+        {
             // Original mode: batch expansion
             while (current != NULL_NODE) {
                 path.push_back(current);
@@ -1047,7 +1089,10 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
             continue;
         }
 
-        if (!config_.progressive_expansion && !leaf.is_expanded()) {
+#ifdef QBOT_ENABLE_PROGRESSIVE
+        if (!config_.progressive_expansion)
+#endif
+        if (!leaf.is_expanded()) {
             ScopedTimer t2(timers.expansion);
             expand_with_nn_priors(pool, leaf_idx, server);
         }
@@ -1055,7 +1100,10 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         uint32_t eval_node_idx = leaf_idx;
         // In batch mode, select a child from the newly expanded leaf to evaluate.
         // In progressive mode, children were already selected during traversal.
-        if (!config_.progressive_expansion && leaf.has_children()) {
+#ifdef QBOT_ENABLE_PROGRESSIVE
+        if (!config_.progressive_expansion)
+#endif
+        if (leaf.has_children()) {
             uint32_t child = select_child_puct(pool, leaf_idx, dummy_config);
             if (child != NULL_NODE) {
                 path.push_back(child);
@@ -1186,19 +1234,37 @@ void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, Inference
 
 void SelfPlayEngine::run_multi_game(
     NodePool& pool,
-    uint32_t root_idx,
+    uint32_t& root_idx,
     InferenceServer& server,
     int num_games,
     int num_workers,
     MultiGameStats& stats,
+    const TreeBoundsConfig& bounds,
+    TrainingSampleCollector* collector,
+    const std::filesystem::path& samples_file,
     std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback,
     int checkpoint_interval_games)
 {
     stats.reset();
     std::atomic<int> games_remaining{num_games};
 
+    // Synchronization for memory-bounded pool reset
+    std::atomic<bool> pause_requested{false};
+    std::atomic<int> workers_paused{0};
+    std::mutex pause_mutex;
+    std::condition_variable pause_cv;
+    std::condition_variable resume_cv;
+    std::atomic<bool> paused{false};
+
+    // Shared root index that workers can read (updated on pool reset)
+    std::atomic<uint32_t> current_root{root_idx};
+
+    int pool_reset_count = 0;
+
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
+    std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
+              << "soft limit: " << (bounds.soft_limit_ratio * 100) << "%\n";
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -1207,16 +1273,110 @@ void SelfPlayEngine::run_multi_game(
     workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        workers.emplace_back([this, &pool, root_idx, &server, &games_remaining, &stats, i](std::stop_token st) {
-            worker_loop(st, i, pool, root_idx, server, games_remaining, stats);
+        workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
+                              &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
+                              &resume_cv, &paused, i](std::stop_token st) {
+            while (!st.stop_requested()) {
+                // Check if pause is requested - if so, wait
+                if (pause_requested.load(std::memory_order_acquire)) {
+                    workers_paused.fetch_add(1, std::memory_order_relaxed);
+                    {
+                        std::unique_lock lock(pause_mutex);
+                        pause_cv.notify_all();  // Signal main thread we're paused
+                        resume_cv.wait(lock, [&]() {
+                            return !paused.load(std::memory_order_acquire) || st.stop_requested();
+                        });
+                    }
+                    workers_paused.fetch_sub(1, std::memory_order_relaxed);
+                    if (st.stop_requested()) break;
+                }
+
+                // Claim a game to play
+                int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+                if (remaining <= 0) {
+                    games_remaining.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                }
+
+                // Play one game using current root
+                uint32_t root = current_root.load(std::memory_order_acquire);
+                SelfPlayResult result = self_play(pool, root, server);
+                stats.add_result(result);
+            }
         });
     }
 
-    // Monitor progress and call checkpoints
+    // Monitor progress, call checkpoints, and handle memory-bounded resets
     int last_checkpoint = 0;
     while (games_remaining.load(std::memory_order_relaxed) > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+        // Check memory usage
+        size_t current_bytes = pool.memory_usage_bytes();
+        float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
+
+        if (utilization >= bounds.soft_limit_ratio && collector != nullptr) {
+            std::cout << "\n[SelfPlayEngine] Memory at " << std::fixed << std::setprecision(1)
+                      << (utilization * 100) << "% - initiating pool reset...\n";
+
+            // Request workers to pause
+            paused.store(true, std::memory_order_release);
+            pause_requested.store(true, std::memory_order_release);
+
+            // Wait for all workers to pause (with timeout)
+            {
+                std::unique_lock lock(pause_mutex);
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+                pause_cv.wait_until(lock, deadline, [&]() {
+                    return workers_paused.load(std::memory_order_relaxed) >= num_workers ||
+                           games_remaining.load(std::memory_order_relaxed) <= 0;
+                });
+            }
+
+            int paused_count = workers_paused.load(std::memory_order_relaxed);
+            std::cout << "[SelfPlayEngine] " << paused_count << "/" << num_workers << " workers paused\n";
+
+            // Extract training samples from current tree
+            uint32_t old_root = current_root.load(std::memory_order_relaxed);
+            auto tree_samples = extract_samples_from_tree(pool, old_root);
+            std::cout << "[SelfPlayEngine] Extracted " << tree_samples.size() << " samples from tree\n";
+
+            for (auto& sample : tree_samples) {
+                collector->add_sample_direct(std::move(sample));
+            }
+
+            // Save intermediate qsamples file
+            if (!samples_file.empty() && collector->size() > 0) {
+                auto result = TrainingSampleStorage::save(samples_file, collector->samples());
+                if (!result) {
+                    std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
+                } else {
+                    std::cout << "[SelfPlayEngine] Saved " << collector->size()
+                              << " total samples to " << samples_file << "\n";
+                }
+            }
+
+            // Clear the pool
+            pool.clear();
+            std::cout << "[SelfPlayEngine] Pool cleared, " << pool.allocated() << " nodes allocated\n";
+
+            // Reinitialize root node
+            uint32_t new_root = pool.allocate();
+            pool[new_root].init_root(true);
+            current_root.store(new_root, std::memory_order_release);
+            root_idx = new_root;
+
+            ++pool_reset_count;
+            std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
+                      << " complete, new root: " << new_root << "\n\n";
+
+            // Resume workers
+            pause_requested.store(false, std::memory_order_release);
+            paused.store(false, std::memory_order_release);
+            resume_cv.notify_all();
+        }
+
+        // Regular checkpoint callback
         int completed = stats.games_completed.load(std::memory_order_relaxed);
         if (checkpoint_callback &&
             completed - last_checkpoint >= checkpoint_interval_games) {
@@ -1225,7 +1385,11 @@ void SelfPlayEngine::run_multi_game(
         }
     }
 
-    // Wait for all workers to finish
+    // Signal stop and wait for workers
+    for (auto& w : workers) {
+        w.request_stop();
+    }
+    resume_cv.notify_all();  // Wake any paused workers
     workers.clear();
 
     auto end_time = std::chrono::steady_clock::now();
@@ -1236,7 +1400,11 @@ void SelfPlayEngine::run_multi_game(
 
     std::cout << "[SelfPlayEngine] Completed " << completed << " games in "
               << elapsed << "s (" << std::fixed << std::setprecision(1)
-              << games_per_sec << " games/s)\n";
+              << games_per_sec << " games/s)";
+    if (pool_reset_count > 0) {
+        std::cout << " with " << pool_reset_count << " pool resets";
+    }
+    std::cout << "\n";
 }
 
 void SelfPlayEngine::worker_loop(
@@ -1463,9 +1631,17 @@ SelfPlayResult SelfPlayEngine::arena_game(
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        if (result.num_moves > 500) {
-            result.winner = 0;
-            break;
+        // Games with 100+ total moves get a half-value based on who's closer to goal.
+        if (result.num_moves >= 100) {
+            result.winner = 0;  // Counts as draw for stats
+            float half_value = 0.5f * early_terminate_no_fences(pool[current]);
+            for (size_t i = game_path.size(); i > 0; --i) {
+                uint32_t idx = game_path[i - 1];
+                StateNode& node = pool[idx];
+                float node_value = node.is_p1_to_move() ? half_value : -half_value;
+                node.stats.update(node_value);
+            }
+            return result;
         }
     }
 

@@ -336,8 +336,11 @@ struct alignas(64) StateNode {
     EdgeStats stats;
 
     // === Progressive expansion support ===
+    // Disabled by default to reduce node size from 960 to ~100 bytes.
+    // Define QBOT_ENABLE_PROGRESSIVE to re-enable (needs fixing before use).
     static constexpr int NUM_ACTIONS = 209;  // 81 pawn + 128 fence
 
+#ifdef QBOT_ENABLE_PROGRESSIVE
     // Bitmask of valid actions (with pathfinding checked)
     // Bit i is set if action index i is legal
     std::array<uint32_t, 7> valid_action_mask{};  // 7 * 32 = 224 bits >= 209
@@ -349,6 +352,8 @@ struct alignas(64) StateNode {
     std::atomic<bool> computing_mask{false};        // True while compute_valid_action_mask() is running
     std::atomic<bool> valid_moves_computed{false};  // True after compute_valid_action_mask() completes
     std::atomic<bool> priors_set{false};            // True after policy priors are assigned
+#endif
+
     std::atomic<bool> inserting_child{false};       // Spinlock for thread-safe child list insertion
 
     // State flags
@@ -390,11 +395,13 @@ struct alignas(64) StateNode {
         stats.prior = 0.0f;
 
         // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
         for (auto& word : valid_action_mask) word = 0;
         for (auto& p : policy_priors) p = 0.0f;
         computing_mask.store(false, std::memory_order_relaxed);
         valid_moves_computed.store(false, std::memory_order_relaxed);
         priors_set.store(false, std::memory_order_relaxed);
+#endif
         inserting_child.store(false, std::memory_order_relaxed);
     }
 
@@ -452,11 +459,13 @@ struct alignas(64) StateNode {
         stats.prior = 0.0f;
 
         // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
         for (auto& word : valid_action_mask) word = 0;
         for (auto& p : policy_priors) p = 0.0f;
         computing_mask.store(false, std::memory_order_relaxed);
         valid_moves_computed.store(false, std::memory_order_relaxed);
         priors_set.store(false, std::memory_order_relaxed);
+#endif
         inserting_child.store(false, std::memory_order_relaxed);
     }
 
@@ -475,11 +484,13 @@ struct alignas(64) StateNode {
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
         // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
         for (auto& word : valid_action_mask) word = 0;
         for (auto& p : policy_priors) p = 0.0f;
         computing_mask.store(false, std::memory_order_relaxed);
         valid_moves_computed.store(false, std::memory_order_relaxed);
         priors_set.store(false, std::memory_order_relaxed);
+#endif
         inserting_child.store(false, std::memory_order_relaxed);
     }
 
@@ -553,15 +564,14 @@ struct alignas(64) StateNode {
     /// @return Child index, or NULL_NODE if move not found after expansion
     uint32_t find_or_create_child(Move move) noexcept;
 
+    // === Progressive expansion methods ===
+#ifdef QBOT_ENABLE_PROGRESSIVE
     /// Test a move for legality and add it as a child if valid
     /// Checks: move is legal, not already a child, fence doesn't block paths.
     /// Uses static pool() and this node's self_index.
     /// @param move The move to test and add
     /// @return Child index if added, or NULL_NODE if invalid/duplicate/allocation failed
     uint32_t test_and_add_move(Move move) noexcept;
-
-    // === Progressive expansion methods ===
-
     /// Check if action index is valid (passes pathfinding)
     [[nodiscard]] bool is_action_valid(int action_idx) const noexcept {
         if (action_idx < 0 || action_idx >= NUM_ACTIONS) return false;
@@ -586,6 +596,7 @@ struct alignas(64) StateNode {
     /// Add a child for the given action index (skips pathfinding - trusts mask)
     /// @return Child index if added/found, or NULL_NODE if invalid/allocation failed
     uint32_t add_child_for_action(int action_idx) noexcept;
+#endif
 };
 
 // Note: With full game state, size is larger than 64 bytes

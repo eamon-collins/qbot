@@ -251,12 +251,18 @@ float compute_node_value(const NodePool& pool, uint32_t node_idx,
 }
 
 /// Extract samples from a subtree via DFS
+/// Only extracts from nodes marked as on_game_path (part of a completed game)
 void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
                          std::unordered_map<uint32_t, float>& value_cache,
                          std::vector<TrainingSample>& samples) {
     const StateNode& node = pool[node_idx];
 
-    // Skip terminal nodes (no policy target)
+    // Only extract from nodes that were on an actual game path (had win/loss backpropagated)
+    if (!node.is_on_game_path()) {
+        return;
+    }
+
+    // Skip terminal nodes (no policy target - they have no children to form a distribution)
     if (node.is_terminal()) {
         return;
     }
@@ -287,10 +293,12 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
         samples.push_back(sample);
     }
 
-    // Recurse to children
+    // Recurse to children that are on the game path
     child = node.first_child;
     while (child != NULL_NODE) {
-        extract_samples_dfs(pool, child, value_cache, samples);
+        if (pool[child].is_on_game_path()) {
+            extract_samples_dfs(pool, child, value_cache, samples);
+        }
         child = pool[child].next_sibling;
     }
 }
@@ -301,7 +309,7 @@ std::vector<TrainingSample> extract_samples_from_tree(
     const NodePool& pool, uint32_t root_idx)
 {
     std::vector<TrainingSample> samples;
-    samples.reserve(pool.allocated() / 2);  // Rough estimate
+    // samples.reserve(pool.allocated() / 200);  // Rough estimate
 
     std::unordered_map<uint32_t, float> value_cache;
     value_cache.reserve(pool.allocated());

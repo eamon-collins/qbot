@@ -43,7 +43,8 @@ def get_next_iteration(samples_dir: str) -> int:
 
 def run_selfplay(tree_path: str, model_path: str, num_games: int,
                  simulations: int, num_threads: int,
-                 temperature: float = 1.0, temp_drop_ply: int = 30) -> bool:
+                 temperature: float = 1.0, temp_drop_ply: int = 30,
+                 max_memory: int = 30) -> bool:
     """Run self-play games using NN-only MCTS evaluation."""
     qbot_path = get_project_root() / "build" / "qbot"
 
@@ -69,6 +70,7 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         "-s", tree_path,
         "--temperature", str(temperature),
         "--temp-drop", str(temp_drop_ply),
+        "--max-memory", str(max_memory),
     ]
 
     logging.info(f"Running: {' '.join(cmd)}")
@@ -259,6 +261,8 @@ def main():
                         help='Temperature for move selection')
     parser.add_argument('--temp-drop', type=int, default=30, dest='temp_drop',
                         help='Ply at which to drop temperature to 0')
+    parser.add_argument('--max-memory', type=int, default=30, dest='max_memory',
+                        help='max memory in GB, resets pool at 80%')
 
     # Arena parameters
     parser.add_argument('--arena-games', type=int, default=100, dest='arena_games',

@@ -165,7 +165,9 @@ public:
 };
 
 /// Extract training samples from a pruned game tree
-/// Traverses the tree and extracts samples from all non-terminal nodes with children
+/// Only extracts from nodes marked as on_game_path (part of a completed game with
+/// win/loss backpropagated). This ensures training data only includes positions
+/// with known outcomes, not speculative tree exploration.
 /// @param pool Node pool containing the tree
 /// @param root_idx Root node index
 /// @return Vector of extracted training samples

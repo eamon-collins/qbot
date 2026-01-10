@@ -99,20 +99,21 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     const uint8_t r = curr.row;
     const uint8_t c = curr.col;
 
-    // Optimization: when both players are out of fences, the game is deterministic.
-    // Each player should just race to their goal via shortest path.
-    if (p1.fences == 0 && p2.fences == 0) {
-        if (out_fence_count) *out_fence_count = 0;
-
-        Pathfinder& pf = get_pathfinder();
-        uint8_t goal_row = is_p1_to_move() ? 8 : 0;
-        auto path = pf.find_path(fences, curr, goal_row);
-
-        if (path.size() > 1) {
-            moves.push_back(Move::pawn(path[1].row, path[1].col));
-        }
-        return moves;
-    }
+    // // When both players are out of fences, the game is deterministic -
+    // // each player should just race to their goal via shortest path.
+    // // This significantly speeds up endgame by reducing branching factor to 1.
+    // if (p1.fences == 0 && p2.fences == 0) {
+    //     if (out_fence_count) *out_fence_count = 0;
+    //
+    //     Pathfinder& pf = get_pathfinder();
+    //     uint8_t goal_row = is_p1_to_move() ? 8 : 0;
+    //     auto path = pf.find_path(fences, curr, goal_row);
+    //
+    //     if (path.size() > 1) {
+    //         moves.push_back(Move::pawn(path[1].row, path[1].col));
+    //     }
+    //     return moves;
+    // }
 
     moves.reserve(140);  // Rough upper bound: ~4 pawn + ~128 fence moves max
 
@@ -340,6 +341,10 @@ uint32_t StateNode::find_or_create_child(Move move) noexcept {
     return NULL_NODE;
 }
 
+// Progressive expansion functions - disabled by default to reduce node size.
+// Define QBOT_ENABLE_PROGRESSIVE to re-enable.
+#ifdef QBOT_ENABLE_PROGRESSIVE
+
 uint32_t StateNode::test_and_add_move(Move move) noexcept {
     NodePool& p = pool();
 
@@ -467,5 +472,7 @@ uint32_t StateNode::add_child_for_action(int action_idx) noexcept {
     inserting_child.store(false, std::memory_order_release);
     return child_idx;
 }
+
+#endif // QBOT_ENABLE_PROGRESSIVE
 
 } // namespace qbot
