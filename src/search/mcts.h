@@ -304,7 +304,7 @@ inline void remove_virtual_loss(
 /// Accounts for whose turn it is (tie goes to player about to move)
 /// @param node Game state to evaluate
 /// @return p2_dist - p1_dist to quantify by how much either is winning by.
-[[nodiscard]] inline float early_terminate_no_fences(const StateNode& node) noexcept {
+[[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
     int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
@@ -364,7 +364,7 @@ inline void remove_virtual_loss(
 #endif
 
     // No NN available - use path distance heuristic
-    return early_terminate_no_fences(node);
+	return std::clamp(early_terminate_no_fences(node), -10, 10) / 10.0 * .8;
 }
 
 // ============================================================================
@@ -380,6 +380,8 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
+	int max_moves_per_game = 80;           // After this many moves, declare a draw and assign partial points to closer player
+	float max_draw_reward = 0.8;           // On a draw, this is maximum reward we give the closest player 
 };
 
 /// Compute policy distribution from child Q-values
@@ -509,7 +511,7 @@ struct SelfPlayConfig {
 /// Result of a single self-play game
 struct SelfPlayResult {
     int winner{0};      // +1 = P1 won, -1 = P2 won, 0 = draw/error
-	float draw_score{0.0}; //if draw, accumulate relative distance metric
+	int draw_score{0}; //if draw, accumulate relative distance metric
     int num_moves{0};   // Total moves in the game
 	bool error{false};      // track errors different than draws (draw is too many moves without a win, error is invalid state)
 };
@@ -527,7 +529,7 @@ struct MultiGameStats {
     std::atomic<int> draws{0};
     std::atomic<int> errors{0};
     std::atomic<int> total_moves{0};
-	std::atomic<float> draw_score{0.0}; //if draw, accumulate relative distance metric
+	std::atomic<int> draw_score{0}; //if draw, accumulate relative distance metric
     std::atomic<int> games_completed{0};
 
     void add_result(const SelfPlayResult& result) noexcept {
@@ -547,6 +549,8 @@ struct MultiGameStats {
         p2_wins.store(0, std::memory_order_relaxed);
         draws.store(0, std::memory_order_relaxed);
         total_moves.store(0, std::memory_order_relaxed);
+        errors.store(0, std::memory_order_relaxed);
+        draw_score.store(0, std::memory_order_relaxed);
         games_completed.store(0, std::memory_order_relaxed);
     }
 

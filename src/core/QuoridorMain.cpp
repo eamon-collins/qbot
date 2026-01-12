@@ -198,7 +198,6 @@ void Config::print(std::ostream& os) const {
         os << "  Sims/move:      " << simulations_per_move << "\n";
         os << "  Temperature:    " << temperature << "\n";
         os << "  Temp drop ply:  " << temperature_drop_ply << "\n";
-        os << "  Progressive:    " << (progressive ? "yes" : "no") << "\n";
     }
     if (mode == RunMode::Arena) {
         os << "  Current model:  " << model_file << "\n";
@@ -741,28 +740,49 @@ int run_arena(const Config& config) {
     int candidate_wins = stats.p1_wins.load(std::memory_order_relaxed);
     int current_wins = stats.p2_wins.load(std::memory_order_relaxed);
     int draws = stats.draws.load(std::memory_order_relaxed);
+    int errors = stats.errors.load(std::memory_order_relaxed);
+	int draw_score = stats.draw_score.load(std::memory_order_relaxed);
+
 
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
 
-    // Calculate final win rate (excluding draws)
+    // Calculate final win rate and draw-weighted rate
     int decisive_games = candidate_wins + current_wins;
     float candidate_win_rate = decisive_games > 0
         ? static_cast<float>(candidate_wins) / decisive_games
         : 0.0f;
+	float avg_draw_score = draws > 0
+		? static_cast<float>(draw_score) / draws
+		: 0.0f;
+	bool promote_candidate = candidate_win_rate >= config.win_threshold;
+	//Draw conditions, if no one won a single game, do avg draw score > 1.5 moves
+	float draw_promo_thresh = 1.5; //decided arbitrarily
+    if (candidate_wins == 0 && current_wins == 0) {
+		promote_candidate = avg_draw_score >= draw_promo_thresh;
+	}
+	//maybe consider draws when wins aren't decisive later, but really we want wins one way or the other and those should be much more important in model selection
+	// else if(candidate_win_rate <= config.win_threshold && candidate_win_rate >= 1-config.win_threshold && draw_score != 0) {
 
     std::cout << "\n=== Arena Results ===\n";
     std::cout << "  Candidate wins: " << candidate_wins << "\n";
     std::cout << "  Current wins:   " << current_wins << "\n";
     std::cout << "  Draws:          " << draws << "\n";
+    std::cout << "  Draw Score:     " << draw_score << "\n";
+    std::cout << "  Errors:         " << errors << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
               << (candidate_win_rate * 100) << "%\n";
     std::cout << "  Time:           " << elapsed << "s\n";
 
-    // Check if candidate should replace current
-    if (candidate_win_rate >= config.win_threshold) {
-        std::cout << "\nCandidate wins! (" << (candidate_win_rate * 100)
-                  << "% >= " << (config.win_threshold * 100) << "%)\n";
+    // If candidate 
+    if (promote_candidate) {
+        std::cout << "\nCandidate wins! (";
+		if (candidate_win_rate >= config.win_threshold) {
+			std::cout << (candidate_win_rate * 100) << "% >= "
+				<< (config.win_threshold * 100) << "%)\n";
+		} else {
+			std::cout << "Avg draw score " << avg_draw_score << " >= " << draw_promo_thresh << ")\n"; 
+		}
         std::cout << "Promoting candidate to: " << config.best_model_path << "\n";
 
         // Create directory if needed
@@ -833,7 +853,6 @@ int run_selfplay(const Config& config,
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
-    std::cout << "  Progressive: " << (config.progressive ? "yes" : "no") << "\n";
     std::cout << "  Max memory:  " << config.max_memory_gb << " GB (resets at 80%)\n";
     std::cout << "  Tree file:   " << config.save_file << "\n";
     std::cout << "  Samples:     " << samples_file << "\n\n";
@@ -896,14 +915,19 @@ int run_selfplay(const Config& config,
         int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
         int draws = stats.draws.load(std::memory_order_relaxed);
         int total_moves = stats.total_moves.load(std::memory_order_relaxed);
+		int errors = stats.errors.load(std::memory_order_relaxed);
+		int draw_score = stats.draw_score.load(std::memory_order_relaxed);
+		float avg_draw_score = static_cast<float>(draw_score) / draws;
 
         std::cout << "\nSelf-play complete!\n";
-        std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
-        std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
-        std::cout << "  Draws:   " << draws << "\n";
-        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
-        std::cout << "  Samples: " << collector.size() << "\n";
-        std::cout << "  Avg batch size: " << std::fixed << std::setprecision(1) << avg_batch_size
+        std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+        std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+        std::cout << "  Draws:\t" << draws << "\n";
+		std::cout << "  Draw Score:\t" << avg_draw_score << "\n";
+		std::cout << "  Errors:\t" << errors << "\n";
+        std::cout << "  moves/game:\t" << (total_moves / config.num_games) << "\n";
+        std::cout << "  Samples:\t" << collector.size() << "\n";
+        std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
                   << " (" << total_requests << " requests / " << total_batches << " batches)\n";
 
     } else {

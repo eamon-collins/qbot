@@ -318,11 +318,11 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
     auto& timers = get_timers();
 
     std::vector<uint32_t> game_path;
-    game_path.reserve(81);
+    game_path.reserve(config_.max_moves_per_game + 1);
 
     std::vector<uint32_t> sample_positions;
     if (collector) {
-        sample_positions.reserve(81);
+        sample_positions.reserve(config_.max_moves_per_game + 1);
     }
 
     uint32_t current = root_idx;
@@ -436,10 +436,13 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         result.num_moves++;
 
         // Early termination for long games (scaled distance-based value)
-        if (result.num_moves >= 80) {
+        if (result.num_moves >= config_.max_moves_per_game) {
+			// draw score is just difference in moves to goal and returned for stats/promotion decisions
+			// game_value is scaled to be a lesser reward than a full win and backpropagated through the tree for NN.
+            int draw_score = early_terminate_no_fences(pool[current]);
+            float game_value = std::clamp(draw_score, -10, 10) / 10.0 * config_.max_draw_reward;
             result.winner = 0;
-            float game_value = early_terminate_no_fences(pool[current]);
-            game_value = std::clamp(game_value, -10.0f, 10.0f) * 0.08f;
+			result.draw_score = draw_score;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
@@ -1199,7 +1202,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
     result.num_moves = 0;
 
     std::vector<uint32_t> game_path;
-    game_path.reserve(200);
+    game_path.reserve(config_.max_moves_per_game + 1);
     game_path.push_back(root_idx);
     pool[root_idx].set_on_game_path();
 
@@ -1280,15 +1283,17 @@ SelfPlayResult SelfPlayEngine::arena_game(
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        // Games with 100+ total moves get a half-value based on who's closer to goal.
-        if (result.num_moves >= 100) {
-            result.winner = 0;  // Counts as draw for stats
-            float half_value = 0.5f * early_terminate_no_fences(pool[current]);
+        // Early termination for long games (scaled distance-based value)
+        if (result.num_moves >= config_.max_moves_per_game) {
+            int draw_score = early_terminate_no_fences(pool[current]);
+            float game_value = std::clamp(draw_score , -10, 10) / 10.0 * config_.max_draw_reward;
+            result.winner = 0;
+			result.draw_score = draw_score;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
-                StateNode& node = pool[idx];
-                float node_value = node.is_p1_to_move() ? half_value : -half_value;
-                node.stats.update(node_value);
+                StateNode& n = pool[idx];
+                float node_value = n.is_p1_to_move() ? game_value : -game_value;
+                n.stats.update(node_value);
             }
             return result;
         }
