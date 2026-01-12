@@ -13,6 +13,7 @@ __pycache__
 model/
 core.*
 tree*.out
+tree*.qsamples
 tree.qbot
 samples/
 log/

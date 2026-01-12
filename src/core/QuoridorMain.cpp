@@ -132,7 +132,7 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Ply to drop temperature to 0")
         ("progressive", po::bool_switch(&config.progressive),
             "Use progressive expansion (on-demand child creation)")
-        ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(40),
+        ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
             "Max memory for node pool in GB (resets pool at 80%)");
 
     po::variables_map vm;

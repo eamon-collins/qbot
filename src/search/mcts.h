@@ -39,6 +39,28 @@
 namespace qbot {
 
 // ============================================================================
+// Inference Type Traits (for unifying ModelInference and InferenceServer)
+// ============================================================================
+
+#ifdef QBOT_ENABLE_INFERENCE
+
+/// Type trait to distinguish direct model inference from async server
+template<typename T>
+struct is_inference_server : std::false_type {};
+
+template<>
+struct is_inference_server<InferenceServer> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_inference_server_v = is_inference_server<T>::value;
+
+/// Concept for any inference provider (ModelInference or InferenceServer)
+template<typename T>
+concept InferenceProvider = std::same_as<T, ModelInference> || std::same_as<T, InferenceServer>;
+
+#endif
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -626,20 +648,18 @@ public:
     [[nodiscard]] SelfPlayConfig& config() noexcept { return config_; }
 
 private:
-    /// Run MCTS iterations from a position (direct model access)
-    void run_mcts_iterations(NodePool& pool, uint32_t root_idx, ModelInference& model, int iterations);
+    /// Unified self-play implementation for any inference provider
+    template<InferenceProvider Inference>
+    SelfPlayResult self_play_impl(NodePool& pool, uint32_t root_idx, Inference& inference,
+                                   TrainingSampleCollector* collector);
 
-    /// Run MCTS iterations from a position (via inference server)
-    void run_mcts_iterations(NodePool& pool, uint32_t root_idx, InferenceServer& server, int iterations);
+    /// Unified MCTS iterations for any inference provider
+    template<InferenceProvider Inference>
+    void run_mcts_iterations(NodePool& pool, uint32_t root_idx, Inference& inference, int iterations);
 
-    /// Single MCTS iteration: select -> expand -> evaluate -> backprop
-    void mcts_iteration(NodePool& pool, uint32_t root_idx, ModelInference& model);
-
-    /// Expand a node and set priors using batch NN evaluation (direct model)
-    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, ModelInference& model);
-
-    /// Expand a node and set priors using inference server
-    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
+    /// Unified expansion with NN priors for any inference provider
+    template<InferenceProvider Inference>
+    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Inference& inference);
 
     /// Refresh priors on an already-expanded node's children using the given server
     void refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
