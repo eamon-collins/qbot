@@ -307,12 +307,12 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
     // Track the path through the game (for potential backprop)
     std::vector<uint32_t> game_path;
-    game_path.reserve(200);  // Typical game length
+    game_path.reserve(80);  // Typical game length
 
     // Track positions where we collected samples (for post-game value assignment)
     std::vector<uint32_t> sample_positions;
     if (collector) {
-        sample_positions.reserve(200);
+        sample_positions.reserve(80);
     }
 
     uint32_t current = root_idx;
@@ -348,7 +348,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
         // If no children after expansion, something went wrong
         if (!node.has_children()) {
-            result.winner = 0;  // Draw/error
+            result.error = true;  // Draw/error
             break;
         }
 
@@ -373,7 +373,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
         }
 
         if (policy.empty()) {
-            result.winner = 0;  // Error
+            result.error = true;
             break;
         }
 
@@ -400,7 +400,7 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
         if (next == NULL_NODE) {
             // Move not in tree - shouldn't happen if expansion worked
-            result.winner = 0;
+            result.error = true;
             break;
         }
 
@@ -411,19 +411,21 @@ SelfPlayResult SelfPlayEngine::self_play(NodePool& pool, uint32_t root_idx, Mode
 
         // Games with 100+ total moves get a half-value based on who's closer to goal.
         // This provides a learning signal while discouraging overly long games.
-        if (result.num_moves >= 100) {
+        if (result.num_moves >= 80) {
             result.winner = 0;  // Counts as draw for stats
-            // Backprop half-value based on path distance
-            float half_value = 0.5f * early_terminate_no_fences(pool[current]);
+            // Backprop based on difference in path distance at end
+            float game_value = early_terminate_no_fences(pool[current]);
+			//trim distance difference to [-10,10], scale to [-.8, .8] 
+			game_value = std::min(std::max(game_value, -10.0), 10.0) / (10/.8);
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& node = pool[idx];
-                float node_value = node.is_p1_to_move() ? half_value : -half_value;
+                float node_value = node.is_p1_to_move() ? game_value : -game_value;
                 node.stats.update(node_value);
             }
             if (collector) {
                 for (uint32_t pos : sample_positions) {
-                    collector->add_sample(pool, pos, half_value);
+                    collector->add_sample(pool, pos, game_value);
                 }
             }
             return result;

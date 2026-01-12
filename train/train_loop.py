@@ -14,11 +14,51 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
 import torch
 
 from resnet import QuoridorValueNet, train
+
+
+def setup_logging(log_level: str) -> Path:
+    """Set up logging with both console and file handlers. Returns log file path."""
+    project_root = Path(__file__).parent.parent
+    log_dir = project_root / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"train_{timestamp}.log"
+
+    # Create formatters
+    file_formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%H:%M:%S'
+    )
+
+    # Set up root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level))
+
+    # File handler - captures everything
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_formatter)
+    root_logger.addHandler(file_handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, log_level))
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+
+    return log_file
 
 
 def get_project_root():
@@ -77,13 +117,21 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
     logging.info(f"Playing {num_games} self-play games...")
 
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout, _ = proc.communicate(timeout=3600 * 4)  # 4 hour timeout
-        if stdout:
-            lines = stdout.decode().strip().split('\n')
-            for line in lines[-10:]:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True
+        )
+
+        # Stream output line by line
+        for line in proc.stdout:
+            line = line.rstrip('\n')
+            if line:
                 logging.info(f"  {line}")
 
+        proc.wait(timeout=3600 * 4)  # 4 hour timeout
         return proc.returncode == 0
 
     except subprocess.TimeoutExpired:
@@ -205,25 +253,38 @@ def run_arena(current_model: str, candidate_model: str, num_threads: int, num_ga
     logging.info(f"Running arena: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=3600 * 2)
-        output = result.stdout.decode() + result.stderr.decode()
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True
+        )
 
-        # Log last lines of output
-        lines = output.strip().split('\n')
-        for line in lines[-15:]:
-            logging.info(f"  {line}")
+        # Stream output line by line, collect for result checking
+        output_lines = []
+        for line in proc.stdout:
+            line = line.rstrip('\n')
+            if line:
+                logging.info(f"  {line}")
+                output_lines.append(line)
 
-        if result.returncode != 0:
+        proc.wait(timeout=3600 * 2)  # 2 hour timeout
+
+        if proc.returncode != 0:
             logging.error("Arena evaluation failed")
             return False, False
 
         # Check if candidate won by looking for "Candidate wins!" or "promoted"
+        output = '\n'.join(output_lines)
         candidate_won = "Candidate wins!" in output or "promoted successfully" in output
 
         return True, candidate_won
 
     except subprocess.TimeoutExpired:
         logging.error("Arena evaluation timed out")
+        proc.kill()
+        proc.wait()
         return False, False
     except Exception as e:
         logging.error(f"Error running arena: {e}")
@@ -288,11 +349,7 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        datefmt='%H:%M:%S'
-    )
+    log_file = setup_logging(args.log_level)
 
     # Resolve paths
     project_root = get_project_root()
@@ -311,6 +368,7 @@ def main():
     logging.info("=" * 60)
     logging.info("Quoridor AlphaZero Training Loop")
     logging.info("=" * 60)
+    logging.info(f"Log file:        {log_file}")
     logging.info(f"Samples dir:     {samples_dir}")
     logging.info(f"Model dir:       {model_dir}")
     logging.info(f"Current best:    {current_best_pt}")
@@ -371,14 +429,6 @@ def main():
                             args.temperature, args.temp_drop):
             logging.error("Self-play failed, retrying iteration...")
             continue
-
-        # Check if tree has completed games
-        num_games = check_tree_has_games(str(tree_path))
-        if num_games == 0:
-            logging.warning("No completed games in tree, skipping training")
-            continue
-
-        logging.info(f"Tree has {num_games} terminal nodes")
 
         # Derive .qsamples path from tree path
         samples_path = tree_path.with_suffix('.qsamples')

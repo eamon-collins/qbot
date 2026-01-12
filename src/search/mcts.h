@@ -281,7 +281,7 @@ inline void remove_virtual_loss(
 /// Uses path length to goal - whoever is closer wins
 /// Accounts for whose turn it is (tie goes to player about to move)
 /// @param node Game state to evaluate
-/// @return +1.0 for P1 win, -1.0 for P2 win
+/// @return p2_dist - p1_dist to quantify by how much either is winning by.
 [[nodiscard]] inline float early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
@@ -301,14 +301,7 @@ inline void remove_virtual_loss(
         p2_dist--;
     }
 
-    if (p1_dist < p2_dist) {
-        return 1.0f;   // P1 wins
-    } else if (p2_dist < p1_dist) {
-        return -1.0f;  // P2 wins
-    } else {
-        // Tie - player whose turn it is wins (they move first)
-        return node.is_p1_to_move() ? 1.0f : -1.0f;
-    }
+	return p2_dist - p1_dist; //positive if p1 is winning, negative if p2
 }
 
 
@@ -494,7 +487,9 @@ struct SelfPlayConfig {
 /// Result of a single self-play game
 struct SelfPlayResult {
     int winner{0};      // +1 = P1 won, -1 = P2 won, 0 = draw/error
+	float draw_score{0.0}; //if draw, accumulate relative distance metric
     int num_moves{0};   // Total moves in the game
+	bool error{false};      // track errors different than draws (draw is too many moves without a win, error is invalid state)
 };
 
 // ============================================================================
@@ -508,13 +503,19 @@ struct MultiGameStats {
     std::atomic<int> p1_wins{0};
     std::atomic<int> p2_wins{0};
     std::atomic<int> draws{0};
+    std::atomic<int> errors{0};
     std::atomic<int> total_moves{0};
+	std::atomic<float> draw_score{0.0}; //if draw, accumulate relative distance metric
     std::atomic<int> games_completed{0};
 
     void add_result(const SelfPlayResult& result) noexcept {
-        if (result.winner == 1) p1_wins.fetch_add(1, std::memory_order_relaxed);
+		if (result.error) errors.fetch_add(1, std::memory_order_relaxed);
+		else if (result.winner == 1) p1_wins.fetch_add(1, std::memory_order_relaxed);
         else if (result.winner == -1) p2_wins.fetch_add(1, std::memory_order_relaxed);
-        else draws.fetch_add(1, std::memory_order_relaxed);
+        else {
+			draws.fetch_add(1, std::memory_order_relaxed);
+			draw_score.fetch_add(result.draw_score, std::memory_order_relaxed);
+		}
         total_moves.fetch_add(result.num_moves, std::memory_order_relaxed);
         games_completed.fetch_add(1, std::memory_order_relaxed);
     }
