@@ -315,15 +315,13 @@ inline void remove_virtual_loss(
         return 0.0f;
     }
 
-    // Account for whose turn it is
-    // If it's P1's turn, P1 effectively has one less move to make
-    if (node.is_p1_to_move()) {
-        p1_dist--;
-    } else {
-        p2_dist--;
+    if (p1_dist < p2_dist) {
+        return 1;
+    } else if (p2_dist < p1_dist) {
+        return -1;
+    } else { //Tie breaker is whoever's move it is, as they will win with same length path
+        return node.is_p1_to_move() ? 1 : -1;
     }
-
-	return p2_dist - p1_dist; //positive if p1 is winning, negative if p2
 }
 
 
@@ -364,7 +362,8 @@ inline void remove_virtual_loss(
 #endif
 
     // No NN available - use path distance heuristic
-	return std::clamp(early_terminate_no_fences(node), -10, 10) / 10.0 * .8;
+    // this now returns just +/- 1, so this doesn't make sense, but should always have inference
+    return std::clamp(early_terminate_no_fences(node), -10, 10) / 10.0 * .8;
 }
 
 // ============================================================================
@@ -380,8 +379,8 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-	int max_moves_per_game = 80;           // After this many moves, declare a draw and assign partial points to closer player
-	float max_draw_reward = 0.8;           // On a draw, this is maximum reward we give the closest player 
+    int max_moves_per_game = 80;           // After this many moves, declare a draw and assign partial points to closer player
+    float max_draw_reward = 0.8;           // On a draw, this is maximum reward we give the closest player 
 };
 
 /// Compute policy distribution from child Q-values
@@ -511,9 +510,9 @@ struct SelfPlayConfig {
 /// Result of a single self-play game
 struct SelfPlayResult {
     int winner{0};      // +1 = P1 won, -1 = P2 won, 0 = draw/error
-	int draw_score{0}; //if draw, accumulate relative distance metric
+    int draw_score{0}; //if draw, accumulate relative distance metric
     int num_moves{0};   // Total moves in the game
-	bool error{false};      // track errors different than draws (draw is too many moves without a win, error is invalid state)
+    bool error{false};      // track errors different than draws (draw is too many moves without a win, error is invalid state)
 };
 
 // ============================================================================
@@ -529,17 +528,17 @@ struct MultiGameStats {
     std::atomic<int> draws{0};
     std::atomic<int> errors{0};
     std::atomic<int> total_moves{0};
-	std::atomic<int> draw_score{0}; //if draw, accumulate relative distance metric
+    std::atomic<int> draw_score{0}; //if draw, accumulate relative distance metric
     std::atomic<int> games_completed{0};
 
     void add_result(const SelfPlayResult& result) noexcept {
-		if (result.error) errors.fetch_add(1, std::memory_order_relaxed);
-		else if (result.winner == 1) p1_wins.fetch_add(1, std::memory_order_relaxed);
+        if (result.error) errors.fetch_add(1, std::memory_order_relaxed);
+        else if (result.winner == 1) p1_wins.fetch_add(1, std::memory_order_relaxed);
         else if (result.winner == -1) p2_wins.fetch_add(1, std::memory_order_relaxed);
         else {
-			draws.fetch_add(1, std::memory_order_relaxed);
-			draw_score.fetch_add(result.draw_score, std::memory_order_relaxed);
-		}
+            draws.fetch_add(1, std::memory_order_relaxed);
+            draw_score.fetch_add(result.draw_score, std::memory_order_relaxed);
+        }
         total_moves.fetch_add(result.num_moves, std::memory_order_relaxed);
         games_completed.fetch_add(1, std::memory_order_relaxed);
     }

@@ -196,7 +196,7 @@ def train(model, data_file: str, batch_size: int, num_epochs: int):
             num_batches += 1
 
             if num_batches % 100 == 0:
-                logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
+                logging.debug(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
 
         avg_loss = epoch_loss / num_batches
         avg_v_loss = epoch_value_loss / num_batches

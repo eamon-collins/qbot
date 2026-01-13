@@ -205,55 +205,9 @@ std::vector<TrainingSample> TrainingSampleCollector::take_samples() noexcept {
 
 namespace {
 
-/// Recursively compute the expected value of a node by following visit-weighted paths
-/// Returns value from P1's perspective (+1 = P1 wins)
-float compute_node_value(const NodePool& pool, uint32_t node_idx,
-                         std::unordered_map<uint32_t, float>& value_cache) {
-    // Check cache first
-    auto it = value_cache.find(node_idx);
-    if (it != value_cache.end()) {
-        return it->second;
-    }
-
-    const StateNode& node = pool[node_idx];
-
-    // Terminal nodes have a known value
-    if (node.is_terminal()) {
-        float value = node.terminal_value;
-        value_cache[node_idx] = value;
-        return value;
-    }
-
-    // No children - can't compute value
-    if (!node.has_children()) {
-        value_cache[node_idx] = 0.0f;
-        return 0.0f;
-    }
-
-    // Compute weighted average of children's values based on visit counts
-    float weighted_sum = 0.0f;
-    uint32_t total_visits = 0;
-
-    uint32_t child = node.first_child;
-    while (child != NULL_NODE) {
-        uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
-        if (visits > 0) {
-            float child_value = compute_node_value(pool, child, value_cache);
-            weighted_sum += visits * child_value;
-            total_visits += visits;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    float value = (total_visits > 0) ? (weighted_sum / total_visits) : 0.0f;
-    value_cache[node_idx] = value;
-    return value;
-}
-
 /// Extract samples from a subtree via DFS
 /// Only extracts from nodes marked as on_game_path (part of a completed game)
 void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
-                         std::unordered_map<uint32_t, float>& value_cache,
                          std::vector<TrainingSample>& samples) {
     const StateNode& node = pool[node_idx];
 
@@ -286,9 +240,8 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
         sample.state = extract_compact_state(node);
         sample.policy = extract_visit_distribution(pool, node_idx);
 
-        // Get value from P1's perspective, then convert to current player's perspective
-        float p1_value = compute_node_value(pool, node_idx, value_cache);
-        sample.value = node.is_p1_to_move() ? p1_value : -p1_value;
+        //should already be from current player's perspective and backpropagated sum of lower game path nodes.
+        sample.value = node.stats.Q();
 
         samples.push_back(sample);
     }
@@ -297,7 +250,7 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
     child = node.first_child;
     while (child != NULL_NODE) {
         if (pool[child].is_on_game_path()) {
-            extract_samples_dfs(pool, child, value_cache, samples);
+            extract_samples_dfs(pool, child, samples);
         }
         child = pool[child].next_sibling;
     }
@@ -311,13 +264,10 @@ std::vector<TrainingSample> extract_samples_from_tree(
     std::vector<TrainingSample> samples;
     // samples.reserve(pool.allocated() / 200);  // Rough estimate
 
-    std::unordered_map<uint32_t, float> value_cache;
-    value_cache.reserve(pool.allocated());
-
-    extract_samples_dfs(pool, root_idx, value_cache, samples);
+    extract_samples_dfs(pool, root_idx, samples);
 
     std::cout << "[extract_samples_from_tree] Extracted " << samples.size()
-              << " samples from tree with " << pool.allocated() << " nodes\n";
+              << " samples from tree with " << pool.allocated() << " nodes" << std::endl;
 
     return samples;
 }

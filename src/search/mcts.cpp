@@ -347,6 +347,12 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
             node.set_terminal(-1.0f);
             break;
         }
+        //Early termination for no fences left
+        if (node.p1.fences == 0 && node.p2.fences == 0) {
+            result.winner = early_terminate_no_fences(node);
+            node.set_terminal(static_cast<float>(result.winner));
+            break;
+        }
 
         // Expansion
 #ifdef QBOT_ENABLE_PROGRESSIVE
@@ -435,14 +441,18 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         pool[current].set_on_game_path();
         result.num_moves++;
 
+
+
+
         // Early termination for long games (scaled distance-based value)
         if (result.num_moves >= config_.max_moves_per_game) {
-			// draw score is just difference in moves to goal and returned for stats/promotion decisions
-			// game_value is scaled to be a lesser reward than a full win and backpropagated through the tree for NN.
+            // draw score is just difference in moves to goal and returned for stats/promotion decisions
+            // game_value is scaled to be a lesser reward than a full win and backpropagated through the tree for NN.
+            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
             int draw_score = early_terminate_no_fences(pool[current]);
             float game_value = std::clamp(draw_score, -10, 10) / 10.0 * config_.max_draw_reward;
             result.winner = 0;
-			result.draw_score = draw_score;
+            result.draw_score = draw_score;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
@@ -969,7 +979,7 @@ void SelfPlayEngine::run_multi_game(
 
         if (utilization >= bounds.soft_limit_ratio && collector != nullptr) {
             std::cout << "\n[SelfPlayEngine] Memory at " << std::fixed << std::setprecision(1)
-                      << (utilization * 100) << "% - initiating pool reset...\n";
+                      << (utilization * 100) << "% - initiating pool reset..." << std::endl;
 
             // Request workers to pause
             paused.store(true, std::memory_order_release);
@@ -986,12 +996,11 @@ void SelfPlayEngine::run_multi_game(
             }
 
             int paused_count = workers_paused.load(std::memory_order_relaxed);
-            std::cout << "[SelfPlayEngine] " << paused_count << "/" << num_workers << " workers paused\n";
+            std::cout << "[SelfPlayEngine] " << paused_count << "/" << num_workers << " workers paused" << std::endl;
 
             // Extract training samples from current tree
             uint32_t old_root = current_root.load(std::memory_order_relaxed);
             auto tree_samples = extract_samples_from_tree(pool, old_root);
-            std::cout << "[SelfPlayEngine] Extracted " << tree_samples.size() << " samples from tree\n";
 
             for (auto& sample : tree_samples) {
                 collector->add_sample_direct(std::move(sample));
@@ -1002,15 +1011,10 @@ void SelfPlayEngine::run_multi_game(
                 auto result = TrainingSampleStorage::save(samples_file, collector->samples());
                 if (!result) {
                     std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
-                } else {
-                    std::cout << "[SelfPlayEngine] Saved " << collector->size()
-                              << " total samples to " << samples_file << "\n";
                 }
             }
 
-            // Clear the pool
             pool.clear();
-            std::cout << "[SelfPlayEngine] Pool cleared, " << pool.allocated() << " nodes allocated\n";
 
             // Reinitialize root node
             uint32_t new_root = pool.allocate();
@@ -1020,7 +1024,7 @@ void SelfPlayEngine::run_multi_game(
 
             ++pool_reset_count;
             std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
-                      << " complete, new root: " << new_root << "\n\n";
+                      << " complete" << std::endl;
 
             // Resume workers
             pause_requested.store(false, std::memory_order_release);
@@ -1224,6 +1228,12 @@ SelfPlayResult SelfPlayEngine::arena_game(
             result.winner = -1;
             break;
         }
+        //Early termination for no fences left
+        if (node.p1.fences == 0 && node.p2.fences == 0) {
+            result.winner = early_terminate_no_fences(node);
+            node.set_terminal(static_cast<float>(result.winner));
+            break;
+        }
 
         // Refresh priors on existing children using the model for the player whose turn it is
         // This is critical for arena: priors may have been set by a different model in a previous game
@@ -1285,10 +1295,11 @@ SelfPlayResult SelfPlayEngine::arena_game(
 
         // Early termination for long games (scaled distance-based value)
         if (result.num_moves >= config_.max_moves_per_game) {
+            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
             int draw_score = early_terminate_no_fences(pool[current]);
             float game_value = std::clamp(draw_score , -10, 10) / 10.0 * config_.max_draw_reward;
             result.winner = 0;
-			result.draw_score = draw_score;
+            result.draw_score = draw_score;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];

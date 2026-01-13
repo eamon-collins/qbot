@@ -426,7 +426,7 @@ def main():
         logging.info(f"[Phase 1] Self-play ({args.games} games)...")
         if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
                             args.simulations, args.threads,
-                            args.temperature, args.temp_drop):
+                            args.temperature, args.temp_drop, args.max_memory):
             logging.error("Self-play failed, retrying iteration...")
             continue
 

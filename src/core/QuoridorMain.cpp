@@ -756,8 +756,8 @@ int run_arena(const Config& config) {
 		? static_cast<float>(draw_score) / draws
 		: 0.0f;
 	bool promote_candidate = candidate_win_rate >= config.win_threshold;
-	//Draw conditions, if no one won a single game, do avg draw score > 1.5 moves
-	float draw_promo_thresh = 1.5; //decided arbitrarily
+	//Draw conditions, if no one won a single game, do likelihood of draw win > 60%, ie .2 in [-1,1]
+	float draw_promo_thresh = .2;
     if (candidate_wins == 0 && current_wins == 0) {
 		promote_candidate = avg_draw_score >= draw_promo_thresh;
 	}
@@ -768,7 +768,7 @@ int run_arena(const Config& config) {
     std::cout << "  Candidate wins: " << candidate_wins << "\n";
     std::cout << "  Current wins:   " << current_wins << "\n";
     std::cout << "  Draws:          " << draws << "\n";
-    std::cout << "  Draw Score:     " << draw_score << "\n";
+    // std::cout << "  Draw Score:     " << draw_score << "\n";
     std::cout << "  Errors:         " << errors << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
               << (candidate_win_rate * 100) << "%\n";
@@ -881,7 +881,7 @@ int run_selfplay(const Config& config,
             std::cout << "[" << completed << "/" << config.num_games << "] "
                       << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
                       << " | Nodes: " << p.allocated()
-                      << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << "\n";
+                      << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << std::endl;
         };
 
         MultiGameStats stats;
@@ -923,12 +923,12 @@ int run_selfplay(const Config& config,
         std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
         std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:\t" << draws << "\n";
-		std::cout << "  Draw Score:\t" << avg_draw_score << "\n";
+		// std::cout << "  Draw Score:\t" << avg_draw_score << "\n";
 		std::cout << "  Errors:\t" << errors << "\n";
         std::cout << "  moves/game:\t" << (total_moves / config.num_games) << "\n";
         std::cout << "  Samples:\t" << collector.size() << "\n";
         std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
-                  << " (" << total_requests << " requests / " << total_batches << " batches)\n";
+                  << " (" << total_requests << " requests / " << total_batches << " batches)" << std::endl;
 
     } else {
         // Single-threaded path (original implementation)
@@ -962,7 +962,7 @@ int run_selfplay(const Config& config,
                           << " | Nodes: " << pool->allocated()
                           << " | Samples: " << collector.size()
                           << " | Avg moves: " << (total_moves / (game + 1))
-                          << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s\n";
+                          << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s"<< std::endl;
             }
 
             if ((game + 1) % config.games_per_checkpoint == 0 && !config.save_file.empty()) {
@@ -979,7 +979,7 @@ int run_selfplay(const Config& config,
         std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
         std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:   " << draws << "\n";
-        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << "\n";
+        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << std::endl;
     }
 
     // Save training samples
