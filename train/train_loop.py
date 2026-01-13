@@ -21,6 +21,7 @@ from pathlib import Path
 import torch
 
 from resnet import QuoridorValueNet, train
+from model_utils import compute_model_hash, find_samples_for_model
 
 
 def setup_logging(log_level: str) -> Path:
@@ -84,7 +85,7 @@ def get_next_iteration(samples_dir: str) -> int:
 def run_selfplay(tree_path: str, model_path: str, num_games: int,
                  simulations: int, num_threads: int,
                  temperature: float = 1.0, temp_drop_ply: int = 30,
-                 max_memory: int = 30) -> bool:
+                 max_memory: int = 30, model_id: str = "") -> bool:
     """Run self-play games using NN-only MCTS evaluation."""
     qbot_path = get_project_root() / "build" / "qbot"
 
@@ -112,6 +113,10 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         "--temp-drop", str(temp_drop_ply),
         "--max-memory", str(max_memory),
     ]
+
+    # Add model-id if provided
+    if model_id:
+        cmd.extend(["--model-id", model_id])
 
     logging.info(f"Running: {' '.join(cmd)}")
     logging.info(f"Playing {num_games} self-play games...")
@@ -172,13 +177,34 @@ def check_tree_has_games(tree_path: str) -> int:
         return 0
 
 
-def train_model(model: QuoridorValueNet, tree_path: str, epochs: int,
-                batch_size: int) -> bool:
-    """Train the model on the current tree."""
+def train_model(model: QuoridorValueNet, training_files: list[str], epochs: int,
+                batch_size: int, stream: bool = False) -> bool:
+    """
+    Train the model on one or more training files.
+
+    All files are concatenated into a single dataset for training,
+    ensuring the model sees samples from all files mixed together.
+
+    Args:
+        model: Model to train
+        training_files: List of .qsamples files to train on
+        epochs: Number of training epochs
+        batch_size: Batch size for training
+        stream: If False (default), load all into memory and shuffle.
+                If True, stream from disk (memory efficient, no shuffling).
+
+    Returns:
+        True if training succeeded
+    """
+    if not training_files:
+        logging.error("No training files provided")
+        return False
+
     logging.info(f"Training model for {epochs} epochs...")
 
     try:
-        train(model, tree_path, batch_size, epochs)
+        # Pass all files to train() - it will concatenate them into a single dataset
+        train(model, training_files, batch_size, epochs, stream)
         return True
     except Exception as e:
         logging.error(f"Error training model: {e}")
@@ -343,6 +369,9 @@ def main():
     # Options
     parser.add_argument('--skip-arena', action='store_true', dest='skip_arena',
                         help='Skip arena evaluation (always promote candidate)')
+    parser.add_argument('--stream', action='store_true',
+                        help='Stream training data from disk (memory efficient, no shuffling). '
+                             'Default: load all into memory and shuffle.')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         default='INFO', dest='log_level',
                         help='Logging level')
@@ -419,26 +448,38 @@ def main():
         logging.info("")
         logging.info(f"{'=' * 20} ITERATION {iteration} {'=' * 20}")
 
+        # Compute model hash for current_best model
+        try:
+            model_hash = compute_model_hash(str(current_best_pt))
+            logging.info(f"Current model hash: {model_hash}")
+        except Exception as e:
+            logging.error(f"Failed to compute model hash: {e}")
+            model_hash = ""
+
         tree_path = samples_dir / f"tree_{sample_num}.qbot"
 
         # Phase 1: Self-play
         logging.info(f"[Phase 1] Self-play ({args.games} games)...")
         if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
                             args.simulations, args.threads,
-                            args.temperature, args.temp_drop, args.max_memory):
+                            args.temperature, args.temp_drop, args.max_memory, model_hash):
             logging.error("Self-play failed, retrying iteration...")
             continue
 
-        # Derive .qsamples path from tree path
-        samples_path = tree_path.with_suffix('.qsamples')
-        if not samples_path.exists():
-            logging.error(f"Training samples not found at {samples_path}")
+        # Find all sample files for this model (including the one we just created)
+        # Pattern: tree_<iter#>_<modelhash>.qsamples
+        matching_samples = find_samples_for_model(str(samples_dir), model_hash)
+
+        if not matching_samples:
+            logging.error(f"No training samples found for model hash {model_hash}")
             logging.error("Self-play should generate .qsamples files automatically")
             continue
-        else:
-            sample_num += 1
 
-        logging.info(f"Using training samples: {samples_path}")
+        sample_num += 1
+
+        logging.info(f"Found {len(matching_samples)} sample file(s) for this model:")
+        for sp in matching_samples:
+            logging.info(f"  - {sp}")
 
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
@@ -449,7 +490,9 @@ def main():
             if torch.cuda.is_available():
                 model.cuda()
 
-        if not train_model(model, str(samples_path), args.epochs, args.batch_size):
+        # Train on all matching samples
+        training_files = [str(p) for p in matching_samples]
+        if not train_model(model, training_files, args.epochs, args.batch_size, args.stream):
             logging.error("Training failed, skipping iteration...")
             continue
 

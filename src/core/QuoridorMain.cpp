@@ -82,6 +82,9 @@ struct Config {
     int arena_games = 100;                       // Number of arena games
     float win_threshold = 0.55f;                 // Threshold to replace best model
 
+    // Model tracking
+    std::string model_id;                        // Model hash/identifier for sample file naming
+
     [[nodiscard]] static std::optional<Config> from_args(int argc, char* argv[]);
     void print(std::ostream& os = std::cout) const;
 };
@@ -133,7 +136,9 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         ("progressive", po::bool_switch(&config.progressive),
             "Use progressive expansion (on-demand child creation)")
         ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
-            "Max memory for node pool in GB (resets pool at 80%)");
+            "Max memory for node pool in GB (resets pool at 80%)")
+        ("model-id", po::value<std::string>(&config.model_id)->default_value(""),
+            "Model identifier/hash for sample file naming (tree_X_<model_id>.qsamples)");
 
     po::variables_map vm;
     try {
@@ -837,10 +842,15 @@ int run_selfplay(const Config& config,
     SelfPlayEngine engine(sp_config);
 
     // Determine samples file path (same as save_file but with .qsamples extension)
+    // If model_id is provided, append it: tree_X_<model_id>.qsamples
     std::string samples_file;
     if (!config.save_file.empty()) {
         std::filesystem::path p(config.save_file);
-        samples_file = (p.parent_path() / p.stem()).string() + ".qsamples";
+        std::string stem = p.stem().string();
+        if (!config.model_id.empty()) {
+            stem += "_" + config.model_id;
+        }
+        samples_file = (p.parent_path() / stem).string() + ".qsamples";
     }
 
     // Create training sample collector

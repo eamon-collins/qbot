@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from StateNode import QuoridorDataset, TrainingSampleDataset
+from StateNode import QuoridorDataset, TrainingSampleDataset, MultiFileTrainingSampleDataset
 
 # Action space:
 #   0-80:    pawn move to square (row * 9 + col)
@@ -147,13 +147,26 @@ def train_step(model, optimizer, data_batch):
     return loss.item(), value_loss.item(), policy_loss.item()
 
 
-def train(model, data_file: str, batch_size: int, num_epochs: int):
+def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, stream: bool = False):
     """
     Train the model on training data.
+
+    Args:
+        model: Neural network model to train
+        data_files: Single file path or list of file paths to train on
+        batch_size: Training batch size
+        num_epochs: Number of training epochs
+        stream: If False (default), load all samples into memory and shuffle.
+                If True, stream from disk (memory efficient, no shuffling).
 
     Supports two file formats:
     - .qsamples: Pre-computed training samples with MCTS visit distributions (preferred)
     - .qbot: Legacy tree format with uniform policy targets (via leopard)
+
+    When multiple .qsamples files are provided, they are concatenated into a single
+    dataset for training, which is useful for accumulated samples from the same model.
+
+    By default, loads all samples into memory and shuffles for better training.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
@@ -161,26 +174,42 @@ def train(model, data_file: str, batch_size: int, num_epochs: int):
     if torch.cuda.is_available():
         model.cuda()
 
+    # Normalize to list
+    if isinstance(data_files, str):
+        data_files = [data_files]
+
     # Auto-detect file format and load batches
     batches = []
-    if data_file.endswith('.qsamples'):
-        # New format: pre-computed training samples with MCTS visit distributions
-        logging.info(f"Loading .qsamples file: {data_file}")
-        with TrainingSampleDataset(data_file, batch_size) as dataset:
+
+    # Check if all files are .qsamples
+    all_qsamples = all(f.endswith('.qsamples') for f in data_files)
+
+    if all_qsamples and len(data_files) > 1:
+        # Multiple .qsamples files - use multi-file dataset
+        logging.info(f"Loading {len(data_files)} .qsamples files as concatenated dataset:")
+        with MultiFileTrainingSampleDataset(data_files, batch_size, stream) as dataset:
+            for batch in dataset.generate_batches():
+                batches.append(batch)
+    elif all_qsamples:
+        # Single .qsamples file
+        logging.info(f"Loading .qsamples file: {data_files[0]}")
+        with TrainingSampleDataset(data_files[0], batch_size, stream) as dataset:
             for batch in dataset.generate_batches():
                 batches.append(batch)
     else:
         # Legacy format: tree file processed via leopard
-        logging.info(f"Loading .qbot tree file: {data_file}")
-        with QuoridorDataset(data_file, batch_size) as dataset:
+        if len(data_files) > 1:
+            logging.warning("Multiple .qbot files not supported, using first file only")
+        logging.info(f"Loading .qbot tree file: {data_files[0]}")
+        with QuoridorDataset(data_files[0], batch_size) as dataset:
             for batch in dataset.generate_batches():
                 batches.append(batch)
 
     if not batches:
-        logging.error("No batches loaded from data file")
+        logging.error("No batches loaded from data files")
         return
 
-    logging.info(f"Loaded {len(batches)} batches from data file")
+    logging.info(f"Loaded {len(batches)} batches from data file(s)")
 
     for epoch in range(num_epochs):
         epoch_loss = 0
