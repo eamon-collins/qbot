@@ -296,9 +296,15 @@ def main():
     parser = argparse.ArgumentParser(description="Quoridor GUI with WebSocket server")
     parser.add_argument("--host", default="localhost", help="Host to bind to (default: localhost)")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on (default: 8765)")
+    parser.add_argument("--samples", type=str, help="View training samples from .qsamples file")
     args = parser.parse_args()
 
-    asyncio.run(main_async(args.host, args.port))
+    # If --samples flag is provided, run samples viewer instead
+    if args.samples:
+        from samples_viewer import main as samples_main
+        samples_main(args.samples)
+    else:
+        asyncio.run(main_async(args.host, args.port))
 
 
 if __name__ == "__main__":
