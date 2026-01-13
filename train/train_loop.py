@@ -409,18 +409,17 @@ def main():
             return
         save_checkpoint(model, str(current_best_weights))
 
-    # Find starting iteration
-    start_iter = get_next_iteration(str(samples_dir))
-    logging.info(f"Starting from iteration {start_iter}")
+    ## see what sample numbering we're starting on
+    sample_num = get_next_iteration(str(samples_dir))
 
     promotions = 0
     rejections = 0
 
-    for iteration in range(start_iter, start_iter + args.iterations):
+    for iteration in range(args.iterations):
         logging.info("")
         logging.info(f"{'=' * 20} ITERATION {iteration} {'=' * 20}")
 
-        tree_path = samples_dir / f"tree_{iteration}.qbot"
+        tree_path = samples_dir / f"tree_{sample_num}.qbot"
 
         # Phase 1: Self-play
         logging.info(f"[Phase 1] Self-play ({args.games} games)...")
@@ -436,6 +435,8 @@ def main():
             logging.error(f"Training samples not found at {samples_path}")
             logging.error("Self-play should generate .qsamples files automatically")
             continue
+        else:
+            sample_num += 1
 
         logging.info(f"Using training samples: {samples_path}")
 
