@@ -511,9 +511,12 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         if constexpr (is_inference_server_v<Inference>) {
             // InferenceServer: wait for futures
             for (auto& p : pending) {
-                float value = p.future.get();
-                pool[p.eval_node_idx].stats.set_nn_value(value);
-                backpropagate(pool, p.path, value);
+                float value = p.future.get();  // Current player's perspective
+                StateNode& eval_node = pool[p.eval_node_idx];
+                // Convert to P1's absolute perspective for storage and backprop
+                float p1_value = eval_node.is_p1_to_move() ? value : -value;
+                pool[p.eval_node_idx].stats.set_nn_value(p1_value);
+                backpropagate(pool, p.path, p1_value);
             }
         } else {
             // ModelInference: batch evaluate
@@ -540,8 +543,11 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                 }
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
-                    pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
-                    backpropagate(pool, pending[i].path, values[j]);
+                    StateNode& eval_node = pool[pending[i].eval_node_idx];
+                    // Convert from current player's perspective to P1's absolute perspective
+                    float p1_value = eval_node.is_p1_to_move() ? values[j] : -values[j];
+                    pool[pending[i].eval_node_idx].stats.set_nn_value(p1_value);
+                    backpropagate(pool, pending[i].path, p1_value);
                 }
             }
         }
@@ -675,7 +681,9 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
         }
     }
 
-    node.stats.set_nn_value(parent_eval.value);
+    // Convert value from current player's perspective to P1's absolute perspective
+    float p1_value = node.is_p1_to_move() ? parent_eval.value : -parent_eval.value;
+    node.stats.set_nn_value(p1_value);
 
     {
         ScopedTimer t(timers.generate_children);
@@ -757,8 +765,9 @@ void SelfPlayEngine::compute_priors_progressive(NodePool& pool, uint32_t node_id
         return;
     }
 
-    // Cache the NN value
-    node.stats.set_nn_value(eval.value);
+    // Cache the NN value - convert from current player's perspective to P1's absolute perspective
+    float p1_value = node.is_p1_to_move() ? eval.value : -eval.value;
+    node.stats.set_nn_value(p1_value);
 
     // Compute softmax over valid actions only
     float max_logit = -std::numeric_limits<float>::infinity();
