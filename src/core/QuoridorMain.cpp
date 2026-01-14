@@ -775,7 +775,7 @@ int run_arena(const Config& config) {
     std::cout << "  Current wins:   " << current_wins << "\n";
     std::cout << "  Draws:          " << draws << "\n";
     if (!std::isnan(draw_score)) {
-        std::cout << "  Draw Score:     " << draw_score << "\n";
+        std::cout << "  Draw Score:     " << avg_draw_score << "\n";
     }
     std::cout << "  Errors:         " << errors << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)

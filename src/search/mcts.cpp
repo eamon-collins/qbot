@@ -513,10 +513,9 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
             for (auto& p : pending) {
                 float value = p.future.get();  // Current player's perspective
                 StateNode& eval_node = pool[p.eval_node_idx];
-                // Convert to P1's absolute perspective for storage and backprop
-                float p1_value = eval_node.is_p1_to_move() ? value : -value;
-                pool[p.eval_node_idx].stats.set_nn_value(p1_value);
-                backpropagate(pool, p.path, p1_value);
+                // relative perspective always
+                pool[p.eval_node_idx].stats.set_nn_value(value);
+                backpropagate(pool, p.path, value);
             }
         } else {
             // ModelInference: batch evaluate
@@ -544,10 +543,9 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
                     StateNode& eval_node = pool[pending[i].eval_node_idx];
-                    // Convert from current player's perspective to P1's absolute perspective
-                    float p1_value = eval_node.is_p1_to_move() ? values[j] : -values[j];
-                    pool[pending[i].eval_node_idx].stats.set_nn_value(p1_value);
-                    backpropagate(pool, pending[i].path, p1_value);
+                    // keep relative perspective
+                    pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
+                    backpropagate(pool, pending[i].path, values[j]);
                 }
             }
         }
@@ -722,14 +720,17 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     }
 }
 
+//pass in value from relative perspective of first path node's child
 void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value) {
+    //assume that the last node in path is the node the value is relevant for, don't negate first
+    float node_value = value;
     for (size_t i = path.size(); i > 0; --i) {
         uint32_t idx = path[i - 1];
         StateNode& node = pool[idx];
 
-        // Value from this node's perspective
-        float node_value = node.is_p1_to_move() ? value : -value;
+        // Value from this node's perspective and negate for next up the tree
         node.stats.update(node_value);
+        node_value = -node_value;
     }
 }
 
@@ -1133,11 +1134,12 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         for (auto& p : pending) {
             float leaf_value = p.future.get();
             // leaf_value is from current player's perspective at eval_node
-            // Convert to P1's absolute perspective for backprop
-            StateNode& eval_node = pool[p.eval_node_idx];
-            float p1_value = eval_node.is_p1_to_move() ? leaf_value : -leaf_value;
             // NOTE: Don't cache NN values in arena - different models produce different values
-            backpropagate(pool, p.path, p1_value);
+            if (p.eval_node_idx != p.path.back()) {
+                leaf_value = -leaf_value;
+                std::cout << "ERROR last node in path isnt' eval node" << std::endl;
+            }
+            backpropagate(pool, p.path, leaf_value);
         }
         pending.clear();
     };
@@ -1169,7 +1171,7 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         StateNode& leaf = pool[leaf_idx];
 
         if (leaf.is_terminal()) {
-            // terminal_value is from P1's perspective
+            // terminal_value is -1
             backpropagate(pool, path, leaf.terminal_value);
             continue;
         }
@@ -1305,22 +1307,21 @@ SelfPlayResult SelfPlayEngine::arena_game(
         // Early termination for long games (scaled distance-based value)
         if (result.num_moves >= config_.max_moves_per_game) {
             // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
-            int draw_score = early_terminate_no_fences(pool[current]);
-            float game_value = std::clamp(draw_score , -10, 10) / 10.0 * config_.max_draw_reward;
+            float draw_score = early_terminate_no_fences(pool[current]);
+            float game_value = draw_score * config_.max_draw_reward;
             result.winner = 0;
             result.draw_score = draw_score;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
-                float node_value = n.is_p1_to_move() ? game_value : -game_value;
-                n.stats.update(node_value);
+                // n.stats.update(game_value);
             }
             return result;
         }
     }
 
     // Backpropagate final result
-    if (result.winner != 0) {
+    if (! result.error) {
         ScopedTimer t(timers.backprop);
         float value = static_cast<float>(result.winner);
         for (size_t i = game_path.size(); i > 0; --i) {

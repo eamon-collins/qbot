@@ -154,6 +154,7 @@ struct TrainingStats {
     const StateNode& node,
     const TreeBoundsConfig& bounds) noexcept
 {
+    return true;
     size_t current_bytes = pool.memory_usage_bytes();
     float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
 
@@ -303,7 +304,7 @@ inline void remove_virtual_loss(
 /// Uses path length to goal - whoever is closer wins
 /// Accounts for whose turn it is (tie goes to player about to move)
 /// @param node Game state to evaluate
-/// @return p2_dist - p1_dist to quantify by how much either is winning by.
+/// @return +1 if current player wins, -1 if other player wins
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
@@ -315,13 +316,12 @@ inline void remove_virtual_loss(
         return 0.0f;
     }
 
-    if (p1_dist < p2_dist) {
-        return 1;
-    } else if (p2_dist < p1_dist) {
-        return -1;
-    } else { //Tie breaker is whoever's move it is, as they will win with same length path
-        return node.is_p1_to_move() ? 1 : -1;
-    }
+    int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
+    int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
+
+    // current player moves first, they win if their distance to
+    // goal is less than OR equal to the opponent's distance
+    return (curr_dist <= opp_dist) ? 1.0f : -1.0f;
 }
 
 
@@ -330,7 +330,7 @@ inline void remove_virtual_loss(
 /// @param node Node to evaluate
 /// @param stats Training stats (updated with evaluation count)
 /// @param inference Optional NN inference engine
-/// @return Value in [-1, 1] from P1's perspective
+/// @return Value in current players perspective
 [[nodiscard]] inline float evaluate_leaf(
     const StateNode& node,
     TrainingStats& stats,
