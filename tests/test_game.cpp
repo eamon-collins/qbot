@@ -1,13 +1,16 @@
 #include "core/Game.h"
 #include "tree/StateNode.h"
+#include "search/mcts.h"
 #include "util/storage.h"
 #include "util/gui_client.h"
+#include "util/pathfinding.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
 #include <iostream>
 #include <queue>
 #include <vector>
+#include <random>
 
 using namespace qbot;
 
@@ -395,5 +398,155 @@ TEST_F(GameTest, SaveTreeForLeopard) {
         std::cout << "\nSaved " << game_->pool().allocated() << " nodes to " << path << std::endl;
         std::cout << "Found " << terminal_count << " terminal nodes (completed games)" << std::endl;
         std::cout << "Run: ./leopard " << path << std::endl;
+    }
+}
+
+TEST_F(GameTest, RandomPlayWithPathfinding) {
+    const bool verbose = is_single_test_run();
+
+    // Create initial game state
+    uint32_t root_idx = create_root();
+    StateNode* root = &game_->pool()[root_idx];
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+
+    int attempts = 0;
+    while (true) { //break below after too many attempts
+        uint32_t current_idx = root_idx;
+        StateNode* current = root;
+
+        int move_count = 0;
+        const int max_moves = 200;  // Safety limit
+
+        if (verbose) {
+            std::cout << "\n========== Random Play Until All Fences Spent ==========" << std::endl;
+        }
+
+        // Play randomly until both players have no fences left
+        while (move_count < max_moves) {
+            // Check if both players are out of fences
+            if (current->p1.fences == 0 && current->p2.fences == 0) {
+                if (verbose) {
+                    std::cout << "\nBoth players out of fences after " << move_count << " moves!" << std::endl;
+                }
+                break;
+            }
+
+            // Check if game is already over
+            if (current->is_terminal()) {
+                if (verbose) {
+                    std::cout << "\nGame ended (terminal state) after " << move_count << " moves" << std::endl;
+                }
+                break;
+            }
+
+            // Generate valid moves
+            auto valid_moves = current->generate_valid_moves();
+            if (valid_moves.empty()) {
+                if (verbose) {
+                    std::cout << "\nNo valid moves available!" << std::endl;
+                }
+                break;
+            }
+
+            // Pick a random move
+            std::uniform_int_distribution<> dis(0, valid_moves.size() - 1);
+            Move chosen_move = valid_moves[dis(gen)];
+
+            // Create child node with this move
+            uint32_t new_idx = game_->pool().allocate();
+            if (new_idx == NULL_NODE) {
+                if (verbose) {
+                    std::cout << "\nFailed to allocate node" << std::endl;
+                }
+                break;
+            }
+
+            game_->pool()[new_idx].init_from_parent(*current, chosen_move, current_idx);
+            current_idx = new_idx;
+            current = &game_->pool()[current_idx];
+            move_count++;
+        }
+
+        //Pathfinding tests
+        Pathfinder& pf = get_pathfinder();
+        bool both_can_reach = pf.check_paths(*current);
+        attempts++;
+        if (!both_can_reach && attempts >= 4) {
+            EXPECT_TRUE(both_can_reach) << " One or both players are blocked from their goal after 4 random attempts";
+            break;
+        } else if (!both_can_reach) {
+            continue;
+        }
+
+        auto p1_path = pf.find_path(current->fences, current->p1, 8);
+        auto p2_path = pf.find_path(current->fences, current->p2, 0);
+        // Use path_length method as well
+        int p1_length = pf.path_length(current->fences, current->p1, 8);
+        int p2_length = pf.path_length(current->fences, current->p2, 0);
+
+        // Verify consistency
+        if (p1_length >= 0 && !p1_path.empty()) {
+            EXPECT_EQ(p1_length, static_cast<int>(p1_path.size() )-1)
+                << "path_length() and find_path() should return same length for P1";
+        }
+        if (p2_length >= 0 && !p2_path.empty()) {
+            EXPECT_EQ(p2_length, static_cast<int>(p2_path.size())-1)
+                << "path_length() and find_path() should return same length for P2";
+        }
+
+        //check early term
+        int relative_winner = early_terminate_no_fences(*current);
+        int absolute_winner = current->is_p1_to_move() ? relative_winner : -relative_winner;
+
+        if (current->is_p1_to_move()) {
+            EXPECT_EQ(absolute_winner == 1, p1_length <= p2_length) << " if p1 wins on-turn, path equal or shorter";
+            EXPECT_EQ(absolute_winner == -1, p2_length < p1_length) << " if p2 wins off-turn, path shorter";
+        } else {
+            EXPECT_EQ(absolute_winner == 1, p1_length < p2_length) << " if p1 wins off-turn, path shorter";
+            EXPECT_EQ(absolute_winner == -1, p2_length <= p1_length) << " if p2 wins on-turn, path equal or shorter";
+        }
+
+        if (verbose) {
+            std::cout << "\n========== Final Game State ==========" << std::endl;
+            current->print_node();
+            std::cout << "\n========== Pathfinding Results ==========" << std::endl;
+
+            // P1's path to goal (row 8)
+            std::cout << "P1 path to goal (row 8): " << p1_path.size() - 1 << " moves" << std::endl;
+            if (!p1_path.empty()) {
+                std::cout << "  Path: ";
+                for (size_t i = 0; i < p1_path.size(); ++i) {
+                    if (i > 0) std::cout << " → ";
+                    std::cout << "(" << (int)p1_path[i].col << "," << (int)p1_path[i].row << ")";
+                }
+                std::cout << std::endl;
+            } else {
+                std::cout << "  BLOCKED - No path to goal!" << std::endl;
+            }
+
+            // P2's path to goal (row 0)
+            std::cout << "P2 path to goal (row 0): " << p2_path.size() - 1 << " moves" << std::endl;
+            if (!p2_path.empty()) {
+                std::cout << "  Path: ";
+                for (size_t i = 0; i < p2_path.size(); ++i) {
+                    if (i > 0) std::cout << " → ";
+                    std::cout << "(" << (int)p2_path[i].col << "," << (int)p2_path[i].row << ")";
+                }
+                std::cout << std::endl;
+            } else {
+                std::cout << "  BLOCKED - No path to goal!" << std::endl;
+            }
+
+            //early termination checks
+            std::cout << "Terminal_value: " << relative_winner << std::endl;
+            std::cout << "Winner: " << (absolute_winner == 1 ? "P1" : "P2") << std::endl;
+        }
+
+        // Basic validation
+        EXPECT_GT(move_count, 0) << "Should have made at least one move";
+        EXPECT_LE(current->p1.fences, NUM_FENCES);
+        EXPECT_LE(current->p2.fences, NUM_FENCES);
     }
 }
