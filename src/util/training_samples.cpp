@@ -182,8 +182,7 @@ void TrainingSampleCollector::add_sample(const NodePool& pool, uint32_t node_idx
     // Value target: game outcome from current player's perspective
     // game_outcome is from P1's perspective (+1 = P1 wins)
     // We need it from current player's perspective
-    bool is_p1_turn = node.is_p1_to_move();
-    sample.value = is_p1_turn ? game_outcome : -game_outcome;
+    sample.value = node.is_p1_to_move() ? game_outcome : -game_outcome;
 
     std::lock_guard lock(mutex_);
     samples_.push_back(sample);

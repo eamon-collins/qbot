@@ -334,23 +334,26 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
 
         // Check terminal conditions
         if (node.is_terminal()) {
-            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            // Convert from relative to absolute perspective
+            int relative_value = static_cast<int>(node.terminal_value);
+            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
         if (node.p1.row == 8) {
-            result.winner = 1;
-            node.set_terminal(1.0f);
-            break;
-        }
-        if (node.p2.row == 0) {
-            result.winner = -1;
+            result.winner = 1;  // P1 won
+            //terminal val always negative as person whose turn it would be just lost
             node.set_terminal(-1.0f);
             break;
         }
-        //Early termination for no fences left
+        if (node.p2.row == 0) {
+            result.winner = -1;  // P2 won
+            node.set_terminal(-1.0f);
+            break;
+        }
         if (node.p1.fences == 0 && node.p2.fences == 0) {
-            result.winner = early_terminate_no_fences(node);
-            node.set_terminal(static_cast<float>(result.winner));
+            int relative_winner = early_terminate_no_fences(node);
+            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+            node.set_terminal(static_cast<float>(relative_winner));
             break;
         }
 
@@ -442,20 +445,17 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         result.num_moves++;
 
 
-
-
-        // Early termination for long games (scaled distance-based value)
+        // Early termination for long games (scaled draw value)
         if (result.num_moves >= config_.max_moves_per_game) {
-            // draw score is just difference in moves to goal and returned for stats/promotion decisions
-            // game_value is scaled to be a lesser reward than a full win and backpropagated through the tree for NN.
-            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
-            int draw_score = early_terminate_no_fences(pool[current]);
-            float game_value = std::clamp(draw_score, -10, 10) / 10.0 * config_.max_draw_reward;
+            int relative_draw = early_terminate_no_fences(pool[current]);
+            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
-            result.draw_score = draw_score;
+            result.draw_score = absolute_draw;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
+                //converts back from absolute to relative as we go up
                 float node_value = n.is_p1_to_move() ? game_value : -game_value;
                 n.stats.update(node_value);
             }
@@ -475,6 +475,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         for (size_t i = game_path.size(); i > 0; --i) {
             uint32_t idx = game_path[i - 1];
             StateNode& n = pool[idx];
+            //conversion back to relative
             float node_value = n.is_p1_to_move() ? value : -value;
             n.stats.update(node_value);
         }
@@ -511,9 +512,7 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         if constexpr (is_inference_server_v<Inference>) {
             // InferenceServer: wait for futures
             for (auto& p : pending) {
-                float value = p.future.get();  // Current player's perspective
-                StateNode& eval_node = pool[p.eval_node_idx];
-                // relative perspective always
+                float value = p.future.get();  // Relative perspective
                 pool[p.eval_node_idx].stats.set_nn_value(value);
                 backpropagate(pool, p.path, value);
             }
@@ -542,8 +541,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                 }
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
-                    StateNode& eval_node = pool[pending[i].eval_node_idx];
-                    // keep relative perspective
                     pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
                     backpropagate(pool, pending[i].path, values[j]);
                 }
@@ -679,9 +676,8 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
         }
     }
 
-    // Convert value from current player's perspective to P1's absolute perspective
-    float p1_value = node.is_p1_to_move() ? parent_eval.value : -parent_eval.value;
-    node.stats.set_nn_value(p1_value);
+    // Cache NN value (already in relative perspective)
+    node.stats.set_nn_value(parent_eval.value);
 
     {
         ScopedTimer t(timers.generate_children);
@@ -720,17 +716,14 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     }
 }
 
-//pass in value from relative perspective of first path node's child
+/// Backpropagate value up path (value is relative to last node in path)
 void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value) {
-    //assume that the last node in path is the node the value is relevant for, don't negate first
     float node_value = value;
     for (size_t i = path.size(); i > 0; --i) {
         uint32_t idx = path[i - 1];
         StateNode& node = pool[idx];
-
-        // Value from this node's perspective and negate for next up the tree
         node.stats.update(node_value);
-        node_value = -node_value;
+        node_value = -node_value;  // Negate as we go up (alternating players)
     }
 }
 
@@ -766,9 +759,8 @@ void SelfPlayEngine::compute_priors_progressive(NodePool& pool, uint32_t node_id
         return;
     }
 
-    // Cache the NN value - convert from current player's perspective to P1's absolute perspective
-    float p1_value = node.is_p1_to_move() ? eval.value : -eval.value;
-    node.stats.set_nn_value(p1_value);
+    // Cache NN value (already in relative perspective)
+    node.stats.set_nn_value(eval.value);
 
     // Compute softmax over valid actions only
     float max_logit = -std::numeric_limits<float>::infinity();
@@ -1132,12 +1124,11 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         if (pending.empty()) return;
 
         for (auto& p : pending) {
-            float leaf_value = p.future.get();
-            // leaf_value is from current player's perspective at eval_node
-            // NOTE: Don't cache NN values in arena - different models produce different values
+            float leaf_value = p.future.get();  // Relative perspective at eval_node
+            // Don't cache NN values in arena - different models produce different values
             if (p.eval_node_idx != p.path.back()) {
                 leaf_value = -leaf_value;
-                std::cout << "ERROR last node in path isnt' eval node" << std::endl;
+                std::cout << "ERROR last nod in path isnt eval node" << std::endl;
             }
             backpropagate(pool, p.path, leaf_value);
         }
@@ -1171,7 +1162,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         StateNode& leaf = pool[leaf_idx];
 
         if (leaf.is_terminal()) {
-            // terminal_value is -1
             backpropagate(pool, path, leaf.terminal_value);
             continue;
         }
@@ -1228,21 +1218,24 @@ SelfPlayResult SelfPlayEngine::arena_game(
 
         // Check terminal
         if (node.is_terminal()) {
-            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            int relative_value = static_cast<int>(node.terminal_value);
+            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
         if (node.p1.row == 8) {
             result.winner = 1;
+            node.set_terminal(-1.0f);
             break;
         }
         if (node.p2.row == 0) {
             result.winner = -1;
+            node.set_terminal(-1.0f);
             break;
         }
-        //Early termination for no fences left
         if (node.p1.fences == 0 && node.p2.fences == 0) {
-            result.winner = early_terminate_no_fences(node);
-            node.set_terminal(static_cast<float>(result.winner));
+            int relative_winner = early_terminate_no_fences(node);
+            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+            node.set_terminal(static_cast<float>(relative_winner));
             break;
         }
 
@@ -1304,17 +1297,19 @@ SelfPlayResult SelfPlayEngine::arena_game(
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        // Early termination for long games (scaled distance-based value)
+        // Early termination for long games
         if (result.num_moves >= config_.max_moves_per_game) {
-            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
-            float draw_score = early_terminate_no_fences(pool[current]);
-            float game_value = draw_score * config_.max_draw_reward;
+            int relative_draw = early_terminate_no_fences(pool[current]);
+            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
-            result.draw_score = draw_score;
+            result.draw_score = absolute_draw;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
-                // n.stats.update(game_value);
+                //conversion back to relative
+                float node_value = n.is_p1_to_move() ? game_value : -game_value;
+                n.stats.update(node_value);
             }
             return result;
         }

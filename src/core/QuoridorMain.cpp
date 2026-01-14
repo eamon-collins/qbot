@@ -758,9 +758,7 @@ int run_arena(const Config& config) {
     float candidate_win_rate = decisive_games > 0
         ? static_cast<float>(candidate_wins) / decisive_games
         : 0.0f;
-	float avg_draw_score = draws > 0
-		? static_cast<float>(draw_score) / draws
-		: 0.0f;
+    float avg_draw_score = static_cast<float>(draw_score) / draws;
 	bool promote_candidate = candidate_win_rate >= config.win_threshold;
 	//Draw conditions, if no one won a single game, do likelihood of draw win > 60%, ie .2 in [-1,1]
 	float draw_promo_thresh = .2;
@@ -774,7 +772,7 @@ int run_arena(const Config& config) {
     std::cout << "  Candidate wins: " << candidate_wins << "\n";
     std::cout << "  Current wins:   " << current_wins << "\n";
     std::cout << "  Draws:          " << draws << "\n";
-    if (!std::isnan(draw_score)) {
+    if (!std::isnan(avg_draw_score)) {
         std::cout << "  Draw Score:     " << avg_draw_score << "\n";
     }
     std::cout << "  Errors:         " << errors << "\n";
@@ -936,7 +934,7 @@ int run_selfplay(const Config& config,
         std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
         std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:\t" << draws << "\n";
-        if (!std::isnan(draw_score)) {
+        if (!std::isnan(avg_draw_score)) {
             std::cout << "  Draw Score:     " << avg_draw_score << "\n";
         }
 		std::cout << "  Errors:\t" << errors << "\n";

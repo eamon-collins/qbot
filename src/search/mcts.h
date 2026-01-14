@@ -302,9 +302,7 @@ inline void remove_virtual_loss(
 
 /// Determine winner when both players are out of fences
 /// Uses path length to goal - whoever is closer wins
-/// Accounts for whose turn it is (tie goes to player about to move)
-/// @param node Game state to evaluate
-/// @return +1 if current player wins, -1 if other player wins
+/// @return +1 if current player wins, -1 if current player loses (relative perspective)
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
@@ -313,7 +311,7 @@ inline void remove_virtual_loss(
 
     if (p1_dist < 0 || p2_dist < 0) {
         // Should never happen - someone is blocked
-        return 0.0f;
+        return 0;
     }
 
     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
@@ -321,16 +319,15 @@ inline void remove_virtual_loss(
 
     // current player moves first, they win if their distance to
     // goal is less than OR equal to the opponent's distance
-    return (curr_dist <= opp_dist) ? 1.0f : -1.0f;
+    return (curr_dist <= opp_dist) ? 1 : -1;
 }
 
 
 /// Evaluate a leaf node
-/// Uses neural network if available, otherwise uses heuristic (path distance)
 /// @param node Node to evaluate
 /// @param stats Training stats (updated with evaluation count)
 /// @param inference Optional NN inference engine
-/// @return Value in current players perspective
+/// @return Value in relative perspective (+1 = current player winning, -1 = losing)
 [[nodiscard]] inline float evaluate_leaf(
     const StateNode& node,
     TrainingStats& stats,
