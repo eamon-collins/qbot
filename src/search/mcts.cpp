@@ -1269,7 +1269,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
         }
 
         if (policy.empty()) {
-            result.winner = 0;
+            result.error = true;;
             break;
         }
 
@@ -1293,7 +1293,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
         }
 
         if (next == NULL_NODE) {
-            result.winner = 0;
+            result.error = true;
             break;
         }
 

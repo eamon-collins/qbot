@@ -5,6 +5,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 from StateNode import QuoridorDataset, TrainingSampleDataset, MultiFileTrainingSampleDataset
 
@@ -178,26 +179,26 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
     if isinstance(data_files, str):
         data_files = [data_files]
 
-    # Auto-detect file format and load batches
-    batches = []
-
     # Check if all files are .qsamples
     all_qsamples = all(f.endswith('.qsamples') for f in data_files)
 
     if all_qsamples and len(data_files) > 1:
         # Multiple .qsamples files - use multi-file dataset
-        logging.info(f"Loading {len(data_files)} .qsamples files as concatenated dataset:")
-        with MultiFileTrainingSampleDataset(data_files, batch_size, stream) as dataset:
-            for batch in dataset.generate_batches():
-                batches.append(batch)
+        # with MultiFileTrainingSampleDataset(data_files, batch_size, stream) as dataset:
+        #     for batch in dataset.generate_batches():
+        #         batches.append(batch)
+        dataset = MultiFileTrainingSampleDataset(data_files, batch_size, stream)
     elif all_qsamples:
         # Single .qsamples file
         logging.info(f"Loading .qsamples file: {data_files[0]}")
-        with TrainingSampleDataset(data_files[0], batch_size, stream) as dataset:
-            for batch in dataset.generate_batches():
-                batches.append(batch)
+        # with TrainingSampleDataset(data_files[0], batch_size, stream) as dataset:
+        #     for batch in dataset.generate_batches():
+        #         batches.append(batch)
+        dataset = TrainingSampleDataset(data_files[0], batch_size, stream)
     else:
         # Legacy format: tree file processed via leopard
+        logging.warning("This method of training samples is deprecated, quitting")
+        sys.exit(-1)
         if len(data_files) > 1:
             logging.warning("Multiple .qbot files not supported, using first file only")
         logging.info(f"Loading .qbot tree file: {data_files[0]}")
@@ -205,11 +206,13 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
             for batch in dataset.generate_batches():
                 batches.append(batch)
 
-    if not batches:
-        logging.error("No batches loaded from data files")
-        return
-
-    logging.info(f"Loaded {len(batches)} batches from data file(s)")
+    train_loader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        num_workers=4,
+        pin_memory=True
+    )
 
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -217,7 +220,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         epoch_policy_loss = 0
         num_batches = 0
 
-        for batch in batches:
+        for batch in train_loader: #dataset.generate_batches():
             loss, v_loss, p_loss = train_step(model, optimizer, batch)
             epoch_loss += loss
             epoch_value_loss += v_loss
@@ -232,7 +235,8 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         avg_p_loss = epoch_policy_loss / num_batches
         scheduler.step(avg_loss)
 
-        logging.info(f"Epoch {epoch}, Avg Loss: {avg_loss:.4f} (value:{avg_v_loss:.4f} policy:{avg_p_loss:.4f})")
+        current_lr = optimizer.param_groups[0]['lr']
+        logging.info(f"Epoch {epoch}, LR: {current_lr:.6f}  Avg Loss: {avg_loss:.4f} (value:{avg_v_loss:.4f} policy:{avg_p_loss:.4f})")
 
 
 def main():

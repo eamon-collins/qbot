@@ -2,6 +2,7 @@ import ctypes
 import subprocess
 import numpy as np
 import torch
+import random
 from typing import Optional
 import logging
 from io import BufferedReader
@@ -73,6 +74,15 @@ class TrainingSampleDataset:
         self.stream = stream
         self.file = None
         self.samples = None  # In-memory storage when not streaming
+        self.__enter__()
+
+    def __len__(self):
+        # In-memory mode is required for this efficient shuffling
+        return len(self.samples) if self.samples else 0
+
+    def __getitem__(self, idx):
+        # Returns (state, policy, value) for a single index
+        return self.samples[idx]
 
     def __enter__(self):
         self.file = open(self.samples_path, 'rb')
@@ -226,7 +236,6 @@ class TrainingSampleDataset:
                 raise RuntimeError("Dataset not initialized with context manager")
 
             # Shuffle samples for better training
-            import random
             indices = list(range(len(self.samples)))
             random.shuffle(indices)
 
@@ -272,6 +281,15 @@ class MultiFileTrainingSampleDataset:
         self.stream = stream
         self.total_samples = 0
         self.samples = None  # In-memory storage when not streaming
+        self.__enter__()
+
+    def __len__(self):
+        # In-memory mode is required for this efficient shuffling
+        return len(self.samples) if self.samples else 0
+
+    def __getitem__(self, idx):
+        # Returns (state, policy, value) for a single index
+        return self.samples[idx]
 
     def __enter__(self):
         if not self.stream:
@@ -447,7 +465,6 @@ class MultiFileTrainingSampleDataset:
                 raise RuntimeError("Dataset not initialized with context manager")
 
             # Shuffle samples for better training
-            import random
             indices = list(range(len(self.samples)))
             random.shuffle(indices)
 

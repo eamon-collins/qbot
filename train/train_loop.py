@@ -369,6 +369,8 @@ def main():
     # Options
     parser.add_argument('--skip-arena', action='store_true', dest='skip_arena',
                         help='Skip arena evaluation (always promote candidate)')
+    parser.add_argument('--skip-selfplay', action='store_true', dest='skip_selfplay',
+                        help='Skip selfplay (use pre-existing qsample files from this model)')
     parser.add_argument('--stream', action='store_true',
                         help='Stream training data from disk (memory efficient, no shuffling). '
                              'Default: load all into memory and shuffle.')
@@ -459,12 +461,13 @@ def main():
         tree_path = samples_dir / f"tree_{sample_num}.qbot"
 
         # Phase 1: Self-play
-        logging.info(f"[Phase 1] Self-play ({args.games} games)...")
-        if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
-                            args.simulations, args.threads,
-                            args.temperature, args.temp_drop, args.max_memory, model_hash):
-            logging.error("Self-play failed, retrying iteration...")
-            continue
+        if not args.skip_selfplay:
+            logging.info(f"[Phase 1] Self-play ({args.games} games)...")
+            if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
+                                args.simulations, args.threads,
+                                args.temperature, args.temp_drop, args.max_memory, model_hash):
+                logging.error("Self-play failed, retrying iteration...")
+                continue
 
         # Find all sample files for this model (including the one we just created)
         # Pattern: tree_<iter#>_<modelhash>.qsamples
@@ -477,9 +480,6 @@ def main():
 
         sample_num += 1
 
-        logging.info(f"Found {len(matching_samples)} sample file(s) for this model:")
-        for sp in matching_samples:
-            logging.info(f"  - {sp}")
 
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
