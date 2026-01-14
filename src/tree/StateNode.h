@@ -231,6 +231,8 @@ struct EdgeStats {
     std::atomic<float> total_value{0.0f};  // W(s,a): sum of values from backpropagation
     std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
     float prior{0.0f};                     // P(s,a): policy prior (set once, read-only after)
+    float nn_value{0.0f};                  // Cached NN value (avoids re-evaluation)
+    std::atomic<bool> nn_evaluated{false}; // True if nn_value is valid (atomic for thread safety)
 
     EdgeStats() = default;
 
@@ -243,7 +245,27 @@ struct EdgeStats {
         : visits(other.visits.load(std::memory_order_relaxed))
         , total_value(other.total_value.load(std::memory_order_relaxed))
         , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
-        , prior(other.prior) {}
+        , prior(other.prior)
+        , nn_value(other.nn_value)
+        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed)) {}
+
+    /// Set cached NN value (thread-safe, only first setter wins)
+    void set_nn_value(float value) noexcept {
+        bool expected = false;
+        if (nn_evaluated.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            nn_value = value;
+        }
+    }
+
+    /// Check if we have a cached NN value
+    [[nodiscard]] bool has_nn_value() const noexcept {
+        return nn_evaluated.load(std::memory_order_acquire);
+    }
+
+    /// Get cached NN value (only valid if has_nn_value() is true)
+    [[nodiscard]] float get_nn_value() const noexcept {
+        return nn_value;
+    }
 
     /// Get Q(s,a) = W(s,a) / N(s,a) with first-play urgency
     [[nodiscard]] float Q(float fpu = 0.0f) const noexcept {
@@ -313,11 +335,33 @@ struct alignas(64) StateNode {
     // Edge statistics for this node (represents edge from parent)
     EdgeStats stats;
 
+    // === Progressive expansion support ===
+    // Disabled by default to reduce node size from 960 to ~100 bytes.
+    // Define QBOT_ENABLE_PROGRESSIVE to re-enable (needs fixing before use).
+    static constexpr int NUM_ACTIONS = 209;  // 81 pawn + 128 fence
+
+#ifdef QBOT_ENABLE_PROGRESSIVE
+    // Bitmask of valid actions (with pathfinding checked)
+    // Bit i is set if action index i is legal
+    std::array<uint32_t, 7> valid_action_mask{};  // 7 * 32 = 224 bits >= 209
+
+    // Cached policy priors for all actions (softmax-normalized, only valid where mask bit set)
+    std::array<float, NUM_ACTIONS> policy_priors{};
+
+    // Flags for progressive expansion state
+    std::atomic<bool> computing_mask{false};        // True while compute_valid_action_mask() is running
+    std::atomic<bool> valid_moves_computed{false};  // True after compute_valid_action_mask() completes
+    std::atomic<bool> priors_set{false};            // True after policy priors are assigned
+#endif
+
+    std::atomic<bool> inserting_child{false};       // Spinlock for thread-safe child list insertion
+
     // State flags
     uint8_t flags{0};
-    static constexpr uint8_t FLAG_EXPANDED   = 0x01;  // Children have been generated
-    static constexpr uint8_t FLAG_TERMINAL   = 0x02;  // Game over at this node
-    static constexpr uint8_t FLAG_P1_TO_MOVE = 0x04;  // Player 1's turn (else P2)
+    static constexpr uint8_t FLAG_EXPANDED     = 0x01;  // Children have been generated
+    static constexpr uint8_t FLAG_TERMINAL     = 0x02;  // Game over at this node
+    static constexpr uint8_t FLAG_P1_TO_MOVE   = 0x04;  // Player 1's turn (else P2)
+    static constexpr uint8_t FLAG_ON_GAME_PATH = 0x08;  // Node was visited in actual game
 
     // Terminal value (only valid if FLAG_TERMINAL is set)
     // +1.0 = P1 wins, -1.0 = P2 wins, 0.0 = draw (if applicable)
@@ -349,6 +393,16 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+
+        // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
+        for (auto& word : valid_action_mask) word = 0;
+        for (auto& p : policy_priors) p = 0.0f;
+        computing_mask.store(false, std::memory_order_relaxed);
+        valid_moves_computed.store(false, std::memory_order_relaxed);
+        priors_set.store(false, std::memory_order_relaxed);
+#endif
+        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     /// Initialize as child node from parent state with the given move applied
@@ -403,6 +457,16 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+
+        // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
+        for (auto& word : valid_action_mask) word = 0;
+        for (auto& p : policy_priors) p = 0.0f;
+        computing_mask.store(false, std::memory_order_relaxed);
+        valid_moves_computed.store(false, std::memory_order_relaxed);
+        priors_set.store(false, std::memory_order_relaxed);
+#endif
+        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     // Legacy init for backward compatibility with node pool
@@ -419,6 +483,15 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+        // Reset progressive expansion state
+#ifdef QBOT_ENABLE_PROGRESSIVE
+        for (auto& word : valid_action_mask) word = 0;
+        for (auto& p : policy_priors) p = 0.0f;
+        computing_mask.store(false, std::memory_order_relaxed);
+        valid_moves_computed.store(false, std::memory_order_relaxed);
+        priors_set.store(false, std::memory_order_relaxed);
+#endif
+        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     [[nodiscard]] bool is_expanded() const noexcept { return flags & FLAG_EXPANDED; }
@@ -431,6 +504,10 @@ struct alignas(64) StateNode {
         flags |= FLAG_TERMINAL;
         terminal_value = value;
     }
+
+    [[nodiscard]] bool is_on_game_path() const noexcept { return flags & FLAG_ON_GAME_PATH; }
+    void set_on_game_path() noexcept { flags |= FLAG_ON_GAME_PATH; }
+    void clear_on_game_path() noexcept { flags &= ~FLAG_ON_GAME_PATH; }
 
     /// Get current player reference
     [[nodiscard]] const Player& current_player() const noexcept {
@@ -487,12 +564,39 @@ struct alignas(64) StateNode {
     /// @return Child index, or NULL_NODE if move not found after expansion
     uint32_t find_or_create_child(Move move) noexcept;
 
+    // === Progressive expansion methods ===
+#ifdef QBOT_ENABLE_PROGRESSIVE
     /// Test a move for legality and add it as a child if valid
     /// Checks: move is legal, not already a child, fence doesn't block paths.
     /// Uses static pool() and this node's self_index.
     /// @param move The move to test and add
     /// @return Child index if added, or NULL_NODE if invalid/duplicate/allocation failed
     uint32_t test_and_add_move(Move move) noexcept;
+    /// Check if action index is valid (passes pathfinding)
+    [[nodiscard]] bool is_action_valid(int action_idx) const noexcept {
+        if (action_idx < 0 || action_idx >= NUM_ACTIONS) return false;
+        return (valid_action_mask[action_idx / 32] >> (action_idx % 32)) & 1;
+    }
+
+    /// Set action as valid in mask
+    void set_action_valid(int action_idx) noexcept {
+        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+            valid_action_mask[action_idx / 32] |= (1u << (action_idx % 32));
+        }
+    }
+
+    /// Get prior for an action (only valid if is_action_valid returns true)
+    [[nodiscard]] float get_action_prior(int action_idx) const noexcept {
+        return policy_priors[action_idx];
+    }
+
+    /// Compute valid action mask with pathfinding (thread-safe, only computed once)
+    void compute_valid_action_mask() noexcept;
+
+    /// Add a child for the given action index (skips pathfinding - trusts mask)
+    /// @return Child index if added/found, or NULL_NODE if invalid/allocation failed
+    uint32_t add_child_for_action(int action_idx) noexcept;
+#endif
 };
 
 // Note: With full game state, size is larger than 64 bytes

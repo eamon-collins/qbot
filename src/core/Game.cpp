@@ -206,7 +206,8 @@ Move Game::select_best_move(uint32_t node_idx) {
         uint32_t child_idx = current.first_child;
         while (child_idx != NULL_NODE) {
             StateNode& child = (*pool_)[child_idx];
-            float score = model_->evaluate_node(&child);
+            auto result = model_->evaluate_node(&child);
+            float score = result.value;
 
             bool dominated = maximize ? (score > best_score) : (score < best_score);
             if (dominated) {

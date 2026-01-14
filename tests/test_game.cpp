@@ -224,49 +224,6 @@ TEST_F(GameTest, BuildTreeTerminalNodesNotExpanded) {
     }
 }
 
-TEST_F(GameTest, BenchmarkBuildTree) {
-    // Use larger pool for benchmark
-    GameConfig config;
-    config.pool_capacity = 5'000'000;
-    game_ = std::make_unique<Game>(config);
-
-    uint32_t root = create_root();
-
-    constexpr float branching_factor = 0.5f;
-    constexpr std::time_t time_limit_sec = 3;
-    constexpr size_t node_limit = 5'000'000;
-
-    auto start = std::chrono::high_resolution_clock::now();
-    size_t created = game_->build_tree(root, branching_factor, time_limit_sec, node_limit);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-
-    double nodes_per_sec = (created * 1'000'000.0) / duration_us;
-    double us_per_node = static_cast<double>(duration_us) / created;
-
-    if (is_single_test_run()) {
-        std::cout << "\n========== BENCHMARK: build_tree ==========" << std::endl;
-        std::cout << "Parameters:" << std::endl;
-        std::cout << "  branching_factor: " << branching_factor << std::endl;
-        std::cout << "  time_limit:       " << time_limit_sec << " sec" << std::endl;
-        std::cout << "  node_limit:       " << node_limit << std::endl;
-        std::cout << "Results:" << std::endl;
-        std::cout << "  Nodes created:    " << created << std::endl;
-        std::cout << "  Time elapsed:     " << duration_ms << " ms" << std::endl;
-        std::cout << "  Throughput:       " << static_cast<int>(nodes_per_sec) << " nodes/sec" << std::endl;
-        std::cout << "  Per-node time:    " << us_per_node << " µs/node" << std::endl;
-        std::cout << "============================================\n" << std::endl;
-    }
-
-    EXPECT_GT(created, 0) << "Should create nodes";
-
-    // Verify tree integrity
-    size_t counted = count_tree_nodes(root);
-    EXPECT_EQ(counted, created + 1) << "Tree count should match";
-}
-
 TEST_F(GameTest, BuildTreeUntilWinAndPrintPath) {
     // Use larger pool for this test
     GameConfig config;

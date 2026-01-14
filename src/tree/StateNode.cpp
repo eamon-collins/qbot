@@ -1,6 +1,7 @@
 #include "StateNode.h"
 #include "node_pool.h"
 #include "../util/pathfinding.h"
+#include "../inference/inference.h"
 
 #include <iostream>
 #include <sstream>
@@ -98,20 +99,21 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     const uint8_t r = curr.row;
     const uint8_t c = curr.col;
 
-    // Optimization: when both players are out of fences, the game is deterministic.
-    // Each player should just race to their goal via shortest path.
-    if (p1.fences == 0 && p2.fences == 0) {
-        if (out_fence_count) *out_fence_count = 0;
-
-        Pathfinder& pf = get_pathfinder();
-        uint8_t goal_row = is_p1_to_move() ? 8 : 0;
-        auto path = pf.find_path(fences, curr, goal_row);
-
-        if (path.size() > 1) {
-            moves.push_back(Move::pawn(path[1].row, path[1].col));
-        }
-        return moves;
-    }
+    // // When both players are out of fences, the game is deterministic -
+    // // each player should just race to their goal via shortest path.
+    // // This significantly speeds up endgame by reducing branching factor to 1.
+    // if (p1.fences == 0 && p2.fences == 0) {
+    //     if (out_fence_count) *out_fence_count = 0;
+    //
+    //     Pathfinder& pf = get_pathfinder();
+    //     uint8_t goal_row = is_p1_to_move() ? 8 : 0;
+    //     auto path = pf.find_path(fences, curr, goal_row);
+    //
+    //     if (path.size() > 1) {
+    //         moves.push_back(Move::pawn(path[1].row, path[1].col));
+    //     }
+    //     return moves;
+    // }
 
     moves.reserve(140);  // Rough upper bound: ~4 pawn + ~128 fence moves max
 
@@ -339,33 +341,43 @@ uint32_t StateNode::find_or_create_child(Move move) noexcept {
     return NULL_NODE;
 }
 
+// Progressive expansion functions - disabled by default to reduce node size.
+// Define QBOT_ENABLE_PROGRESSIVE to re-enable.
+#ifdef QBOT_ENABLE_PROGRESSIVE
+
 uint32_t StateNode::test_and_add_move(Move move) noexcept {
     NodePool& p = pool();
 
-    // Check if move already exists among children
+    // Ensure valid moves mask is computed (does pathfinding once)
+    compute_valid_action_mask();
+
+    // Check mask instead of re-doing pathfinding
+    int action_idx = move_to_action_index(move);
+    if (!is_action_valid(action_idx)) {
+        return NULL_NODE;
+    }
+
+    // Acquire spinlock for thread-safe child list manipulation
+    bool expected = false;
+    while (!inserting_child.compare_exchange_weak(expected, true,
+            std::memory_order_acquire, std::memory_order_relaxed)) {
+        expected = false;
+    }
+
+    // Check if move already exists among children (must check under lock)
     uint32_t child = first_child;
     while (child != NULL_NODE) {
         if (p[child].move == move) {
+            inserting_child.store(false, std::memory_order_release);
             return NULL_NODE;  // Already exists
         }
         child = p[child].next_sibling;
     }
 
-    if (!is_move_valid(move)) {
-        return NULL_NODE;
-    }
-
-    // For fence moves, validate pathfinding
-    if (move.is_fence()) {
-        Pathfinder& pf = get_pathfinder();
-        if (!pf.check_paths_with_fence(*this, move)) {
-            return NULL_NODE;
-        }
-    }
-
-    // Allocate and initialize the child
+    // Allocate and initialize the child (no pathfinding needed - mask already validated)
     uint32_t child_idx = p.allocate();
     if (child_idx == NULL_NODE) {
+        inserting_child.store(false, std::memory_order_release);
         return NULL_NODE;
     }
 
@@ -375,7 +387,92 @@ uint32_t StateNode::test_and_add_move(Move move) noexcept {
     p[child_idx].next_sibling = first_child;
     first_child = child_idx;
 
+    inserting_child.store(false, std::memory_order_release);
     return child_idx;
 }
+
+void StateNode::compute_valid_action_mask() noexcept {
+    // Fast path: already computed
+    if (valid_moves_computed.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Try to claim the right to compute
+    bool expected = false;
+    if (!computing_mask.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // Another thread is computing - spin until done
+        while (!valid_moves_computed.load(std::memory_order_acquire)) {
+            // Busy wait (could add pause/yield for better performance)
+        }
+        return;
+    }
+
+    // We won the CAS - compute the mask
+    for (auto& word : valid_action_mask) word = 0;
+
+    std::vector<Move> moves = generate_valid_moves();
+    Pathfinder& pf = get_pathfinder();
+
+    for (const Move& m : moves) {
+        if (m.is_fence() && !pf.check_paths_with_fence(*this, m)) {
+            continue;
+        }
+        int action_idx = move_to_action_index(m);
+        set_action_valid(action_idx);
+    }
+
+    // Mark as complete - other threads waiting on this will now see the full mask
+    valid_moves_computed.store(true, std::memory_order_release);
+}
+
+uint32_t StateNode::add_child_for_action(int action_idx) noexcept {
+    if (!is_action_valid(action_idx)) {
+        return NULL_NODE;
+    }
+
+    Move move = action_index_to_move(action_idx);
+    if (!move.is_valid()) {
+        return NULL_NODE;
+    }
+
+    NodePool& p = pool();
+
+    // Acquire spinlock for thread-safe child list manipulation
+    bool expected = false;
+    while (!inserting_child.compare_exchange_weak(expected, true,
+            std::memory_order_acquire, std::memory_order_relaxed)) {
+        expected = false;
+    }
+
+    // Check if child already exists (must check under lock)
+    uint32_t child = first_child;
+    while (child != NULL_NODE) {
+        if (p[child].move == move) {
+            inserting_child.store(false, std::memory_order_release);
+            return child;  // Already exists, return it
+        }
+        child = p[child].next_sibling;
+    }
+
+    // Allocate new child (no pathfinding needed - mask already validated)
+    uint32_t child_idx = p.allocate();
+    if (child_idx == NULL_NODE) {
+        inserting_child.store(false, std::memory_order_release);
+        return NULL_NODE;
+    }
+
+    p[child_idx].init_from_parent(*this, move, self_index);
+    p[child_idx].stats.prior = policy_priors[action_idx];
+
+    // Insert at head of children list
+    p[child_idx].next_sibling = first_child;
+    first_child = child_idx;
+
+    inserting_child.store(false, std::memory_order_release);
+    return child_idx;
+}
+
+#endif // QBOT_ENABLE_PROGRESSIVE
 
 } // namespace qbot

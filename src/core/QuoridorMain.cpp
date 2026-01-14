@@ -11,6 +11,7 @@
 #include "../util/storage.h"
 #include "../util/gui_client.h"
 #include "../util/pathfinding.h"
+#include "../util/timer.h"
 #include "../search/mcts.h"
 #include "Game.h"
 
@@ -24,6 +25,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -47,10 +49,9 @@ void signal_handler(int signum) {
 
 enum class RunMode {
     Interactive,    // Play against human
-    Train,          // Self-play training
-    // Future modes:
-    // Analyze,     // Analyze a position
-    // Benchmark,   // Performance benchmarking
+    Train,          // Tree building (rollout-based)
+    SelfPlay,       // AlphaZero-style self-play with NN
+    Arena,          // Model vs model evaluation
 };
 
 /// Application configuration parsed from command line
@@ -67,6 +68,23 @@ struct Config {
     // Training-specific options
     int training_iterations = 10000;             // Total training iterations
     int simulations_per_move = 800;              // MCTS simulations per move
+
+    // Self-play specific options
+    int num_games = 1000;                        // Number of self-play games
+    int batch_size = 256;                        // Inference batch size for GPU
+    float temperature = 1.0f;                    // Softmax temperature
+    int temperature_drop_ply = 30;               // Ply to drop temperature to 0
+    bool progressive = false;                    // Progressive expansion mode
+    size_t max_memory_gb = 40;                   // Max memory for node pool in GB
+
+    // Arena specific options
+    std::string candidate_model;                 // Candidate model to evaluate
+    std::string best_model_path = "model/current_best.pt";  // Path to save best model
+    int arena_games = 100;                       // Number of arena games
+    float win_threshold = 0.55f;                 // Threshold to replace best model
+
+    // Model tracking
+    std::string model_id;                        // Model hash/identifier for sample file naming
 
     [[nodiscard]] static std::optional<Config> from_args(int argc, char* argv[]);
     void print(std::ostream& os = std::cout) const;
@@ -89,15 +107,39 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         ("model,m", po::value<std::string>(&config.model_file)->default_value(""),
             "Load neural network model from file")
         ("train,b", po::bool_switch(),
-            "Run in training mode (self-play)")
+            "Run in tree-building mode (rollout-based)")
+        ("selfplay", po::bool_switch(),
+            "Run in self-play mode (NN-only, complete games)")
+        ("arena", po::bool_switch(),
+            "Run arena mode: evaluate candidate vs current model")
+        ("candidate", po::value<std::string>(&config.candidate_model)->default_value(""),
+            "Candidate model path (for arena mode)")
+        ("best-model", po::value<std::string>(&config.best_model_path)->default_value("model/current_best.pt"),
+            "Path to save best model (for arena mode)")
+        ("arena-games", po::value<int>(&config.arena_games)->default_value(100),
+            "Number of games for arena evaluation")
+        ("win-threshold", po::value<float>(&config.win_threshold)->default_value(0.55f),
+            "Win rate threshold to replace best model")
         ("verbose,v", po::bool_switch(&config.verbose),
             "Enable verbose output")
-        ("games,g", po::value<int>(&config.games_per_checkpoint)->default_value(100),
-            "Games per checkpoint in training")
+        ("games,g", po::value<int>(&config.num_games)->default_value(1000),
+            "Number of self-play games")
+        ("batch-size,B", po::value<int>(&config.batch_size)->default_value(256),
+            "Inference batch size for GPU (higher = better GPU utilization)")
         ("iterations,i", po::value<int>(&config.training_iterations)->default_value(10000),
-            "Training iterations")
+            "Training iterations (tree-building mode)")
         ("simulations,n", po::value<int>(&config.simulations_per_move)->default_value(800),
-            "MCTS simulations per move");
+            "MCTS simulations per move")
+        ("temperature", po::value<float>(&config.temperature)->default_value(1.0f),
+            "Softmax temperature for move selection")
+        ("temp-drop", po::value<int>(&config.temperature_drop_ply)->default_value(30),
+            "Ply to drop temperature to 0")
+        ("progressive", po::bool_switch(&config.progressive),
+            "Use progressive expansion (on-demand child creation)")
+        ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
+            "Max memory for node pool in GB (resets pool at 80%)")
+        ("model-id", po::value<std::string>(&config.model_id)->default_value(""),
+            "Model identifier/hash for sample file naming (tree_X_<model_id>.qsamples)");
 
     po::variables_map vm;
     try {
@@ -113,7 +155,15 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         return std::nullopt;
     }
 
-    config.mode = vm["train"].as<bool>() ? RunMode::Train : RunMode::Interactive;
+    if (vm["arena"].as<bool>()) {
+        config.mode = RunMode::Arena;
+    } else if (vm["selfplay"].as<bool>()) {
+        config.mode = RunMode::SelfPlay;
+    } else if (vm["train"].as<bool>()) {
+        config.mode = RunMode::Train;
+    } else {
+        config.mode = RunMode::Interactive;
+    }
 
     // Validate
     if (config.player != 1 && config.player != 2) {
@@ -130,7 +180,11 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
 
 void Config::print(std::ostream& os) const {
     os << "Configuration:\n";
-    os << "  Mode:           " << (mode == RunMode::Train ? "Training" : "Interactive") << "\n";
+    const char* mode_str = "Interactive";
+    if (mode == RunMode::Train) mode_str = "Tree-building";
+    else if (mode == RunMode::SelfPlay) mode_str = "Self-play";
+    else if (mode == RunMode::Arena) mode_str = "Arena";
+    os << "  Mode:           " << mode_str << "\n";
     os << "  Player:         " << player << "\n";
     os << "  Threads:        " << num_threads << "\n";
     os << "  Save file:      " << save_file << "\n";
@@ -142,8 +196,21 @@ void Config::print(std::ostream& os) const {
     }
     os << "  Verbose:        " << (verbose ? "yes" : "no") << "\n";
     if (mode == RunMode::Train) {
-        os << "  Games/checkpoint: " << games_per_checkpoint << "\n";
         os << "  Iterations:     " << training_iterations << "\n";
+        os << "  Sims/move:      " << simulations_per_move << "\n";
+    }
+    if (mode == RunMode::SelfPlay) {
+        os << "  Games:          " << num_games << "\n";
+        os << "  Sims/move:      " << simulations_per_move << "\n";
+        os << "  Temperature:    " << temperature << "\n";
+        os << "  Temp drop ply:  " << temperature_drop_ply << "\n";
+    }
+    if (mode == RunMode::Arena) {
+        os << "  Current model:  " << model_file << "\n";
+        os << "  Candidate:      " << candidate_model << "\n";
+        os << "  Best model:     " << best_model_path << "\n";
+        os << "  Arena games:    " << arena_games << "\n";
+        os << "  Win threshold:  " << (win_threshold * 100) << "%\n";
         os << "  Sims/move:      " << simulations_per_move << "\n";
     }
 }
@@ -196,6 +263,26 @@ bool save_tree(const NodePool& pool, uint32_t root, const std::string& path) {
         auto file_size = std::filesystem::file_size(path);
         std::cout << "  Saved " << pool.allocated() << " nodes ("
                   << file_size / 1024 << " KB) in " << ms << " s\n";
+        return true;
+    } else {
+        std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
+        return false;
+    }
+}
+
+/// Save only nodes that were part of actual games (pruned)
+bool save_tree_pruned(const NodePool& pool, uint32_t root, const std::string& path) {
+    std::cout << "Saving pruned tree to: " << path << "\n";
+
+    auto start = std::chrono::steady_clock::now();
+    auto result = TreeStorage::save_pruned(path, pool, root);
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+
+    if (result.has_value()) {
+        auto file_size = std::filesystem::file_size(path);
+        std::cout << "  Pruned " << pool.allocated() << " -> " << result.value()
+                  << " nodes (" << file_size / 1024 << " KB) in " << ms << " s\n";
         return true;
     } else {
         std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
@@ -261,7 +348,7 @@ int run_interactive(const Config& config,
         float score = current.stats.Q(0.0f);
 #ifdef QBOT_ENABLE_INFERENCE
         if (model && model->is_ready()) {
-            score = model->evaluate_node(&current);
+            score = model->evaluate_node(&current).value;
         }
 #endif
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
@@ -420,6 +507,514 @@ int run_training(const Config& config,
     return 0;
 }
 
+#ifdef QBOT_ENABLE_INFERENCE
+
+/// Play a single game between two models
+/// @param model_p1 Model playing as Player 1
+/// @param model_p2 Model playing as Player 2
+/// @param simulations MCTS simulations per move
+/// @return 1 if P1 wins, -1 if P2 wins, 0 if draw
+int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simulations) {
+    // Create fresh tree for this game
+    NodePool pool;
+    uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
+    pool[root].init_root(true);  // P1 starts
+
+    // Configure for deterministic play (temperature=0)
+    SelfPlayConfig sp_config;
+    sp_config.simulations_per_move = simulations;
+    sp_config.temperature = 0.0f;  // Deterministic
+    sp_config.stochastic = false;
+
+    uint32_t current = root;
+    int num_moves = 0;
+
+    while (current != NULL_NODE && num_moves < 500) {
+        StateNode& node = pool[current];
+
+        // Check for terminal
+        if (node.is_terminal()) {
+            return (node.terminal_value > 0) ? 1 : -1;
+        }
+        if (node.p1.row == 8) return 1;
+        if (node.p2.row == 0) return -1;
+
+        // Select which model to use based on whose turn it is
+        ModelInference& current_model = node.is_p1_to_move() ? model_p1 : model_p2;
+
+        // Expand if needed
+        if (!node.is_expanded()) {
+            // Get policy from parent's perspective using current player's model
+            EvalResult parent_eval = current_model.evaluate_node(&node);
+
+            node.generate_valid_children();
+            if (!node.has_children()) return 0;  // Error
+
+            // Set priors from parent's policy logits (softmax over legal moves only)
+            std::vector<std::pair<uint32_t, int>> child_actions;
+            float max_logit = -std::numeric_limits<float>::infinity();
+
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                int action_idx = move_to_action_index(pool[child].move);
+                if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+                    child_actions.emplace_back(child, action_idx);
+                    max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
+                }
+                child = pool[child].next_sibling;
+            }
+
+            if (!child_actions.empty()) {
+                float sum_exp = 0.0f;
+                std::vector<float> exp_logits(child_actions.size());
+                for (size_t i = 0; i < child_actions.size(); ++i) {
+                    int action_idx = child_actions[i].second;
+                    exp_logits[i] = std::exp(parent_eval.policy[action_idx] - max_logit);
+                    sum_exp += exp_logits[i];
+                }
+
+                for (size_t i = 0; i < child_actions.size(); ++i) {
+                    uint32_t child_idx = child_actions[i].first;
+                    pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
+                }
+            }
+        }
+
+        // Run MCTS iterations
+        for (int i = 0; i < simulations; ++i) {
+            // Selection
+            std::vector<uint32_t> path;
+            uint32_t cur = current;
+            while (cur != NULL_NODE) {
+                path.push_back(cur);
+                StateNode& n = pool[cur];
+                if (n.is_terminal() || !n.has_children()) break;
+
+                // Select best child
+                uint32_t best_child = NULL_NODE;
+                float best_score = -std::numeric_limits<float>::infinity();
+                uint32_t parent_visits = n.stats.visits.load(std::memory_order_relaxed);
+
+                uint32_t c = n.first_child;
+                while (c != NULL_NODE) {
+                    float score = puct_score(pool[c].stats, parent_visits, 1.5f, 0.0f);
+                    if (score > best_score) {
+                        best_score = score;
+                        best_child = c;
+                    }
+                    c = pool[c].next_sibling;
+                }
+                cur = best_child;
+            }
+
+            if (path.empty()) continue;
+
+            // Evaluate leaf
+            uint32_t leaf = path.back();
+            StateNode& leaf_node = pool[leaf];
+            float p1_value;  // Value from P1's absolute perspective
+            if (leaf_node.is_terminal()) {
+                // terminal_value is already from P1's perspective
+                p1_value = leaf_node.terminal_value;
+            } else {
+                // Evaluate with the model for the player at this position
+                ModelInference& eval_model = leaf_node.is_p1_to_move() ? model_p1 : model_p2;
+                float leaf_value = eval_model.evaluate_node(&leaf_node).value;
+                // leaf_value is from current player's perspective, convert to P1's
+                p1_value = leaf_node.is_p1_to_move() ? leaf_value : -leaf_value;
+            }
+
+            // Backpropagate using P1's absolute perspective
+            for (size_t j = path.size(); j > 0; --j) {
+                StateNode& n = pool[path[j-1]];
+                // Convert P1's perspective to this node's current player's perspective
+                float node_value = n.is_p1_to_move() ? p1_value : -p1_value;
+                n.stats.update(node_value);
+            }
+        }
+
+        // Select best move (deterministic - highest visit count)
+        uint32_t best_child = NULL_NODE;
+        uint32_t best_visits = 0;
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
+            if (visits > best_visits) {
+                best_visits = visits;
+                best_child = child;
+            }
+            child = pool[child].next_sibling;
+        }
+
+        if (best_child == NULL_NODE) return 0;  // Error
+
+        current = best_child;
+        num_moves++;
+    }
+
+    return 0;  // Draw (too many moves)
+}
+
+
+/// Run arena evaluation: candidate model vs current model
+int run_arena(const Config& config) {
+    std::cout << "\n=== Arena Mode ===\n";
+
+    // Validate inputs
+    if (config.model_file.empty()) {
+        std::cerr << "Error: Current model required (-m)\n";
+        return 1;
+    }
+    if (config.candidate_model.empty()) {
+        std::cerr << "Error: Candidate model required (--candidate)\n";
+        return 1;
+    }
+
+    std::cout << "Loading current model: " << config.model_file << "\n";
+    std::cout << "Loading candidate model: " << config.candidate_model << "\n";
+
+    std::cout << "\nStarting arena evaluation...\n";
+    std::cout << "  Games: " << config.arena_games << "\n";
+    std::cout << "  Threads: " << config.num_threads << "\n";
+    std::cout << "  Sims/move: " << config.simulations_per_move << "\n";
+    std::cout << "  Temperature: " << config.temperature << " (drops at ply " << config.temperature_drop_ply << ")\n";
+    std::cout << "  Win threshold: " << (config.win_threshold * 100) << "%\n\n";
+
+    // Create shared tree for all arena games
+    NodePool pool;
+    uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
+    pool[root].init_root(true);  // P1 starts
+
+    // Configure self-play engine for arena play (uses temperature from command line)
+    SelfPlayConfig sp_config;
+    sp_config.simulations_per_move = config.simulations_per_move;
+    sp_config.temperature = config.temperature;
+    sp_config.temperature_drop_ply = config.temperature_drop_ply;
+    sp_config.stochastic = true;  // Use stochastic selection when temperature > 0
+
+    SelfPlayEngine engine(sp_config);
+
+    // Create inference servers for both models
+    InferenceServerConfig server_config;
+    server_config.batch_size = config.batch_size;
+    server_config.max_wait_ms = 0.1;
+
+    // Candidate server (will be P1 in even games, tracked as p1_wins)
+    InferenceServer candidate_server(config.candidate_model, server_config);
+    candidate_server.start();
+
+    // Current model server (will be P2 in even games, tracked as p2_wins)
+    InferenceServer current_server(config.model_file, server_config);
+    current_server.start();
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // Progress callback
+    auto checkpoint_callback = [&config, &start_time](const MultiGameStats& stats, const NodePool& p) {
+        int completed = stats.games_completed.load(std::memory_order_relaxed);
+        int cw = stats.p1_wins.load(std::memory_order_relaxed);   // candidate wins
+        int curr = stats.p2_wins.load(std::memory_order_relaxed); // current wins
+        int d = stats.draws.load(std::memory_order_relaxed);
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        double games_per_sec = elapsed > 0 ? static_cast<double>(completed) / elapsed : 0;
+
+        int decisive = cw + curr;
+        float rate = decisive > 0 ? static_cast<float>(cw) / decisive : 0.0f;
+
+        std::cout << "[" << completed << "/" << config.arena_games << "] "
+                  << "Candidate: " << cw << ", Current: " << curr
+                  << ", Draws: " << d
+                  << " | Win rate: " << std::fixed << std::setprecision(1)
+                  << (rate * 100) << "%"
+                  << " | " << std::setprecision(2) << games_per_sec << " g/s"
+                  << " | Nodes: " << p.allocated() << "\n";
+    };
+
+    MultiGameStats stats;
+    engine.run_multi_arena(
+        pool, root,
+        candidate_server, current_server,
+        config.arena_games, config.num_threads,
+        stats, checkpoint_callback, 10);
+
+    candidate_server.stop();
+    current_server.stop();
+
+    // Extract results: p1_wins = candidate wins, p2_wins = current wins
+    int candidate_wins = stats.p1_wins.load(std::memory_order_relaxed);
+    int current_wins = stats.p2_wins.load(std::memory_order_relaxed);
+    int draws = stats.draws.load(std::memory_order_relaxed);
+    int errors = stats.errors.load(std::memory_order_relaxed);
+	int draw_score = stats.draw_score.load(std::memory_order_relaxed);
+
+
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    // Calculate final win rate and draw-weighted rate
+    int decisive_games = candidate_wins + current_wins;
+    float candidate_win_rate = decisive_games > 0
+        ? static_cast<float>(candidate_wins) / decisive_games
+        : 0.0f;
+	float avg_draw_score = draws > 0
+		? static_cast<float>(draw_score) / draws
+		: 0.0f;
+	bool promote_candidate = candidate_win_rate >= config.win_threshold;
+	//Draw conditions, if no one won a single game, do likelihood of draw win > 60%, ie .2 in [-1,1]
+	float draw_promo_thresh = .2;
+    if (candidate_wins == 0 && current_wins == 0) {
+		promote_candidate = avg_draw_score >= draw_promo_thresh;
+	}
+	//maybe consider draws when wins aren't decisive later, but really we want wins one way or the other and those should be much more important in model selection
+	// else if(candidate_win_rate <= config.win_threshold && candidate_win_rate >= 1-config.win_threshold && draw_score != 0) {
+
+    std::cout << "\n=== Arena Results ===\n";
+    std::cout << "  Candidate wins: " << candidate_wins << "\n";
+    std::cout << "  Current wins:   " << current_wins << "\n";
+    std::cout << "  Draws:          " << draws << "\n";
+    if (!std::isnan(draw_score)) {
+        std::cout << "  Draw Score:     " << draw_score << "\n";
+    }
+    std::cout << "  Errors:         " << errors << "\n";
+    std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
+              << (candidate_win_rate * 100) << "%\n";
+    std::cout << "  Time:           " << elapsed << "s\n";
+
+    // If candidate 
+    if (promote_candidate) {
+        std::cout << "\nCandidate wins! (";
+		if (candidate_win_rate >= config.win_threshold) {
+			std::cout << (candidate_win_rate * 100) << "% >= "
+				<< (config.win_threshold * 100) << "%)\n";
+		} else {
+			std::cout << "Avg draw score " << avg_draw_score << " >= " << draw_promo_thresh << ")\n"; 
+		}
+        std::cout << "Promoting candidate to: " << config.best_model_path << "\n";
+
+        // Create directory if needed
+        std::filesystem::path best_path(config.best_model_path);
+        if (best_path.has_parent_path()) {
+            std::filesystem::create_directories(best_path.parent_path());
+        }
+
+        // Copy candidate to best model path
+        try {
+            std::filesystem::copy_file(config.candidate_model, config.best_model_path,
+                                       std::filesystem::copy_options::overwrite_existing);
+            std::cout << "Model promoted successfully!\n";
+        } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Error copying model: " << e.what() << "\n";
+            return 1;
+        }
+    } else {
+        std::cout << "\nCurrent model retained. (" << (candidate_win_rate * 100)
+                  << "% < " << (config.win_threshold * 100) << "%)\n";
+    }
+
+    return 0;
+}
+
+/// Run AlphaZero-style self-play with NN evaluation
+int run_selfplay(const Config& config,
+                 std::unique_ptr<NodePool> pool,
+                 uint32_t root) {
+    std::cout << "\n=== Self-Play Mode (NN-only) ===\n";
+
+    // Model is required for self-play
+    if (config.model_file.empty()) {
+        std::cerr << "Error: Self-play mode requires a model file (-m)\n";
+        return 1;
+    }
+
+    // Initialize the root node only if it's a fresh tree
+    StateNode& root_node = (*pool)[root];
+    if (!root_node.is_expanded() && !root_node.has_children()) {
+        root_node.init_root(true);  // P1 starts
+    }
+
+    // Configure self-play engine
+    SelfPlayConfig sp_config;
+    sp_config.simulations_per_move = config.simulations_per_move;
+    sp_config.temperature = config.temperature;
+    sp_config.temperature_drop_ply = config.temperature_drop_ply;
+    sp_config.stochastic = true;
+    sp_config.progressive_expansion = config.progressive;
+
+    SelfPlayEngine engine(sp_config);
+
+    // Determine samples file path (same as save_file but with .qsamples extension)
+    // If model_id is provided, append it: tree_X_<model_id>.qsamples
+    std::string samples_file;
+    if (!config.save_file.empty()) {
+        std::filesystem::path p(config.save_file);
+        std::string stem = p.stem().string();
+        if (!config.model_id.empty()) {
+            stem += "_" + config.model_id;
+        }
+        samples_file = (p.parent_path() / stem).string() + ".qsamples";
+    }
+
+    // Create training sample collector
+    TrainingSampleCollector collector;
+    collector.reserve(config.num_games * 100);  // ~100 moves per game estimate
+
+    std::cout << "Starting self-play...\n";
+    std::cout << "  Games:       " << config.num_games << "\n";
+    std::cout << "  Threads:     " << config.num_threads << "\n";
+    std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
+    std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
+              << config.temperature_drop_ply << ")\n";
+    std::cout << "  Max memory:  " << config.max_memory_gb << " GB (resets at 80%)\n";
+    std::cout << "  Tree file:   " << config.save_file << "\n";
+    std::cout << "  Samples:     " << samples_file << "\n\n";
+
+    // Use multi-threaded path if threads > 1
+    if (config.num_threads > 1) {
+        // Create inference server for batched GPU access
+        InferenceServerConfig server_config;
+        server_config.batch_size = config.batch_size;
+        server_config.max_wait_ms = 0.1;
+        InferenceServer server(config.model_file, server_config);
+        server.start();
+
+        // Configure memory bounds for pool reset
+        TreeBoundsConfig bounds;
+        bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
+        bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
+
+        auto checkpoint_callback = [&config](const MultiGameStats& stats, const NodePool& p) {
+            int completed = stats.games_completed.load(std::memory_order_relaxed);
+            int p1 = stats.p1_wins.load(std::memory_order_relaxed);
+            int p2 = stats.p2_wins.load(std::memory_order_relaxed);
+            int d = stats.draws.load(std::memory_order_relaxed);
+            int moves = stats.total_moves.load(std::memory_order_relaxed);
+
+            std::cout << "[" << completed << "/" << config.num_games << "] "
+                      << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
+                      << " | Nodes: " << p.allocated()
+                      << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << std::endl;
+        };
+
+        MultiGameStats stats;
+        engine.run_multi_game(
+            *pool, root, server,
+            config.num_games, config.num_threads,
+            stats, bounds, &collector,
+            samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
+            checkpoint_callback, 10);
+
+        // Capture server stats before stopping
+        size_t total_requests = server.total_requests();
+        size_t total_batches = server.total_batches();
+        double avg_batch_size = total_batches > 0
+            ? static_cast<double>(total_requests) / total_batches : 0.0;
+
+        server.stop();
+
+        // Final save (pruned to only game-path nodes from current tree)
+        if (!config.save_file.empty()) {
+            save_tree_pruned(*pool, root, config.save_file);
+        }
+
+        // Extract final training samples from the last tree (if any remain)
+        auto tree_samples = extract_samples_from_tree(*pool, root);
+        for (auto& sample : tree_samples) {
+            collector.add_sample_direct(std::move(sample));
+        }
+
+        int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
+        int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
+        int draws = stats.draws.load(std::memory_order_relaxed);
+        int total_moves = stats.total_moves.load(std::memory_order_relaxed);
+		int errors = stats.errors.load(std::memory_order_relaxed);
+		int draw_score = stats.draw_score.load(std::memory_order_relaxed);
+		float avg_draw_score = static_cast<float>(draw_score) / draws;
+
+        std::cout << "\nSelf-play complete!\n";
+        std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+        std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+        std::cout << "  Draws:\t" << draws << "\n";
+        if (!std::isnan(draw_score)) {
+            std::cout << "  Draw Score:     " << avg_draw_score << "\n";
+        }
+		std::cout << "  Errors:\t" << errors << "\n";
+        std::cout << "  moves/game:\t" << (total_moves / config.num_games) << "\n";
+        std::cout << "  Samples:\t" << collector.size() << "\n";
+        std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
+                  << " (" << total_requests << " requests / " << total_batches << " batches)" << std::endl;
+
+    } else {
+        // Single-threaded path (original implementation)
+        std::cout << "Loading model from: " << config.model_file << "\n";
+        ModelInference model(config.model_file);
+        if (!model.is_ready()) {
+            std::cerr << "Error: Failed to load model\n";
+            return 1;
+        }
+        std::cout << "Model loaded successfully!\n\n";
+
+        int p1_wins = 0, p2_wins = 0, draws = 0;
+        int total_moves = 0;
+        auto start_time = std::chrono::steady_clock::now();
+
+        for (int game = 0; game < config.num_games; ++game) {
+            SelfPlayResult result = engine.self_play(*pool, root, model, &collector);
+
+            if (result.winner == 1) ++p1_wins;
+            else if (result.winner == -1) ++p2_wins;
+            else ++draws;
+            total_moves += result.num_moves;
+
+            if ((game + 1) % 10 == 0 || game == config.num_games - 1) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+                double games_per_sec = elapsed > 0 ? static_cast<double>(game + 1) / elapsed : 0;
+
+                std::cout << "[" << (game + 1) << "/" << config.num_games << "] "
+                          << "P1: " << p1_wins << ", P2: " << p2_wins << ", Draw: " << draws
+                          << " | Nodes: " << pool->allocated()
+                          << " | Samples: " << collector.size()
+                          << " | Avg moves: " << (total_moves / (game + 1))
+                          << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s"<< std::endl;
+            }
+
+            if ((game + 1) % config.games_per_checkpoint == 0 && !config.save_file.empty()) {
+                save_tree(*pool, root, config.save_file);
+            }
+        }
+
+        // Final save (pruned to only game-path nodes)
+        if (!config.save_file.empty()) {
+            save_tree_pruned(*pool, root, config.save_file);
+        }
+
+        std::cout << "\nSelf-play complete!\n";
+        std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+        std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+        std::cout << "  Draws:   " << draws << "\n";
+        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << std::endl;
+    }
+
+    // Save training samples
+    if (!samples_file.empty() && collector.size() > 0) {
+        auto result = TrainingSampleStorage::save(samples_file, collector.samples());
+        if (!result) {
+            std::cerr << "Warning: Failed to save training samples: "
+                      << to_string(result.error()) << "\n";
+        } else {
+            std::cout << "Saved " << collector.size() << " training samples to " << samples_file << "\n";
+        }
+    }
+
+    // Print timing breakdown
+    get_timers().print();
+
+    return 0;
+}
+#endif // QBOT_ENABLE_INFERENCE
+
 // ============================================================================
 // Main Entry Point
 // ============================================================================
@@ -450,6 +1045,24 @@ int main(int argc, char* argv[]) {
 
         case RunMode::Train:
             return run_training(config, std::move(pool), root);
+
+        case RunMode::SelfPlay:
+#ifdef QBOT_ENABLE_INFERENCE
+            return run_selfplay(config, std::move(pool), root);
+#else
+            std::cerr << "Error: Self-play mode requires QBOT_ENABLE_INFERENCE\n";
+            std::cerr << "Rebuild with: cmake -DENABLE_INFERENCE=ON ..\n";
+            return 1;
+#endif
+
+        case RunMode::Arena:
+#ifdef QBOT_ENABLE_INFERENCE
+            return run_arena(config);
+#else
+            std::cerr << "Error: Arena mode requires QBOT_ENABLE_INFERENCE\n";
+            std::cerr << "Rebuild with: cmake -DENABLE_INFERENCE=ON ..\n";
+            return 1;
+#endif
     }
 
     return 0;

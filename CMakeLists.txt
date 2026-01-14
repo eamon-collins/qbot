@@ -60,13 +60,16 @@ set(QBOT_LIB_SOURCES
     src/tree/StateNode.cpp
     src/util/storage.cpp
     src/util/gui_client.cpp
+    src/util/training_samples.cpp
     src/core/Game.cpp
     src/util/pathfinding.cpp
     src/search/mcts.cpp
 )
 
 if(ENABLE_INFERENCE)
-    list(APPEND QBOT_LIB_SOURCES src/inference/inference.cpp)
+    list(APPEND QBOT_LIB_SOURCES
+        src/inference/inference.cpp
+        src/inference/inference_server.cpp)
 endif()
 
 set(QBOT_MAIN_SOURCES
@@ -200,20 +203,15 @@ if(BUILD_TESTS)
         target_link_options(test_inference PRIVATE -flto)
     endif()
 
-    # Debug test builds
-    add_executable(test_storage_debug tests/test_storage.cpp)
-    target_link_libraries(test_storage_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_storage_debug PRIVATE -g -O0)
-
-    add_executable(test_game_debug tests/test_game.cpp)
-    target_link_libraries(test_game_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-    target_compile_options(test_game_debug PRIVATE -g -O0)
-
-    if(ENABLE_INFERENCE)
-        add_executable(test_inference_debug tests/test_inference.cpp)
-        target_link_libraries(test_inference_debug PRIVATE qbot_lib_debug GTest::gtest_main)
-        target_compile_options(test_inference_debug PRIVATE -g -O0)
-    endif()
+    # Benchmarks - optimized build, NOT registered with ctest
+    # Game benchmarks always available; inference benchmarks require ENABLE_INFERENCE
+    add_executable(benchmarks tests/benchmarks.cpp)
+    target_link_libraries(benchmarks PRIVATE qbot_lib_fast GTest::gtest_main)
+    target_compile_options(benchmarks PRIVATE -O3 -DNDEBUG -march=native -flto)
+    target_link_options(benchmarks PRIVATE -flto)
+    set_target_properties(benchmarks PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
 
     include(GoogleTest)
     gtest_discover_tests(test_storage)
@@ -222,13 +220,14 @@ if(BUILD_TESTS)
         gtest_discover_tests(test_inference)
     endif()
 
-    # "tests" target - builds all test binaries
+    # "tests" target - builds all test binaries (excludes benchmarks)
     set(TEST_TARGETS test_storage test_game)
     if(ENABLE_INFERENCE)
         list(APPEND TEST_TARGETS test_inference)
     endif()
 
     add_custom_target(tests DEPENDS ${TEST_TARGETS})
+
 endif()
 
 # =============================================================================

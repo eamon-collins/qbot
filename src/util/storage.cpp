@@ -206,6 +206,162 @@ std::expected<void, StorageError> TreeStorage::save(
     return {};
 }
 
+std::expected<size_t, StorageError> TreeStorage::save_pruned(
+    const std::filesystem::path& path,
+    const NodePool& pool,
+    uint32_t root)
+{
+    if (root == NULL_NODE) {
+        return std::unexpected(StorageError::EmptyTree);
+    }
+
+    // Pass 1: BFS collecting only nodes on game path
+    std::vector<uint32_t> reachable;
+    std::vector<uint32_t> remap(pool.capacity(), NULL_NODE);
+
+    {
+        std::queue<uint32_t> queue;
+        queue.push(root);
+
+        while (!queue.empty()) {
+            uint32_t idx = queue.front();
+            queue.pop();
+
+            // Skip if already visited
+            if (remap[idx] != NULL_NODE) continue;
+
+            const StateNode& node = pool[idx];
+
+            // Only include nodes that are on game path
+            if (!node.is_on_game_path()) continue;
+
+            uint32_t new_idx = static_cast<uint32_t>(reachable.size());
+            reachable.push_back(idx);
+            remap[idx] = new_idx;
+
+            // Only follow children that are also on game path
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                if (pool[child].is_on_game_path()) {
+                    queue.push(child);
+                }
+                child = pool[child].next_sibling;
+            }
+        }
+    }
+
+    if (reachable.empty()) {
+        return std::unexpected(StorageError::EmptyTree);
+    }
+
+    const size_t node_count = reachable.size();
+    const size_t file_size = sizeof(TreeFileHeader) + node_count * sizeof(SerializedNode);
+
+    int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        if (!std::filesystem::exists(path.parent_path())) {
+            return std::unexpected(StorageError::FileNotFound);
+        }
+        return std::unexpected(StorageError::PermissionDenied);
+    }
+
+    if (ftruncate(fd, static_cast<off_t>(file_size)) != 0) {
+        ::close(fd);
+        return std::unexpected(StorageError::IoError);
+    }
+
+    void* mapped = mmap(nullptr, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+        ::close(fd);
+        return std::unexpected(StorageError::IoError);
+    }
+
+    madvise(mapped, file_size, MADV_SEQUENTIAL);
+
+    auto* header = static_cast<TreeFileHeader*>(mapped);
+    header->magic = TreeFileHeader::MAGIC;
+    header->version = TreeFileHeader::CURRENT_VERSION;
+    header->flags = 0;
+    header->node_count = static_cast<uint32_t>(node_count);
+    header->root_index = 0;
+    header->reserved1 = 0;
+    header->timestamp = static_cast<uint64_t>(
+        std::chrono::system_clock::now().time_since_epoch().count());
+    std::memset(header->reserved, 0, sizeof(header->reserved));
+
+    auto* nodes = reinterpret_cast<SerializedNode*>(
+        static_cast<char*>(mapped) + sizeof(TreeFileHeader));
+
+    // Remap helper - only remap if target is on game path
+    auto remap_index = [&remap, &pool](uint32_t idx) -> uint32_t {
+        if (idx == NULL_NODE) return NULL_NODE;
+        // Only return remapped index if node is on game path
+        if (!pool[idx].is_on_game_path()) return NULL_NODE;
+        return remap[idx];
+    };
+
+    // Remap sibling - find next sibling that is on game path
+    auto remap_sibling = [&pool, &remap](uint32_t idx) -> uint32_t {
+        while (idx != NULL_NODE) {
+            if (pool[idx].is_on_game_path() && remap[idx] != NULL_NODE) {
+                return remap[idx];
+            }
+            idx = pool[idx].next_sibling;
+        }
+        return NULL_NODE;
+    };
+
+    // Remap first_child - find first child that is on game path
+    auto remap_first_child = [&pool, &remap](const StateNode& node) -> uint32_t {
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].is_on_game_path() && remap[child] != NULL_NODE) {
+                return remap[child];
+            }
+            child = pool[child].next_sibling;
+        }
+        return NULL_NODE;
+    };
+
+    // Pass 2: Serialize
+    for (size_t i = 0; i < node_count; ++i) {
+        uint32_t old_idx = reachable[i];
+        SerializedNode& sn = nodes[i];
+        const StateNode& node = pool[old_idx];
+
+        sn.first_child = remap_first_child(node);
+        sn.next_sibling = remap_sibling(node.next_sibling);
+        sn.parent = remap_index(node.parent);
+        sn.p1_row = node.p1.row;
+        sn.p1_col = node.p1.col;
+        sn.p1_fences = node.p1.fences;
+        sn.p2_row = node.p2.row;
+        sn.p2_col = node.p2.col;
+        sn.p2_fences = node.p2.fences;
+        sn.move_data = node.move.data;
+        sn.flags = node.flags;
+        sn.reserved = 0;
+        sn.ply = node.ply;
+        sn.fences_horizontal = node.fences.horizontal;
+        sn.fences_vertical = node.fences.vertical;
+        sn.visits = node.stats.visits.load(std::memory_order_relaxed);
+        sn.total_value = node.stats.total_value.load(std::memory_order_relaxed);
+        sn.prior = node.stats.prior;
+        sn.terminal_value = node.terminal_value;
+    }
+
+    if (msync(mapped, file_size, MS_SYNC) != 0) {
+        munmap(mapped, file_size);
+        ::close(fd);
+        return std::unexpected(StorageError::IoError);
+    }
+
+    munmap(mapped, file_size);
+    ::close(fd);
+
+    return node_count;
+}
+
 std::expected<LoadedTree, StorageError> TreeStorage::load(
     const std::filesystem::path& path)
 {

@@ -310,7 +310,7 @@ private:
 
         std::cout << "[NodePool] Grew to " << chunks_.size() << " chunks ("
                   << total_capacity_.load(std::memory_order_relaxed) << " nodes) in "
-                  << duration_us << " us (no copy needed)\n";
+                  << duration_us << " us" << std::endl;
     }
 
     /// Add a new chunk without holding the grow mutex
@@ -463,6 +463,7 @@ private:
 };
 
 /// Helper to allocate multiple children atomically
+/// Test only workflows
 class ChildBuilder {
 public:
     explicit ChildBuilder(NodePool& pool, uint32_t parent_idx)
