@@ -451,7 +451,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
             int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
             float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
-            result.draw_score = absolute_draw;
+            result.draw_score = game_value;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];

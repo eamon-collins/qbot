@@ -412,7 +412,7 @@ TEST_F(GameTest, RandomPlayWithPathfinding) {
     std::mt19937 gen(rd());
 
     int attempts = 0;
-    while (true) { //break below after too many attempts
+    while (attempts < 4) { //break below after too many attempts
         uint32_t current_idx = root_idx;
         StateNode* current = root;
 
@@ -473,6 +473,7 @@ TEST_F(GameTest, RandomPlayWithPathfinding) {
         Pathfinder& pf = get_pathfinder();
         bool both_can_reach = pf.check_paths(*current);
         attempts++;
+        std::cout << both_can_reach << " att " << attempts << std::endl;
         if (!both_can_reach && attempts >= 4) {
             EXPECT_TRUE(both_can_reach) << " One or both players are blocked from their goal after 4 random attempts";
             break;
@@ -548,5 +549,6 @@ TEST_F(GameTest, RandomPlayWithPathfinding) {
         EXPECT_GT(move_count, 0) << "Should have made at least one move";
         EXPECT_LE(current->p1.fences, NUM_FENCES);
         EXPECT_LE(current->p2.fences, NUM_FENCES);
+        break;
     }
 }
