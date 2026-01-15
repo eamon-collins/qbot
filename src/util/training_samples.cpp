@@ -51,7 +51,7 @@ std::array<float, NUM_ACTIONS> extract_visit_distribution(
                 action_idx = flip_action_index(action_idx);
             }
 
-            policy[action_idx] += value;
+            policy[action_idx] = value;
         }
         child = child_node.next_sibling;
     }

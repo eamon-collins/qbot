@@ -252,7 +252,7 @@ def save_checkpoint(model: QuoridorValueNet, checkpoint_path: str) -> bool:
 
 def run_arena(current_model: str, candidate_model: str, num_threads: int, num_games: int,
               simulations: int, win_threshold: float = 0.55,
-              temperature: float = 1.0, temp_drop_ply: int = 30) -> tuple[bool, bool]:
+              temperature: float = 1.0, temp_drop_ply: int = 30, max_memory: int = 30) -> tuple[bool, bool]:
     """
     Run arena evaluation between candidate and current model.
     Returns (success, candidate_won).
@@ -274,6 +274,7 @@ def run_arena(current_model: str, candidate_model: str, num_threads: int, num_ga
         "--win-threshold", str(win_threshold),
         "--temperature", str(temperature),
         "--temp-drop", str(temp_drop_ply),
+        "--max-memory", str(max_memory),
     ]
 
     logging.info(f"Running arena: {' '.join(cmd)}")
@@ -510,7 +511,7 @@ def main():
             arena_success, candidate_won = run_arena(
                 str(current_best_pt), str(candidate_pt), args.threads,
                 args.arena_games, args.arena_sims, args.win_threshold,
-                args.arena_temperature, args.arena_temp_drop
+                args.arena_temperature, args.arena_temp_drop, args.max_memory
             )
 
             if not arena_success:

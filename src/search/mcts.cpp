@@ -690,10 +690,12 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     // Collect policy logits and apply softmax
     std::vector<std::pair<uint32_t, int>> child_actions;
     float max_logit = -std::numeric_limits<float>::infinity();
+    bool flip_policy = !node.is_p1_to_move(); 
 
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         int action_idx = move_to_action_index(pool[child].move);
+        action_idx = flip_policy ? flip_action_index(action_idx) : action_idx;
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
             child_actions.emplace_back(child, action_idx);
             max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
@@ -868,10 +870,12 @@ void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, Inference
     // Collect policy logits for valid moves and apply softmax
     std::vector<std::pair<uint32_t, int>> child_actions;
     float max_logit = -std::numeric_limits<float>::infinity();
+    bool flip_policy = !node.is_p1_to_move(); 
 
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         int action_idx = move_to_action_index(pool[child].move);
+        action_idx = flip_policy ? flip_action_index(action_idx) : action_idx;
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
             child_actions.emplace_back(child, action_idx);
             max_logit = std::max(max_logit, eval.policy[action_idx]);
