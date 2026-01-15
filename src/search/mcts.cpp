@@ -354,6 +354,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
             int relative_winner = early_terminate_no_fences(node);
             result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
             node.set_terminal(static_cast<float>(relative_winner));
+            // std::cout << "selfplay earlyterm rel " << relative_winner << " abs " << result.winner << " p1move: " << node.is_p1_to_move() << std::endl;
             break;
         }
 

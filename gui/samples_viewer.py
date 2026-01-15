@@ -86,9 +86,9 @@ class Sample:
 
         walls = []
         for x, y in self.h_walls:
-            walls.append(WallState(x=x, y=7-y, orientation="h"))
+            walls.append(WallState(x=x, y=y, orientation="h"))
         for x, y in self.v_walls:
-            walls.append(WallState(x=x, y=7-y, orientation="v"))
+            walls.append(WallState(x=x, y=y, orientation="v"))
 
         return GameState(
             players=players,
@@ -108,6 +108,15 @@ class Sample:
             prob = self.policy[idx]
             if prob < 0.001:  # Skip very low probability moves
                 continue
+
+            ### flip policy index for display when p2 turn, as we will have flipped it on the c++ side
+            if self.current_player == 1:
+                if idx < 81:
+                    idx = 80 - idx;           # Pawn moves [0, 80]
+                elif idx < 145:
+                    idx = 225 - idx;          # H-walls [81, 144]
+                else:
+                    idx = 353 - idx;          # V-walls [145, 208]
 
             if idx < NUM_PAWN_ACTIONS:
                 # Pawn move: row * 9 + col
@@ -336,6 +345,32 @@ def load_samples_direct(samples_path: str) -> List[Sample]:
 
             # FLAG_P1_TO_MOVE = 0x04
             is_p1_turn = (sample_flags & 0x04) != 0
+
+            if not is_p1_turn:
+                # Sample is stored Relative (P2 at "Home", flipped).
+                # We want Absolute (P1 at Home) for the viewer.
+                # Un-flip coordinates: 8 - x
+                p1_row = 8 - p1_row
+                p1_col = 8 - p1_col
+                p2_row = 8 - p2_row
+                p2_col = 8 - p2_col
+
+                # Un-flip fences (reverse bits of 64-bit int)
+                # In Python, we can just process the extracted walls later, 
+                # OR flip the tensor generation logic.
+                # Since we construct state_tensor below, let's flip the source data:
+
+                # Bit reversal for 64-bit integer
+                def reverse_bits_64(n):
+                    n = ((n >> 1) & 0x5555555555555555) | ((n & 0x5555555555555555) << 1)
+                    n = ((n >> 2) & 0x3333333333333333) | ((n & 0x3333333333333333) << 2)
+                    n = ((n >> 4) & 0x0F0F0F0F0F0F0F0F) | ((n & 0x0F0F0F0F0F0F0F0F) << 4)
+                    n = ((n >> 8) & 0x00FF00FF00FF00FF) | ((n & 0x00FF00FF00FF00FF) << 8)
+                    n = ((n >> 16) & 0x0000FFFF0000FFFF) | ((n & 0x0000FFFF0000FFFF) << 16)
+                    return ((n >> 32) | (n << 32)) & 0xFFFFFFFFFFFFFFFF
+
+                fences_h = reverse_bits_64(fences_h)
+                fences_v = reverse_bits_64(fences_v)
 
             # Determine current player and opponent
             if is_p1_turn:

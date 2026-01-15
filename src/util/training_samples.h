@@ -114,18 +114,71 @@ struct TrainingSample {
 static_assert(sizeof(TrainingSample) == 864, "TrainingSample should be 864 bytes");
 
 /// Extract compact state from a StateNode
+/// this one doesn't flip the gamestate, we need to flip it to make it so the model learns from the perspective of the player whose turn it is.
+// [[nodiscard]] inline CompactState extract_compact_state(const StateNode& node) noexcept {
+//     CompactState state;
+//     state.p1_row = node.p1.row;
+//     state.p1_col = node.p1.col;
+//     state.p2_row = node.p2.row;
+//     state.p2_col = node.p2.col;
+//     state.p1_fences = node.p1.fences;
+//     state.p2_fences = node.p2.fences;
+//     state.flags = static_cast<uint8_t>(node.flags);
+//     state.reserved = 0;
+//     state.fences_horizontal = node.fences.horizontal;
+//     state.fences_vertical = node.fences.vertical;
+//     return state;
+// }
+//
+inline uint64_t reverse_bits(uint64_t n) {
+    n = ((n >> 1) & 0x5555555555555555ULL) | ((n & 0x5555555555555555ULL) << 1);
+    n = ((n >> 2) & 0x3333333333333333ULL) | ((n & 0x3333333333333333ULL) << 2);
+    n = ((n >> 4) & 0x0F0F0F0F0F0F0F0FULL) | ((n & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    n = ((n >> 8) & 0x00FF00FF00FF00FFULL) | ((n & 0x00FF00FF00FF00FFULL) << 8);
+    n = ((n >> 16) & 0x0000FFFF0000FFFFULL) | ((n & 0x0000FFFF0000FFFFULL) << 16);
+    return (n >> 32) | (n << 32);
+}
+[[nodiscard]] constexpr int flip_action_index(int idx) noexcept {
+    if (idx < 81)  return 80 - idx;           // Pawn moves [0, 80]
+    if (idx < 145) return 225 - idx;          // H-walls [81, 144]
+    return 353 - idx;                         // V-walls [145, 208]
+}
+
 [[nodiscard]] inline CompactState extract_compact_state(const StateNode& node) noexcept {
     CompactState state;
-    state.p1_row = node.p1.row;
-    state.p1_col = node.p1.col;
-    state.p2_row = node.p2.row;
-    state.p2_col = node.p2.col;
+
+    // Relative Perspective:
+    // If P1 to move (P1 at row 0): Keep as is (P1 at 0, P2 at 8)
+    // If P2 to move (P2 at row 8): Flip board 180 degrees so P2 is at 0 (or 8 depending on convention)
+    // NOTE: Standard relative convention is "Current Player starts at 0, Goal at 8" or vice versa.
+    // Given your viewer expects P1 (0) at Bottom (8), let's align so Current Player is always at 0 (Top) 
+    // effectively, or 8 (Bottom).
+    // Let's assume RELATIVE means "Current Player is P1-like (starts at 0)".
+
+    if (node.is_p1_to_move()) {
+        state.p1_row = node.p1.row;
+        state.p1_col = node.p1.col;
+        state.p2_row = node.p2.row;
+        state.p2_col = node.p2.col;
+        state.fences_horizontal = node.fences.horizontal;
+        state.fences_vertical = node.fences.vertical;
+    } else {
+        // Flip 180 degrees: Row -> 8-Row, Col -> 8-Col
+        state.p1_row = 8 - node.p1.row;
+        state.p1_col = 8 - node.p1.col;
+        state.p2_row = 8 - node.p2.row;
+        state.p2_col = 8 - node.p2.col;
+
+        // Flip fences (bit reversal of the 64-bit grid maps index i to 63-i)
+        // (r*8 + c) -> (7-r)*8 + (7-c)
+        state.fences_horizontal = reverse_bits(node.fences.horizontal);
+        state.fences_vertical = reverse_bits(node.fences.vertical);
+    }
+
     state.p1_fences = node.p1.fences;
     state.p2_fences = node.p2.fences;
     state.flags = static_cast<uint8_t>(node.flags);
     state.reserved = 0;
-    state.fences_horizontal = node.fences.horizontal;
-    state.fences_vertical = node.fences.vertical;
     return state;
 }
 

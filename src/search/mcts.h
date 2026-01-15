@@ -316,6 +316,8 @@ inline void remove_virtual_loss(
 
     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
+    // node.print_node();
+    // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
 
     // current player moves first, they win if their distance to
     // goal is less than OR equal to the opponent's distance
