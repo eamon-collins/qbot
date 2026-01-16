@@ -45,6 +45,21 @@ struct EvalResult {
     std::array<float, NUM_ACTIONS> policy;    // Policy logits for all actions
 };
 
+//utility functions to flip the board and policy 180 degrees (and back) for p2 for model
+inline uint64_t reverse_bits(uint64_t n) {
+    n = ((n >> 1) & 0x5555555555555555ULL) | ((n & 0x5555555555555555ULL) << 1);
+    n = ((n >> 2) & 0x3333333333333333ULL) | ((n & 0x3333333333333333ULL) << 2);
+    n = ((n >> 4) & 0x0F0F0F0F0F0F0F0FULL) | ((n & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    n = ((n >> 8) & 0x00FF00FF00FF00FFULL) | ((n & 0x00FF00FF00FF00FFULL) << 8);
+    n = ((n >> 16) & 0x0000FFFF0000FFFFULL) | ((n & 0x0000FFFF0000FFFFULL) << 16);
+    return (n >> 32) | (n << 32);
+}
+[[nodiscard]] constexpr int flip_action_index(int idx) noexcept {
+    if (idx < 81)  return 80 - idx;           // Pawn moves [0, 80]
+    if (idx < 145) return 225 - idx;          // H-walls [81, 144]
+    return 353 - idx;                         // V-walls [145, 208]
+}
+
 /// Neural network inference for position evaluation
 ///
 /// Converts game states to tensor representation and runs batched inference

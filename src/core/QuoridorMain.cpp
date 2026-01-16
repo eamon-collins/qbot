@@ -59,6 +59,7 @@ struct Config {
     RunMode mode = RunMode::Interactive;
     int player = 1;                              // Which player the bot plays as (1 or 2)
     int num_threads = 4;                         // Number of threads for MCTS
+    int games_per_thread = 4;                    // Number of games per thread for selfplay mcts
     std::string save_file = "tree.qbot";         // File to save tree to
     std::string load_file;                       // File to load tree from
     std::string model_file;                      // Neural network model file
@@ -100,6 +101,8 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Player number (1 or 2, bot plays as this player)")
         ("threads,t", po::value<int>(&config.num_threads)->default_value(4),
             "Number of threads for MCTS")
+        ("games-per-thread,k", po::value<int>(&config.games_per_thread)->default_value(4),
+            "Number of games to play on each thread during selfplay for MCTS")
         ("save,s", po::value<std::string>(&config.save_file)->default_value("tree.qbot"),
             "File to save tree/checkpoints to")
         ("load,l", po::value<std::string>(&config.load_file)->default_value(""),
@@ -758,9 +761,7 @@ int run_arena(const Config& config) {
     float candidate_win_rate = decisive_games > 0
         ? static_cast<float>(candidate_wins) / decisive_games
         : 0.0f;
-	float avg_draw_score = draws > 0
-		? static_cast<float>(draw_score) / draws
-		: 0.0f;
+    float avg_draw_score = static_cast<float>(draw_score) / draws;
 	bool promote_candidate = candidate_win_rate >= config.win_threshold;
 	//Draw conditions, if no one won a single game, do likelihood of draw win > 60%, ie .2 in [-1,1]
 	float draw_promo_thresh = .2;
@@ -774,8 +775,8 @@ int run_arena(const Config& config) {
     std::cout << "  Candidate wins: " << candidate_wins << "\n";
     std::cout << "  Current wins:   " << current_wins << "\n";
     std::cout << "  Draws:          " << draws << "\n";
-    if (!std::isnan(draw_score)) {
-        std::cout << "  Draw Score:     " << draw_score << "\n";
+    if (!std::isnan(avg_draw_score)) {
+        std::cout << "  Draw Score:     " << avg_draw_score << "\n";
     }
     std::cout << "  Errors:         " << errors << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
@@ -863,6 +864,7 @@ int run_selfplay(const Config& config,
     std::cout << "Starting self-play...\n";
     std::cout << "  Games:       " << config.num_games << "\n";
     std::cout << "  Threads:     " << config.num_threads << "\n";
+    std::cout << "  games/t:     " << config.games_per_thread << "\n";
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
@@ -875,7 +877,7 @@ int run_selfplay(const Config& config,
         // Create inference server for batched GPU access
         InferenceServerConfig server_config;
         server_config.batch_size = config.batch_size;
-        server_config.max_wait_ms = 0.1;
+        server_config.max_wait_ms = 0.5;
         InferenceServer server(config.model_file, server_config);
         server.start();
 
@@ -900,7 +902,7 @@ int run_selfplay(const Config& config,
         MultiGameStats stats;
         engine.run_multi_game(
             *pool, root, server,
-            config.num_games, config.num_threads,
+            config.num_games, config.num_threads, config.games_per_thread,
             stats, bounds, &collector,
             samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
             checkpoint_callback, 10);
@@ -936,7 +938,7 @@ int run_selfplay(const Config& config,
         std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
         std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
         std::cout << "  Draws:\t" << draws << "\n";
-        if (!std::isnan(draw_score)) {
+        if (!std::isnan(avg_draw_score)) {
             std::cout << "  Draw Score:     " << avg_draw_score << "\n";
         }
 		std::cout << "  Errors:\t" << errors << "\n";

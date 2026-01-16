@@ -364,7 +364,7 @@ struct alignas(64) StateNode {
     static constexpr uint8_t FLAG_ON_GAME_PATH = 0x08;  // Node was visited in actual game
 
     // Terminal value (only valid if FLAG_TERMINAL is set)
-    // +1.0 = P1 wins, -1.0 = P2 wins, 0.0 = draw (if applicable)
+    // Stored in relative perspective: +1 = current player wins, -1 = current player loses
     float terminal_value{0.0f};
 
     // Ply counter (number of moves made to reach this state)
@@ -445,11 +445,10 @@ struct alignas(64) StateNode {
         flags = was_p1_turn ? 0 : FLAG_P1_TO_MOVE;
         terminal_value = 0.0f;
 
-        // Check for terminal state
-        if (p1.row == 8) {
-            set_terminal(1.0f);   // P1 wins
-        } else if (p2.row == 0) {
-            set_terminal(-1.0f);  // P2 wins
+        // if either of these are true, the game is over and the last player to move won
+        // so terminal value of this state, which would be other players turn, is always -1
+        if (p1.row == 8 || p2.row == 0) {
+            set_terminal(-1.0f);
         }
 
         // Reset stats
@@ -625,7 +624,7 @@ static_assert(sizeof(StateNode) >= 64, "StateNode includes full game state");
           / static_cast<float>(n);
     }
 
-    return q + u;
+    return -q + u;
 }
 
 } // namespace qbot

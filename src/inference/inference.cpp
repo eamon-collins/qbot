@@ -75,6 +75,7 @@ void ModelInference::fill_unified_tensor(float* tensor_ptr, size_t tensor_stride
     bool is_p1_turn = node->is_p1_to_move();
     uint8_t my_row, my_col, my_fences;
     uint8_t opp_row, opp_col, opp_fences;
+    uint64_t h_fences, v_fences;
 
     if (is_p1_turn) {
         my_row = node->p1.row;
@@ -83,15 +84,23 @@ void ModelInference::fill_unified_tensor(float* tensor_ptr, size_t tensor_stride
         opp_row = node->p2.row;
         opp_col = node->p2.col;
         opp_fences = node->p2.fences;
+        h_fences = node->fences.horizontal;
+        v_fences = node->fences.vertical;
     } else {
-        my_row = node->p2.row;
-        my_col = node->p2.col;
+        // P2 Perspective (Relative/Flipped 180)
+        // Flip coordinates: 8 - row
+        my_row = 8 - node->p2.row;
+        my_col = 8 - node->p2.col;
         my_fences = node->p2.fences;
-        opp_row = node->p1.row;
-        opp_col = node->p1.col;
+        
+        opp_row = 8 - node->p1.row;
+        opp_col = 8 - node->p1.col;
         opp_fences = node->p1.fences;
+        
+        // Flip fences (bit reversal performs the spatial 180 flip for the grid)
+        h_fences = reverse_bits(node->fences.horizontal);
+        v_fences = reverse_bits(node->fences.vertical);
     }
-
     // Channel 0: Current player's pawn position (one-hot)
     // Index = channel * 81 + row * 9 + col
     base[0 * 81 + my_row * 9 + my_col] = 1.0f;
@@ -101,13 +110,13 @@ void ModelInference::fill_unified_tensor(float* tensor_ptr, size_t tensor_stride
 
     // Channel 2: Horizontal walls (8x8 grid padded to 9x9)
     // Channel 3: Vertical walls (8x8 grid padded to 9x9)
-    const FenceGrid& fences = node->fences;
     for (int r = 0; r < 8; ++r) {
         for (int c = 0; c < 8; ++c) {
-            if (fences.has_h_fence(r, c)) {
+            // Check bits from the (potentially flipped) integers
+            if ((h_fences >> (r * 8 + c)) & 1) {
                 base[2 * 81 + r * 9 + c] = 1.0f;
             }
-            if (fences.has_v_fence(r, c)) {
+            if ((v_fences >> (r * 8 + c)) & 1) {
                 base[3 * 81 + r * 9 + c] = 1.0f;
             }
         }

@@ -355,6 +355,9 @@ class MultiFileTrainingSampleDataset:
 
         # Policy (209 floats = 836 bytes)
         policy = np.frombuffer(data[24:24+NUM_ACTIONS*4], dtype=np.float32).copy()
+        policy_sum = np.sum(policy)
+        if not (0.99 < policy_sum < 1.01):
+            logging.warning(f"CORRUPT DATA? Policy sums to {policy_sum}, expected 1.0")
 
         # Value (1 float = 4 bytes)
         value = struct.unpack('<f', data[24+NUM_ACTIONS*4:24+NUM_ACTIONS*4+4])[0]

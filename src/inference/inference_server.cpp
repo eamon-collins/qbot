@@ -54,6 +54,10 @@ void InferenceServer::stop() {
               << ", avg batch size: " << std::fixed << std::setprecision(1) << avg_batch << "\n";
 }
 
+void InferenceServer::flush() {
+    queue_cv_.notify_all();
+}
+
 std::future<float> InferenceServer::submit(const StateNode* node) {
     std::promise<float> promise;
     auto future = promise.get_future();
@@ -121,7 +125,7 @@ void InferenceServer::inference_loop() {
                        stop_requested_.load(std::memory_order_acquire);
             });
         }
-
+        
         // Process pending requests
         process_pending();
     }

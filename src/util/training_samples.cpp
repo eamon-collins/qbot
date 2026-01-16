@@ -21,6 +21,9 @@ std::array<float, NUM_ACTIONS> extract_visit_distribution(
         return policy;
     }
 
+    // If it's P2's turn, the board state in the sample is flipped 180°.
+    // The policy indices must also be flipped to match the network's relative perspective.
+    const bool flip_perspective = !parent.is_p1_to_move();
     // First pass: sum total visits across all children
     uint32_t total_visits = 0;
     uint32_t child = parent.first_child;
@@ -29,28 +32,28 @@ std::array<float, NUM_ACTIONS> extract_visit_distribution(
         child = pool[child].next_sibling;
     }
 
-    if (total_visits == 0) {
-        // No visits recorded - use priors as fallback
-        child = parent.first_child;
-        while (child != NULL_NODE) {
-            int action_idx = move_to_action_index(pool[child].move);
-            if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
-                policy[action_idx] = pool[child].stats.prior;
-            }
-            child = pool[child].next_sibling;
-        }
-        return policy;
-    }
+    //populate policy (visits if available, otherwise priors)
+    const float scale = (total_visits > 0) ? (1.0f / static_cast<float>(total_visits)) : 1.0f;
+    const bool use_visits = (total_visits > 0);
 
-    // Second pass: convert visit counts to probabilities
     child = parent.first_child;
     while (child != NULL_NODE) {
-        int action_idx = move_to_action_index(pool[child].move);
+        const StateNode& child_node = pool[child];
+        int action_idx = move_to_action_index(child_node.move);
+
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
-            uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
-            policy[action_idx] = static_cast<float>(visits) / static_cast<float>(total_visits);
+            // Use visits count if we searched, otherwise rely on the existing priors
+            float value = use_visits 
+                        ? (static_cast<float>(child_node.stats.visits.load(std::memory_order_relaxed)) * scale)
+                        : child_node.stats.prior;
+
+            if (flip_perspective) {
+                action_idx = flip_action_index(action_idx);
+            }
+
+            policy[action_idx] = value;
         }
-        child = pool[child].next_sibling;
+        child = child_node.next_sibling;
     }
 
     return policy;
@@ -182,8 +185,7 @@ void TrainingSampleCollector::add_sample(const NodePool& pool, uint32_t node_idx
     // Value target: game outcome from current player's perspective
     // game_outcome is from P1's perspective (+1 = P1 wins)
     // We need it from current player's perspective
-    bool is_p1_turn = node.is_p1_to_move();
-    sample.value = is_p1_turn ? game_outcome : -game_outcome;
+    sample.value = node.is_p1_to_move() ? game_outcome : -game_outcome;
 
     std::lock_guard lock(mutex_);
     samples_.push_back(sample);

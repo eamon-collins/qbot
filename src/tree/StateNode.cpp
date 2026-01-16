@@ -39,7 +39,7 @@ void StateNode::print_node() const noexcept {
        << ") fences=" << static_cast<int>(p2.fences) << "\n";
 
     if (is_terminal()) {
-        ss << "TERMINAL: " << (terminal_value > 0 ? "P1 wins" : "P2 wins") << "\n";
+        ss << "TERMINAL: " << (!is_p1_to_move() ? "P1 wins" : "P2 wins") << "\n";
     }
 
     // Draw board: rows go from 8 (top) down to 0 (bottom)
@@ -299,11 +299,14 @@ size_t StateNode::generate_valid_children() noexcept {
         return 0;
     }
 
+    float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
     // Link children as siblings (left-child right-sibling representation)
     for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
         p[child_indices[i]].next_sibling = child_indices[i + 1];
+        p[child_indices[i]].stats.prior = uniform_prior; 
     }
     p[child_indices.back()].next_sibling = NULL_NODE;
+    p[child_indices.back()].stats.prior = uniform_prior; 
 
     // Set first child and mark as expanded
     first_child = child_indices.front();

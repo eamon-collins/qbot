@@ -154,6 +154,7 @@ struct TrainingStats {
     const StateNode& node,
     const TreeBoundsConfig& bounds) noexcept
 {
+    return true;
     size_t current_bytes = pool.memory_usage_bytes();
     float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
 
@@ -301,9 +302,7 @@ inline void remove_virtual_loss(
 
 /// Determine winner when both players are out of fences
 /// Uses path length to goal - whoever is closer wins
-/// Accounts for whose turn it is (tie goes to player about to move)
-/// @param node Game state to evaluate
-/// @return p2_dist - p1_dist to quantify by how much either is winning by.
+/// @return +1 if current player wins, -1 if current player loses (relative perspective)
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
@@ -312,25 +311,25 @@ inline void remove_virtual_loss(
 
     if (p1_dist < 0 || p2_dist < 0) {
         // Should never happen - someone is blocked
-        return 0.0f;
+        return 0;
     }
 
-    if (p1_dist < p2_dist) {
-        return 1;
-    } else if (p2_dist < p1_dist) {
-        return -1;
-    } else { //Tie breaker is whoever's move it is, as they will win with same length path
-        return node.is_p1_to_move() ? 1 : -1;
-    }
+    int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
+    int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
+    // node.print_node();
+    // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
+
+    // current player moves first, they win if their distance to
+    // goal is less than OR equal to the opponent's distance
+    return (curr_dist <= opp_dist) ? 1 : -1;
 }
 
 
 /// Evaluate a leaf node
-/// Uses neural network if available, otherwise uses heuristic (path distance)
 /// @param node Node to evaluate
 /// @param stats Training stats (updated with evaluation count)
 /// @param inference Optional NN inference engine
-/// @return Value in [-1, 1] from P1's perspective
+/// @return Value in relative perspective (+1 = current player winning, -1 = losing)
 [[nodiscard]] inline float evaluate_leaf(
     const StateNode& node,
     TrainingStats& stats,
@@ -379,8 +378,8 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-    int max_moves_per_game = 80;           // After this many moves, declare a draw and assign partial points to closer player
-    float max_draw_reward = 0.8;           // On a draw, this is maximum reward we give the closest player 
+    int max_moves_per_game = 60;           // After this many moves, declare a draw and assign partial points to closer player
+    float max_draw_reward = 0.5;           // On a draw, this is maximum reward we give the closest player 
 };
 
 /// Compute policy distribution from child Q-values
@@ -608,12 +607,45 @@ public:
         InferenceServer& server,
         int num_games,
         int num_workers,
+        int games_per_worker,
         MultiGameStats& stats,
         const TreeBoundsConfig& bounds,
         TrainingSampleCollector* collector,
         const std::filesystem::path& samples_file,
         std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
         int checkpoint_interval_games = 10);
+
+    struct GameContext {
+        uint32_t current_node;
+        std::vector<uint32_t> game_path;
+        std::vector<uint32_t> sample_positions;
+        int num_moves{0};
+        bool active{true};
+        bool needs_expansion{false};
+        bool needs_mcts{false};
+        int mcts_iterations_done{0};
+    };
+    struct MultiGameWorkerSync {
+        std::atomic<bool>& pause_requested;
+        std::atomic<int>& workers_paused;
+        std::atomic<bool>& paused;
+        std::atomic<uint32_t>& current_root;
+        std::mutex& pause_mutex;
+        std::condition_variable& pause_cv;
+        std::condition_variable& resume_cv;
+    };
+
+    //can run multiple games per worker thread
+    template<InferenceProvider Inference>
+    void run_multi_game_worker(
+        std::stop_token stop_token,
+        NodePool& pool,
+        Inference& inference,
+        int games_per_worker,
+        std::atomic<int>& games_remaining,
+        MultiGameStats& stats,
+        MultiGameWorkerSync& sync,
+        TrainingSampleCollector* collector = nullptr);
 
     /// Play a single arena game between two models
     /// Uses shared pool but does NOT cache NN values (different models produce different values)

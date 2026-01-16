@@ -334,23 +334,27 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
 
         // Check terminal conditions
         if (node.is_terminal()) {
-            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            // Convert from relative to absolute perspective
+            int relative_value = static_cast<int>(node.terminal_value);
+            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
         if (node.p1.row == 8) {
-            result.winner = 1;
-            node.set_terminal(1.0f);
-            break;
-        }
-        if (node.p2.row == 0) {
-            result.winner = -1;
+            result.winner = 1;  // P1 won
+            //terminal val always negative as person whose turn it would be just lost
             node.set_terminal(-1.0f);
             break;
         }
-        //Early termination for no fences left
+        if (node.p2.row == 0) {
+            result.winner = -1;  // P2 won
+            node.set_terminal(-1.0f);
+            break;
+        }
         if (node.p1.fences == 0 && node.p2.fences == 0) {
-            result.winner = early_terminate_no_fences(node);
-            node.set_terminal(static_cast<float>(result.winner));
+            int relative_winner = early_terminate_no_fences(node);
+            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+            node.set_terminal(static_cast<float>(relative_winner));
+            // std::cout << "selfplay earlyterm rel " << relative_winner << " abs " << result.winner << " p1move: " << node.is_p1_to_move() << std::endl;
             break;
         }
 
@@ -442,20 +446,17 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         result.num_moves++;
 
 
-
-
-        // Early termination for long games (scaled distance-based value)
+        // Early termination for long games (scaled draw value)
         if (result.num_moves >= config_.max_moves_per_game) {
-            // draw score is just difference in moves to goal and returned for stats/promotion decisions
-            // game_value is scaled to be a lesser reward than a full win and backpropagated through the tree for NN.
-            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
-            int draw_score = early_terminate_no_fences(pool[current]);
-            float game_value = std::clamp(draw_score, -10, 10) / 10.0 * config_.max_draw_reward;
+            int relative_draw = early_terminate_no_fences(pool[current]);
+            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
-            result.draw_score = draw_score;
+            result.draw_score = game_value;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
+                //converts back from absolute to relative as we go up
                 float node_value = n.is_p1_to_move() ? game_value : -game_value;
                 n.stats.update(node_value);
             }
@@ -475,6 +476,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         for (size_t i = game_path.size(); i > 0; --i) {
             uint32_t idx = game_path[i - 1];
             StateNode& n = pool[idx];
+            //conversion back to relative
             float node_value = n.is_p1_to_move() ? value : -value;
             n.stats.update(node_value);
         }
@@ -511,12 +513,9 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         if constexpr (is_inference_server_v<Inference>) {
             // InferenceServer: wait for futures
             for (auto& p : pending) {
-                float value = p.future.get();  // Current player's perspective
-                StateNode& eval_node = pool[p.eval_node_idx];
-                // Convert to P1's absolute perspective for storage and backprop
-                float p1_value = eval_node.is_p1_to_move() ? value : -value;
-                pool[p.eval_node_idx].stats.set_nn_value(p1_value);
-                backpropagate(pool, p.path, p1_value);
+                float value = p.future.get();  // Relative perspective
+                pool[p.eval_node_idx].stats.set_nn_value(value);
+                backpropagate(pool, p.path, value);
             }
         } else {
             // ModelInference: batch evaluate
@@ -543,11 +542,8 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                 }
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
-                    StateNode& eval_node = pool[pending[i].eval_node_idx];
-                    // Convert from current player's perspective to P1's absolute perspective
-                    float p1_value = eval_node.is_p1_to_move() ? values[j] : -values[j];
-                    pool[pending[i].eval_node_idx].stats.set_nn_value(p1_value);
-                    backpropagate(pool, pending[i].path, p1_value);
+                    pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
+                    backpropagate(pool, pending[i].path, values[j]);
                 }
             }
         }
@@ -681,9 +677,8 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
         }
     }
 
-    // Convert value from current player's perspective to P1's absolute perspective
-    float p1_value = node.is_p1_to_move() ? parent_eval.value : -parent_eval.value;
-    node.stats.set_nn_value(p1_value);
+    // Cache NN value (already in relative perspective)
+    node.stats.set_nn_value(parent_eval.value);
 
     {
         ScopedTimer t(timers.generate_children);
@@ -695,10 +690,12 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     // Collect policy logits and apply softmax
     std::vector<std::pair<uint32_t, int>> child_actions;
     float max_logit = -std::numeric_limits<float>::infinity();
+    bool flip_policy = !node.is_p1_to_move(); 
 
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         int action_idx = move_to_action_index(pool[child].move);
+        action_idx = flip_policy ? flip_action_index(action_idx) : action_idx;
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
             child_actions.emplace_back(child, action_idx);
             max_logit = std::max(max_logit, parent_eval.policy[action_idx]);
@@ -722,14 +719,14 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     }
 }
 
+/// Backpropagate value up path (value is relative to last node in path)
 void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value) {
+    float node_value = value;
     for (size_t i = path.size(); i > 0; --i) {
         uint32_t idx = path[i - 1];
         StateNode& node = pool[idx];
-
-        // Value from this node's perspective
-        float node_value = node.is_p1_to_move() ? value : -value;
         node.stats.update(node_value);
+        node_value = -node_value;  // Negate as we go up (alternating players)
     }
 }
 
@@ -765,9 +762,8 @@ void SelfPlayEngine::compute_priors_progressive(NodePool& pool, uint32_t node_id
         return;
     }
 
-    // Cache the NN value - convert from current player's perspective to P1's absolute perspective
-    float p1_value = node.is_p1_to_move() ? eval.value : -eval.value;
-    node.stats.set_nn_value(p1_value);
+    // Cache NN value (already in relative perspective)
+    node.stats.set_nn_value(eval.value);
 
     // Compute softmax over valid actions only
     float max_logit = -std::numeric_limits<float>::infinity();
@@ -874,10 +870,12 @@ void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, Inference
     // Collect policy logits for valid moves and apply softmax
     std::vector<std::pair<uint32_t, int>> child_actions;
     float max_logit = -std::numeric_limits<float>::infinity();
+    bool flip_policy = !node.is_p1_to_move(); 
 
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         int action_idx = move_to_action_index(pool[child].move);
+        action_idx = flip_policy ? flip_action_index(action_idx) : action_idx;
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
             child_actions.emplace_back(child, action_idx);
             max_logit = std::max(max_logit, eval.policy[action_idx]);
@@ -909,6 +907,7 @@ void SelfPlayEngine::run_multi_game(
     InferenceServer& server,
     int num_games,
     int num_workers,
+    int games_per_worker,
     MultiGameStats& stats,
     const TreeBoundsConfig& bounds,
     TrainingSampleCollector* collector,
@@ -926,9 +925,13 @@ void SelfPlayEngine::run_multi_game(
     std::condition_variable pause_cv;
     std::condition_variable resume_cv;
     std::atomic<bool> paused{false};
-
     // Shared root index that workers can read (updated on pool reset)
     std::atomic<uint32_t> current_root{root_idx};
+
+    MultiGameWorkerSync sync{
+        pause_requested, workers_paused, paused, 
+        current_root, pause_mutex, pause_cv, resume_cv
+    };
 
     int pool_reset_count = 0;
 
@@ -944,6 +947,11 @@ void SelfPlayEngine::run_multi_game(
     workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
+        // workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
+        //                       &sync, collector, games_per_worker](std::stop_token st) {
+        //     run_multi_game_worker(st, pool, server, games_per_worker,
+        //                           games_remaining, stats, sync, collector);
+        // });
         workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
                               &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
                               &resume_cv, &paused, i](std::stop_token st) {
@@ -979,7 +987,8 @@ void SelfPlayEngine::run_multi_game(
 
     // Monitor progress, call checkpoints, and handle memory-bounded resets
     int last_checkpoint = 0;
-    while (games_remaining.load(std::memory_order_relaxed) > 0) {
+    // while (games_remaining.load(std::memory_order_relaxed) > 0) {
+    while (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Check memory usage
@@ -1036,8 +1045,11 @@ void SelfPlayEngine::run_multi_game(
                       << " complete" << std::endl;
 
             // Resume workers
-            pause_requested.store(false, std::memory_order_release);
-            paused.store(false, std::memory_order_release);
+            {
+                std::lock_guard lock(pause_mutex);
+                pause_requested.store(false, std::memory_order_release);
+                paused.store(false, std::memory_order_release);
+            }
             resume_cv.notify_all();
         }
 
@@ -1070,6 +1082,441 @@ void SelfPlayEngine::run_multi_game(
         std::cout << " with " << pool_reset_count << " pool resets";
     }
     std::cout << "\n";
+}
+// In mcts.cpp:
+
+template<InferenceProvider Inference>
+void SelfPlayEngine::run_multi_game_worker(
+    std::stop_token stop_token,
+    NodePool& pool,
+    Inference& inference,
+    int games_per_worker,
+    std::atomic<int>& games_remaining,
+    MultiGameStats& stats,
+    MultiGameWorkerSync& sync,
+    TrainingSampleCollector* collector)
+{
+    std::vector<GameContext> games(games_per_worker);
+    int active_games = 0;
+
+    auto check_pause = [&]() -> bool {
+        if (stop_token.stop_requested()) {
+            return true;
+        }
+
+        if (sync.pause_requested.load(std::memory_order_acquire)) {
+            sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
+            {
+                std::unique_lock lock(sync.pause_mutex);
+                sync.pause_cv.notify_all();  // Tell main thread we're paused
+                sync.resume_cv.wait(lock, [&]() {
+                    return !sync.pause_requested.load(std::memory_order_acquire) ||
+                           stop_token.stop_requested();
+                });
+            }
+            sync.workers_paused.fetch_sub(1, std::memory_order_relaxed);
+
+            if (stop_token.stop_requested()) return true;
+
+            // Invalidate all games - pool was reset
+            std::cerr << "invalidating games\n";
+            for (auto& g : games) {
+                if (g.active) active_games--;
+                g.active = false;
+            }
+            return true;  // Pause happened, reclaim games
+        }
+        return false;
+    };
+
+    auto try_claim_game = [&](GameContext& g) -> bool {
+        int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+        if (remaining <= 0) {
+            games_remaining.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        uint32_t root = sync.current_root.load(std::memory_order_acquire);
+        g.current_node = root;
+        g.game_path.clear();
+        g.game_path.push_back(root);
+        g.sample_positions.clear();
+        g.num_moves = 0;
+        g.active = true;
+        g.needs_expansion = false;
+        g.needs_mcts = false;
+        g.mcts_iterations_done = 0;
+        pool[root].set_on_game_path();
+        return true;
+    };
+
+    auto finish_game = [&](GameContext& g, SelfPlayResult result) {
+        if (result.winner != 0 && !result.error) {
+            float value = static_cast<float>(result.winner);
+            for (size_t i = g.game_path.size(); i > 0; --i) {
+                uint32_t idx = g.game_path[i - 1];
+                StateNode& n = pool[idx];
+                float node_value = n.is_p1_to_move() ? value : -value;
+                n.stats.update(node_value);
+            }
+        }
+
+        if (collector && result.winner != 0 && !result.error) {
+            float game_outcome = static_cast<float>(result.winner);
+            for (uint32_t pos : g.sample_positions) {
+                collector->add_sample(pool, pos, game_outcome);
+            }
+        }
+
+        stats.add_result(result);
+        g.active = false;
+        active_games--;
+    };
+
+    if (check_pause()) return;
+
+    for (auto& g : games) {
+        if (try_claim_game(g)) {
+            active_games++;
+        }
+    }
+
+    struct PendingEval {
+        int game_idx;
+        std::vector<uint32_t> path;
+        uint32_t eval_node_idx;
+        std::future<float> future;
+    };
+
+    struct PendingExpansion {
+        int game_idx;
+        uint32_t node_idx;
+        std::future<EvalResult> future;
+    };
+
+    MCTSConfig mcts_config;
+    mcts_config.c_puct = 1.5f;
+    mcts_config.fpu = 0.0f;
+
+    while (active_games > 0) {
+        if (check_pause()) {
+            std::cerr << "check pause true\n";
+            if (stop_token.stop_requested()) break;
+            std::cerr << "try_claim_game\n";
+            for (auto& g : games) {
+                if (!g.active && try_claim_game(g)) {
+                    active_games++;
+                }
+            }
+            if (active_games == 0) break;
+            continue;
+        }
+
+        std::vector<PendingExpansion> pending_expansions;
+
+        // Phase 1: Check terminals and submit expansions
+        for (int gi = 0; gi < games_per_worker; ++gi) {
+            GameContext& g = games[gi];
+            if (!g.active) continue;
+
+            StateNode& node = pool[g.current_node];
+
+            if (node.is_terminal()) {
+                int rel = static_cast<int>(node.terminal_value);
+                SelfPlayResult result;
+                result.winner = node.is_p1_to_move() ? rel : -rel;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            if (node.p1.row == 8) {
+                node.set_terminal(-1.0f);
+                SelfPlayResult result;
+                result.winner = 1;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            if (node.p2.row == 0) {
+                node.set_terminal(-1.0f);
+                SelfPlayResult result;
+                result.winner = -1;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            if (node.p1.fences == 0 && node.p2.fences == 0) {
+                int rel = early_terminate_no_fences(node);
+                node.set_terminal(static_cast<float>(rel));
+                SelfPlayResult result;
+                result.winner = node.is_p1_to_move() ? rel : -rel;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            if (g.num_moves >= config_.max_moves_per_game) {
+                int rel = early_terminate_no_fences(node);
+                int abs = node.is_p1_to_move() ? rel : -rel;
+                SelfPlayResult result;
+                result.winner = 0;
+                result.draw_score = abs * config_.max_draw_reward;
+                result.num_moves = g.num_moves;
+
+                float game_value = result.draw_score;
+                for (size_t i = g.game_path.size(); i > 0; --i) {
+                    StateNode& n = pool[g.game_path[i - 1]];
+                    float nv = n.is_p1_to_move() ? game_value : -game_value;
+                    n.stats.update(nv);
+                }
+                if (collector) {
+                    for (uint32_t pos : g.sample_positions) {
+                        collector->add_sample(pool, pos, game_value);
+                    }
+                }
+                stats.add_result(result);
+                g.active = false;
+                active_games--;
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            if (!node.is_expanded()) {
+                g.needs_expansion = true;
+                if constexpr (is_inference_server_v<Inference>) {
+                    auto future = inference.submit_full(&node);
+                    pending_expansions.push_back({gi, g.current_node, std::move(future)});
+                }
+            } else {
+                g.needs_expansion = false;
+                g.needs_mcts = true;
+                g.mcts_iterations_done = 0;
+            }
+        }
+
+        // Force flush for expansions - don't wait for full batch
+        if (!pending_expansions.empty()) {
+            if constexpr (is_inference_server_v<Inference>) {
+                inference.flush();
+            }
+        }
+
+        for (auto& pe : pending_expansions) {
+            GameContext& g = games[pe.game_idx];
+            StateNode& node = pool[pe.node_idx];
+
+            EvalResult eval = pe.future.get();
+
+            size_t mutex_idx = pe.node_idx % NUM_EXPANSION_MUTEXES;
+            std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+
+            if (!node.is_expanded()) {
+                node.stats.set_nn_value(eval.value);
+                node.generate_valid_children();
+
+                if (node.has_children()) {
+                    bool flip = !node.is_p1_to_move();
+                    std::vector<std::pair<uint32_t, int>> child_actions;
+                    float max_logit = -std::numeric_limits<float>::infinity();
+
+                    uint32_t child = node.first_child;
+                    while (child != NULL_NODE) {
+                        int action_idx = move_to_action_index(pool[child].move);
+                        action_idx = flip ? flip_action_index(action_idx) : action_idx;
+                        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+                            child_actions.emplace_back(child, action_idx);
+                            max_logit = std::max(max_logit, eval.policy[action_idx]);
+                        }
+                        child = pool[child].next_sibling;
+                    }
+
+                    float sum_exp = 0.0f;
+                    std::vector<float> exp_logits(child_actions.size());
+                    for (size_t i = 0; i < child_actions.size(); ++i) {
+                        exp_logits[i] = std::exp(eval.policy[child_actions[i].second] - max_logit);
+                        sum_exp += exp_logits[i];
+                    }
+                    for (size_t i = 0; i < child_actions.size(); ++i) {
+                        pool[child_actions[i].first].stats.prior = exp_logits[i] / sum_exp;
+                    }
+                }
+            }
+
+            g.needs_expansion = false;
+            g.needs_mcts = node.has_children();
+            g.mcts_iterations_done = 0;
+        }
+
+        // Phase 2: MCTS iterations
+        std::vector<PendingEval> pending_evals;
+        int iterations_since_pause_check = 0;
+        constexpr int PAUSE_CHECK_INTERVAL = 100;
+        constexpr int MAX_PENDING_PER_FLUSH = 256;  // Flush when we have this many
+
+        auto flush_evals = [&]() {
+            if (pending_evals.empty()) return;
+
+            if constexpr (is_inference_server_v<Inference>) {
+                inference.flush();
+            }
+
+            for (auto& pe : pending_evals) {
+                float value = pe.future.get();
+                pool[pe.eval_node_idx].stats.set_nn_value(value);
+                backpropagate(pool, pe.path, value);
+                games[pe.game_idx].mcts_iterations_done++;
+            }
+            pending_evals.clear();
+        };
+
+        while (true) {
+            if (++iterations_since_pause_check >= PAUSE_CHECK_INTERVAL) {
+                iterations_since_pause_check = 0;
+                if (check_pause()) break;
+            }
+
+            // Check if all MCTS is done
+            bool any_needs_mcts = false;
+            for (int gi = 0; gi < games_per_worker; ++gi) {
+                GameContext& g = games[gi];
+                if (g.active && g.needs_mcts && 
+                    g.mcts_iterations_done < config_.simulations_per_move) {
+                    any_needs_mcts = true;
+                    break;
+                }
+            }
+            if (!any_needs_mcts) {
+                flush_evals();
+                break;
+            }
+
+            // Collect one iteration from each game that needs it
+            for (int gi = 0; gi < games_per_worker; ++gi) {
+                GameContext& g = games[gi];
+                if (!g.active || !g.needs_mcts) continue;
+                if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
+
+                std::vector<uint32_t> path;
+                path.reserve(64);
+                uint32_t current = g.current_node;
+
+                while (current != NULL_NODE) {
+                    path.push_back(current);
+                    StateNode& n = pool[current];
+                    if (n.is_terminal()) break;
+                    if (!n.has_children()) break;
+                    current = select_child_puct(pool, current, mcts_config);
+                }
+
+                if (path.empty()) continue;
+
+                uint32_t leaf_idx = path.back();
+                StateNode& leaf = pool[leaf_idx];
+
+                if (leaf.is_terminal()) {
+                    backpropagate(pool, path, leaf.terminal_value);
+                    g.mcts_iterations_done++;
+                    continue;
+                }
+
+                if (!leaf.is_expanded()) {
+                    size_t mutex_idx = leaf_idx % NUM_EXPANSION_MUTEXES;
+                    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+                    if (!leaf.is_expanded()) {
+                        leaf.generate_valid_children();
+                    }
+                }
+
+                uint32_t eval_node_idx = leaf_idx;
+                if (leaf.has_children()) {
+                    uint32_t child = select_child_puct(pool, leaf_idx, mcts_config);
+                    if (child != NULL_NODE) {
+                        path.push_back(child);
+                        eval_node_idx = child;
+                    }
+                }
+
+                StateNode& eval_node = pool[eval_node_idx];
+                if (eval_node.stats.has_nn_value()) {
+                    backpropagate(pool, path, eval_node.stats.get_nn_value());
+                    g.mcts_iterations_done++;
+                } else {
+                    if constexpr (is_inference_server_v<Inference>) {
+                        auto future = inference.submit(&eval_node);
+                        pending_evals.push_back({gi, std::move(path), eval_node_idx, std::move(future)});
+                    }
+                }
+            }
+
+            // Flush if we have enough pending, OR if we collected from all games
+            if (pending_evals.size() >= MAX_PENDING_PER_FLUSH || 
+                pending_evals.size() >= static_cast<size_t>(active_games)) {
+                flush_evals();
+            }
+        }
+
+        if (sync.pause_requested.load(std::memory_order_acquire)) {
+            continue;
+        }
+
+        // Phase 3: Make moves
+        for (int gi = 0; gi < games_per_worker; ++gi) {
+            GameContext& g = games[gi];
+            if (!g.active || !g.needs_mcts) continue;
+            if (g.mcts_iterations_done < config_.simulations_per_move) continue;
+
+            if (collector) {
+                g.sample_positions.push_back(g.current_node);
+            }
+
+            float temp = (g.num_moves < config_.temperature_drop_ply) 
+                       ? config_.temperature : 0.0f;
+            auto policy = compute_policy_from_q(pool, g.current_node, temp);
+
+            if (policy.empty()) {
+                SelfPlayResult result;
+                result.error = true;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            Move selected = select_move_from_policy(policy, config_.stochastic && temp > 0);
+
+            uint32_t next = NULL_NODE;
+            StateNode& node = pool[g.current_node];
+            uint32_t child = node.first_child;
+            while (child != NULL_NODE) {
+                if (pool[child].move == selected) {
+                    next = child;
+                    break;
+                }
+                child = pool[child].next_sibling;
+            }
+
+            if (next == NULL_NODE) {
+                SelfPlayResult result;
+                result.error = true;
+                result.num_moves = g.num_moves;
+                finish_game(g, result);
+                if (try_claim_game(g)) active_games++;
+                continue;
+            }
+
+            g.current_node = next;
+            g.game_path.push_back(next);
+            pool[next].set_on_game_path();
+            g.num_moves++;
+            g.needs_mcts = false;
+        }
+    }
 }
 
 void SelfPlayEngine::worker_loop(
@@ -1131,13 +1578,13 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         if (pending.empty()) return;
 
         for (auto& p : pending) {
-            float leaf_value = p.future.get();
-            // leaf_value is from current player's perspective at eval_node
-            // Convert to P1's absolute perspective for backprop
-            StateNode& eval_node = pool[p.eval_node_idx];
-            float p1_value = eval_node.is_p1_to_move() ? leaf_value : -leaf_value;
-            // NOTE: Don't cache NN values in arena - different models produce different values
-            backpropagate(pool, p.path, p1_value);
+            float leaf_value = p.future.get();  // Relative perspective at eval_node
+            // Don't cache NN values in arena - different models produce different values
+            if (p.eval_node_idx != p.path.back()) {
+                leaf_value = -leaf_value;
+                std::cout << "ERROR last nod in path isnt eval node" << std::endl;
+            }
+            backpropagate(pool, p.path, leaf_value);
         }
         pending.clear();
     };
@@ -1169,7 +1616,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         StateNode& leaf = pool[leaf_idx];
 
         if (leaf.is_terminal()) {
-            // terminal_value is from P1's perspective
             backpropagate(pool, path, leaf.terminal_value);
             continue;
         }
@@ -1226,21 +1672,24 @@ SelfPlayResult SelfPlayEngine::arena_game(
 
         // Check terminal
         if (node.is_terminal()) {
-            result.winner = (node.terminal_value > 0) ? 1 : -1;
+            int relative_value = static_cast<int>(node.terminal_value);
+            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
         if (node.p1.row == 8) {
             result.winner = 1;
+            node.set_terminal(-1.0f);
             break;
         }
         if (node.p2.row == 0) {
             result.winner = -1;
+            node.set_terminal(-1.0f);
             break;
         }
-        //Early termination for no fences left
         if (node.p1.fences == 0 && node.p2.fences == 0) {
-            result.winner = early_terminate_no_fences(node);
-            node.set_terminal(static_cast<float>(result.winner));
+            int relative_winner = early_terminate_no_fences(node);
+            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+            node.set_terminal(static_cast<float>(relative_winner));
             break;
         }
 
@@ -1302,16 +1751,17 @@ SelfPlayResult SelfPlayEngine::arena_game(
         pool[current].set_on_game_path();
         result.num_moves++;
 
-        // Early termination for long games (scaled distance-based value)
+        // Early termination for long games
         if (result.num_moves >= config_.max_moves_per_game) {
-            // this now returns just +/- 1, so this doesn't make sense, but should rarely draw
-            int draw_score = early_terminate_no_fences(pool[current]);
-            float game_value = std::clamp(draw_score , -10, 10) / 10.0 * config_.max_draw_reward;
+            int relative_draw = early_terminate_no_fences(pool[current]);
+            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
-            result.draw_score = draw_score;
+            result.draw_score = absolute_draw;
             for (size_t i = game_path.size(); i > 0; --i) {
                 uint32_t idx = game_path[i - 1];
                 StateNode& n = pool[idx];
+                //conversion back to relative
                 float node_value = n.is_p1_to_move() ? game_value : -game_value;
                 n.stats.update(node_value);
             }
@@ -1320,7 +1770,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
     }
 
     // Backpropagate final result
-    if (result.winner != 0) {
+    if (! result.error) {
         ScopedTimer t(timers.backprop);
         float value = static_cast<float>(result.winner);
         for (size_t i = game_path.size(); i > 0; --i) {
@@ -1364,6 +1814,7 @@ void SelfPlayEngine::arena_worker_loop(
             result = arena_game(pool, root_idx, server_p2, server_p1);
             // Invert winner since we swapped the models
             result.winner = -result.winner;
+            result.draw_score = -result.draw_score;
         } else {
             result = arena_game(pool, root_idx, server_p1, server_p2);
         }
@@ -1446,6 +1897,10 @@ template void SelfPlayEngine::expand_with_nn_priors<ModelInference>(
     NodePool&, uint32_t, ModelInference&);
 template void SelfPlayEngine::expand_with_nn_priors<InferenceServer>(
     NodePool&, uint32_t, InferenceServer&);
+
+template void SelfPlayEngine::run_multi_game_worker<InferenceServer>(
+    std::stop_token, NodePool&, InferenceServer&, int,
+    std::atomic<int>&, MultiGameStats&, MultiGameWorkerSync&, TrainingSampleCollector*);
 
 #endif // QBOT_ENABLE_INFERENCE
 
