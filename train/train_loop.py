@@ -74,8 +74,8 @@ def get_next_iteration(samples_dir: str) -> int:
         return 0
 
     max_iter = -1
-    for f in samples_path.glob("tree_*.qbot"):
-        match = re.match(r"tree_(\d+)\.qbot", f.name)
+    for f in samples_path.glob("tree_*.qsamples"):
+        match = re.search(r'_(\d+)_[a-f0-9]+\.qsamples$', f.name)
         if match:
             max_iter = max(max_iter, int(match.group(1)))
 

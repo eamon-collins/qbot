@@ -607,12 +607,45 @@ public:
         InferenceServer& server,
         int num_games,
         int num_workers,
+        int games_per_worker,
         MultiGameStats& stats,
         const TreeBoundsConfig& bounds,
         TrainingSampleCollector* collector,
         const std::filesystem::path& samples_file,
         std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
         int checkpoint_interval_games = 10);
+
+    struct GameContext {
+        uint32_t current_node;
+        std::vector<uint32_t> game_path;
+        std::vector<uint32_t> sample_positions;
+        int num_moves{0};
+        bool active{true};
+        bool needs_expansion{false};
+        bool needs_mcts{false};
+        int mcts_iterations_done{0};
+    };
+    struct MultiGameWorkerSync {
+        std::atomic<bool>& pause_requested;
+        std::atomic<int>& workers_paused;
+        std::atomic<bool>& paused;
+        std::atomic<uint32_t>& current_root;
+        std::mutex& pause_mutex;
+        std::condition_variable& pause_cv;
+        std::condition_variable& resume_cv;
+    };
+
+    //can run multiple games per worker thread
+    template<InferenceProvider Inference>
+    void run_multi_game_worker(
+        std::stop_token stop_token,
+        NodePool& pool,
+        Inference& inference,
+        int games_per_worker,
+        std::atomic<int>& games_remaining,
+        MultiGameStats& stats,
+        MultiGameWorkerSync& sync,
+        TrainingSampleCollector* collector = nullptr);
 
     /// Play a single arena game between two models
     /// Uses shared pool but does NOT cache NN values (different models produce different values)

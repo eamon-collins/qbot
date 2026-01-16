@@ -79,6 +79,8 @@ public:
     /// Stop the inference thread (processes remaining requests first)
     void stop();
 
+    void flush();
+
     /// Check if server is running
     [[nodiscard]] bool is_running() const noexcept {
         return running_.load(std::memory_order_acquire);
