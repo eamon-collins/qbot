@@ -496,7 +496,7 @@ template<InferenceProvider Inference>
 void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                                           Inference& inference, int iterations) {
     auto& timers = get_timers();
-    constexpr int EVAL_BATCH_SIZE = 64;
+    constexpr int EVAL_BATCH_SIZE = 128;
 
     // PendingEval structure differs: InferenceServer uses futures, ModelInference uses batch eval
     struct PendingEval {
@@ -920,7 +920,9 @@ void SelfPlayEngine::run_multi_game(
 
     // Synchronization for memory-bounded pool reset
     std::atomic<bool> pause_requested{false};
+    std::atomic<bool> draining{false};
     std::atomic<int> workers_paused{0};
+    std::atomic<int> total_active_games{0};
     std::mutex pause_mutex;
     std::condition_variable pause_cv;
     std::condition_variable resume_cv;
@@ -929,16 +931,18 @@ void SelfPlayEngine::run_multi_game(
     std::atomic<uint32_t> current_root{root_idx};
 
     MultiGameWorkerSync sync{
-        pause_requested, workers_paused, paused, 
+        pause_requested, draining, workers_paused, total_active_games, 
         current_root, pause_mutex, pause_cv, resume_cv
     };
 
     int pool_reset_count = 0;
 
+    //220000 is approx constant for # bytes per game per simulationpermove.
+    size_t soft_limit_bytes = bounds.max_bytes - (220000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
-              << "soft limit: " << (bounds.soft_limit_ratio * 100) << "%\n";
+              << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB\n";
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -947,69 +951,77 @@ void SelfPlayEngine::run_multi_game(
     workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        // workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
-        //                       &sync, collector, games_per_worker](std::stop_token st) {
-        //     run_multi_game_worker(st, pool, server, games_per_worker,
-        //                           games_remaining, stats, sync, collector);
-        // });
-        workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
-                              &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
-                              &resume_cv, &paused, i](std::stop_token st) {
-            while (!st.stop_requested()) {
-                // Check if pause is requested - if so, wait
-                if (pause_requested.load(std::memory_order_acquire)) {
-                    workers_paused.fetch_add(1, std::memory_order_relaxed);
-                    {
-                        std::unique_lock lock(pause_mutex);
-                        pause_cv.notify_all();  // Signal main thread we're paused
-                        resume_cv.wait(lock, [&]() {
-                            return !paused.load(std::memory_order_acquire) || st.stop_requested();
-                        });
-                    }
-                    workers_paused.fetch_sub(1, std::memory_order_relaxed);
-                    if (st.stop_requested()) break;
-                }
-
-                // Claim a game to play
-                int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
-                if (remaining <= 0) {
-                    games_remaining.fetch_add(1, std::memory_order_relaxed);
-                    break;
-                }
-
-                // Play one game using current root
-                uint32_t root = current_root.load(std::memory_order_acquire);
-                SelfPlayResult result = self_play(pool, root, server);
-                stats.add_result(result);
-            }
+        workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
+                              &sync, collector, games_per_worker](std::stop_token st) {
+            run_multi_game_worker(st, pool, server, games_per_worker,
+                                  games_remaining, stats, sync, collector);
         });
+        //// older way of doing things, with single game per thread.
+        // workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
+        //                       &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
+        //                       &resume_cv, &paused, i](std::stop_token st) {
+        //     while (!st.stop_requested()) {
+        //         // Check if pause is requested - if so, wait
+        //         if (pause_requested.load(std::memory_order_acquire)) {
+        //             workers_paused.fetch_add(1, std::memory_order_relaxed);
+        //             {
+        //                 std::unique_lock lock(pause_mutex);
+        //                 pause_cv.notify_all();  // Signal main thread we're paused
+        //                 resume_cv.wait(lock, [&]() {
+        //                     return !paused.load(std::memory_order_acquire) || st.stop_requested();
+        //                 });
+        //             }
+        //             workers_paused.fetch_sub(1, std::memory_order_relaxed);
+        //             if (st.stop_requested()) break;
+        //         }
+        //
+        //         // Claim a game to play
+        //         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+        //         if (remaining <= 0) {
+        //             games_remaining.fetch_add(1, std::memory_order_relaxed);
+        //             break;
+        //         }
+        //
+        //         // Play one game using current root
+        //         uint32_t root = current_root.load(std::memory_order_acquire);
+        //         SelfPlayResult result = self_play(pool, root, server);
+        //         stats.add_result(result);
+        //     }
+        // });
     }
 
     // Monitor progress, call checkpoints, and handle memory-bounded resets
     int last_checkpoint = 0;
-    // while (games_remaining.load(std::memory_order_relaxed) > 0) {
     while (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Check memory usage
         size_t current_bytes = pool.memory_usage_bytes();
-        float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
 
-        if (utilization >= bounds.soft_limit_ratio && collector != nullptr) {
+        if (current_bytes >= soft_limit_bytes && collector != nullptr) {
             std::cout << "\n[SelfPlayEngine] Memory at " << std::fixed << std::setprecision(1)
-                      << (utilization * 100) << "% - initiating pool reset..." << std::endl;
+                      << (current_bytes / 1073741824) << " GB - initiating pool reset..." << std::endl;
 
-            // Request workers to pause
-            paused.store(true, std::memory_order_release);
-            pause_requested.store(true, std::memory_order_release);
+            // request workers to pause
+            draining.store(true, std::memory_order_release);
 
-            // Wait for all workers to pause (with timeout)
+            // wait for all active games to finish
+            auto drain_start = std::chrono::steady_clock::now();
+            while (total_active_games.load(std::memory_order_relaxed) > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                auto elapsed = std::chrono::steady_clock::now() - drain_start;
+                if (elapsed > std::chrono::seconds(600)) {
+                    std::cerr << "[SelfPlayEngine] Drain timeout after 10 minutes, forcing reset\n";
+                    break;
+                }
+            }
+
+            //they should be paused already basically from above
             {
                 std::unique_lock lock(pause_mutex);
-                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-                pause_cv.wait_until(lock, deadline, [&]() {
-                    return workers_paused.load(std::memory_order_relaxed) >= num_workers ||
-                           games_remaining.load(std::memory_order_relaxed) <= 0;
+                pause_cv.wait_for(lock, std::chrono::seconds(10), [&]() {
+                    return workers_paused.load(std::memory_order_relaxed) >= num_workers;
                 });
             }
 
@@ -1032,23 +1044,25 @@ void SelfPlayEngine::run_multi_game(
                 }
             }
 
-            pool.clear();
+            if (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
+                //if we have more to go, clear tree, if we're done, leave it so it can be saved
+                pool.clear();
 
-            // Reinitialize root node
-            uint32_t new_root = pool.allocate();
-            pool[new_root].init_root(true);
-            current_root.store(new_root, std::memory_order_release);
-            root_idx = new_root;
+                // Reinitialize root node
+                uint32_t new_root = pool.allocate();
+                pool[new_root].init_root(true);
+                current_root.store(new_root, std::memory_order_release);
+                root_idx = new_root;
 
-            ++pool_reset_count;
-            std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
-                      << " complete" << std::endl;
+                ++pool_reset_count;
+                std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
+                          << " complete" << std::endl;
+            }
 
             // Resume workers
             {
                 std::lock_guard lock(pause_mutex);
-                pause_requested.store(false, std::memory_order_release);
-                paused.store(false, std::memory_order_release);
+                draining.store(false, std::memory_order_release);
             }
             resume_cv.notify_all();
         }
@@ -1130,11 +1144,17 @@ void SelfPlayEngine::run_multi_game_worker(
     };
 
     auto try_claim_game = [&](GameContext& g) -> bool {
+        // Don't claim new games while draining
+        if (sync.draining.load(std::memory_order_acquire)) {
+            return false;
+        }
+
         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
         if (remaining <= 0) {
             games_remaining.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
+
         uint32_t root = sync.current_root.load(std::memory_order_acquire);
         g.current_node = root;
         g.game_path.clear();
@@ -1146,6 +1166,8 @@ void SelfPlayEngine::run_multi_game_worker(
         g.needs_mcts = false;
         g.mcts_iterations_done = 0;
         pool[root].set_on_game_path();
+
+        sync.total_active_games.fetch_add(1, std::memory_order_relaxed);
         return true;
     };
 
@@ -1162,14 +1184,15 @@ void SelfPlayEngine::run_multi_game_worker(
 
         if (collector && result.winner != 0 && !result.error) {
             float game_outcome = static_cast<float>(result.winner);
-            for (uint32_t pos : g.sample_positions) {
-                collector->add_sample(pool, pos, game_outcome);
-            }
+            // for (uint32_t pos : g.sample_positions) {
+            //     collector->add_sample(pool, pos, game_outcome);
+            // }
         }
 
         stats.add_result(result);
         g.active = false;
         active_games--;
+        sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
     };
 
     if (check_pause()) return;
@@ -1197,18 +1220,41 @@ void SelfPlayEngine::run_multi_game_worker(
     mcts_config.c_puct = 1.5f;
     mcts_config.fpu = 0.0f;
 
-    while (active_games > 0) {
-        if (check_pause()) {
-            std::cerr << "check pause true\n";
-            if (stop_token.stop_requested()) break;
-            std::cerr << "try_claim_game\n";
-            for (auto& g : games) {
-                if (!g.active && try_claim_game(g)) {
-                    active_games++;
+    while (! stop_token.stop_requested()) {
+        if (active_games == 0) {
+            if (sync.draining.load(std::memory_order_acquire)) {
+                // Enter pause state, wait for drain to complete
+                sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
+                {
+                    std::unique_lock lock(sync.pause_mutex);
+                    sync.pause_cv.notify_all();
+                    sync.resume_cv.wait(lock, [&]() {
+                        return !sync.draining.load(std::memory_order_acquire) ||
+                               stop_token.stop_requested();
+                    });
                 }
+                sync.workers_paused.fetch_sub(1, std::memory_order_relaxed);
+
+                if (stop_token.stop_requested()) break;
+
+                // Reclaim games after drain complete
+                for (auto& g : games) {
+                    if (!g.active && try_claim_game(g)) {
+                        active_games++;
+                    }
+                }
+                if (active_games == 0) break;  // No more games to claim
+                continue;
+            } else {
+                // Not draining, try to claim more games
+                for (auto& g : games) {
+                    if (!g.active && try_claim_game(g)) {
+                        active_games++;
+                    }
+                }
+                if (active_games == 0) break;  // No more games available
+                continue;
             }
-            if (active_games == 0) break;
-            continue;
         }
 
         std::vector<PendingExpansion> pending_expansions;
@@ -1275,11 +1321,11 @@ void SelfPlayEngine::run_multi_game_worker(
                     float nv = n.is_p1_to_move() ? game_value : -game_value;
                     n.stats.update(nv);
                 }
-                if (collector) {
-                    for (uint32_t pos : g.sample_positions) {
-                        collector->add_sample(pool, pos, game_value);
-                    }
-                }
+                // if (collector) {
+                //     for (uint32_t pos : g.sample_positions) {
+                //         collector->add_sample(pool, pos, game_value);
+                //     }
+                // }
                 stats.add_result(result);
                 g.active = false;
                 active_games--;

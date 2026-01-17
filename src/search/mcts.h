@@ -69,6 +69,7 @@ concept InferenceProvider = std::same_as<T, ModelInference> || std::same_as<T, I
 struct TreeBoundsConfig {
     size_t max_bytes = 40ULL * 1024 * 1024 * 1024;  // 40GB default
     float soft_limit_ratio = 0.80f;   // Start being selective about expansion
+    // size_t soft_limit_bytes = 30ULL * 1024 * 1024 * 1024;  // 30GB default
     float hard_limit_ratio = 0.95f;   // Stop expanding entirely
     uint32_t min_visits_to_expand = 8; // Min visits at soft limit to expand
     bool enable_recycling = false;    // LRU recycling when full (future)
@@ -625,10 +626,12 @@ public:
         bool needs_mcts{false};
         int mcts_iterations_done{0};
     };
+
     struct MultiGameWorkerSync {
         std::atomic<bool>& pause_requested;
+        std::atomic<bool>& draining; //waiting for games to finish
         std::atomic<int>& workers_paused;
-        std::atomic<bool>& paused;
+        std::atomic<int>& total_active_games;
         std::atomic<uint32_t>& current_root;
         std::mutex& pause_mutex;
         std::condition_variable& pause_cv;
@@ -747,7 +750,7 @@ private:
     SelfPlayConfig config_;
 
     // Striped mutexes for expansion - 256 for better parallelism with many workers
-    static constexpr size_t NUM_EXPANSION_MUTEXES = 256;
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 1024;
     std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 };
 

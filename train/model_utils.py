@@ -30,7 +30,7 @@ def compute_model_hash(model_path: str, hash_length: int = 8) -> str:
     return sha256.hexdigest()[:hash_length]
 
 
-def find_samples_for_model(samples_dir: str, model_hash: str) -> list[Path]:
+def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool = False) -> list[Path]:
     """
     Find all .qsamples files generated with a specific model version.
 
@@ -47,8 +47,12 @@ def find_samples_for_model(samples_dir: str, model_hash: str) -> list[Path]:
 
     # Pattern: tree_<iter#>_<modelhash>.qsamples
     matching_files = []
-    for file in samples_path.glob(f"tree_*_{model_hash}.qsamples"):
-        matching_files.append(file)
+    if all_samples:
+        for file in samples_path.glob(f"tree_*.qsamples"):
+            matching_files.append(file)
+    else:
+        for file in samples_path.glob(f"tree_*_{model_hash}.qsamples"):
+            matching_files.append(file)
 
     # Sort by iteration number (extract from filename)
     def get_iter_num(path: Path) -> int:

@@ -877,7 +877,7 @@ int run_selfplay(const Config& config,
         // Create inference server for batched GPU access
         InferenceServerConfig server_config;
         server_config.batch_size = config.batch_size;
-        server_config.max_wait_ms = 0.5;
+        server_config.max_wait_ms = 0.2;
         InferenceServer server(config.model_file, server_config);
         server.start();
 
@@ -921,10 +921,11 @@ int run_selfplay(const Config& config,
         }
 
         // Extract final training samples from the last tree (if any remain)
-        auto tree_samples = extract_samples_from_tree(*pool, root);
-        for (auto& sample : tree_samples) {
-            collector.add_sample_direct(std::move(sample));
-        }
+        //
+        // auto tree_samples = extract_samples_from_tree(*pool, root);
+        // for (auto& sample : tree_samples) {
+        //     collector.add_sample_direct(std::move(sample));
+        // }
 
         int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
         int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);

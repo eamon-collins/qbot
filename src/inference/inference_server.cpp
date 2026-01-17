@@ -125,7 +125,7 @@ void InferenceServer::inference_loop() {
                        stop_requested_.load(std::memory_order_acquire);
             });
         }
-        
+
         // Process pending requests
         process_pending();
     }

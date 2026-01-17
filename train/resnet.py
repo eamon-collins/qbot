@@ -105,11 +105,6 @@ class QuoridorNet(nn.Module):
 
         return p, v
 
-
-# Keep old class name as alias for backward compatibility during transition
-QuoridorValueNet = QuoridorNet
-
-
 def train_step(model, optimizer, data_batch):
     """
     Single training step with combined policy and value loss.
@@ -169,7 +164,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
 
     By default, loads all samples into memory and shuffles for better training.
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
 
     if torch.cuda.is_available():
@@ -227,8 +222,8 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
             epoch_policy_loss += p_loss
             num_batches += 1
 
-            if num_batches % 100 == 0:
-                logging.debug(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
+            if num_batches % 100 == 1:
+                logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
 
         avg_loss = epoch_loss / num_batches
         avg_v_loss = epoch_value_loss / num_batches
@@ -250,14 +245,18 @@ def main():
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--channels', type=int, default=64, help='Number of channels in residual tower')
     parser.add_argument('--blocks', type=int, default=6, help='Number of residual blocks')
+    parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
+                        action='store_true', default=False)
     parser.add_argument('--log-level', dest="log_level", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO', help='Logging level')
 
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level))
-
-    model = QuoridorNet(num_channels=args.channels, num_blocks=args.blocks)
+    if args.big_model:
+        model = BigQuoridorNet()
+    else:
+        model = QuoridorNet(num_channels=args.channels, num_blocks=args.blocks)
     logging.info(f"Created model with {args.channels} channels, {args.blocks} residual blocks")
 
     if args.load_model:

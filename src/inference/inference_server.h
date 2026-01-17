@@ -136,6 +136,9 @@ private:
     // Statistics
     std::atomic<size_t> total_requests_{0};
     std::atomic<size_t> total_batches_{0};
+    std::atomic<size_t> total_flushes_{0};
+    std::atomic<size_t> total_batch_triggers_{0};
+    std::atomic<size_t> total_total_time_triggers_{0};
 };
 
 } // namespace qbot
