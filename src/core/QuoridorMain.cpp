@@ -895,8 +895,7 @@ int run_selfplay(const Config& config,
 
             std::cout << "[" << completed << "/" << config.num_games << "] "
                       << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
-                      << " | Nodes: " << p.allocated()
-                      << " | Avg moves: " << (completed > 0 ? moves / completed : 0) << std::endl;
+                      << " | Avg moves: " << std::setprecision(4) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
         };
 
         MultiGameStats stats;
@@ -943,7 +942,7 @@ int run_selfplay(const Config& config,
             std::cout << "  Draw Score:     " << avg_draw_score << "\n";
         }
 		std::cout << "  Errors:\t" << errors << "\n";
-        std::cout << "  moves/game:\t" << (total_moves / config.num_games) << "\n";
+        std::cout << "  moves/game:\t" << std::setprecision(4) << (static_cast<float>(total_moves) / config.num_games) << "\n";
         std::cout << "  Samples:\t" << collector.size() << "\n";
         std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
                   << " (" << total_requests << " requests / " << total_batches << " batches)" << std::endl;

@@ -408,7 +408,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         std::vector<std::pair<Move, float>> policy;
         {
             ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_q(pool, current, temp);
+            policy = compute_policy_from_visits(pool, current, temp);
         }
 
         if (policy.empty()) {
@@ -1523,7 +1523,7 @@ void SelfPlayEngine::run_multi_game_worker(
 
             float temp = (g.num_moves < config_.temperature_drop_ply) 
                        ? config_.temperature : 0.0f;
-            auto policy = compute_policy_from_q(pool, g.current_node, temp);
+            auto policy = compute_policy_from_visits(pool, g.current_node, temp);
 
             if (policy.empty()) {
                 SelfPlayResult result;
@@ -1760,7 +1760,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
         std::vector<std::pair<Move, float>> policy;
         {
             ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_q(pool, current, temp);
+            policy = compute_policy_from_visits(pool, current, temp);
         }
 
         if (policy.empty()) {

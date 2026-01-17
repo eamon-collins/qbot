@@ -343,7 +343,7 @@ def main():
                         help='MCTS simulations per move')
     parser.add_argument('--epochs', type=int, default=50,
                         help='Training epochs per iteration')
-    parser.add_argument('--batch-size', type=int, default=64, dest='batch_size',
+    parser.add_argument('--batch-size', type=int, default=1024, dest='batch_size',
                         help='Training batch size')
     parser.add_argument('--threads', type=int, default=8,
                         help='Number of threads for self-play')

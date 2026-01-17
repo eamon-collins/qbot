@@ -178,17 +178,10 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
     all_qsamples = all(f.endswith('.qsamples') for f in data_files)
 
     if all_qsamples and len(data_files) > 1:
-        # Multiple .qsamples files - use multi-file dataset
-        # with MultiFileTrainingSampleDataset(data_files, batch_size, stream) as dataset:
-        #     for batch in dataset.generate_batches():
-        #         batches.append(batch)
-        dataset = MultiFileTrainingSampleDataset(data_files, batch_size, stream)
+        dataset = MultiFileTrainingSampleDataset(data_files, batch_size)
     elif all_qsamples:
         # Single .qsamples file
         logging.info(f"Loading .qsamples file: {data_files[0]}")
-        # with TrainingSampleDataset(data_files[0], batch_size, stream) as dataset:
-        #     for batch in dataset.generate_batches():
-        #         batches.append(batch)
         dataset = TrainingSampleDataset(data_files[0], batch_size, stream)
     else:
         # Legacy format: tree file processed via leopard
@@ -223,7 +216,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
             num_batches += 1
 
             if num_batches % 100 == 1:
-                logging.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
+                logging.debug(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
 
         avg_loss = epoch_loss / num_batches
         avg_v_loss = epoch_value_loss / num_batches

@@ -444,6 +444,70 @@ struct SelfPlayConfig {
     return policy;
 }
 
+[[nodiscard]] inline std::vector<std::pair<Move, float>> compute_policy_from_visits(
+    NodePool& pool,
+    uint32_t parent_idx,
+    float temperature) noexcept
+{
+    std::vector<std::pair<Move, float>> policy;
+    if (!pool[parent_idx].has_children()) return policy;
+
+    uint32_t child = pool[parent_idx].first_child;
+    while (child != NULL_NODE) {
+        uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
+        policy.push_back({pool[child].move, static_cast<float>(visits)});
+        child = pool[child].next_sibling;
+    }
+
+    if (policy.empty()) return policy;
+
+    // Temperature = 0 means deterministic (argmax)
+    if (temperature <= 1e-6f) {
+        size_t best_idx = 0;
+        float best_visits = policy[0].second;
+        int tie_count = 1;
+        for (size_t i = 1; i < policy.size(); ++i) {
+            float visits = policy[i].second;
+            if (visits > best_visits) {
+                // strict improvement: reset ties
+                best_visits = visits;
+                best_idx = i;
+                tie_count = 1;
+            } 
+            else if (visits == best_visits) {
+                tie_count++;
+                thread_local std::mt19937 rng(std::random_device{}());
+                std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                // replace with probability 1/n
+                if (dist(rng) < (1.0f / tie_count)) {
+                    best_idx = i;
+                }
+            }
+        }
+        for (size_t i = 0; i < policy.size(); ++i) {
+            policy[i].second = (i == best_idx) ? 1.0f : 0.0f;
+        }
+        return policy;
+    }
+
+    // π(a) ∝ N(a)^(1/τ)
+    float inv_temp = 1.0f / temperature;
+    float sum = 0.0f;
+    for (auto& [move, visits] : policy) {
+        visits = std::pow(visits, inv_temp);
+        sum += visits;
+    }
+
+    //normalize
+    if (sum > 0.0f) {
+        for (auto& [move, prob] : policy) {
+            prob /= sum;
+        }
+    }
+
+    return policy;
+}
+
 /// Select a move from the policy distribution
 /// @param policy Vector of (move, probability) pairs
 /// @param stochastic If true, sample from distribution; if false, take argmax
@@ -457,7 +521,9 @@ struct SelfPlayConfig {
     if (!stochastic) {
         // Deterministic: return move with highest probability
         auto best = std::max_element(policy.begin(), policy.end(),
-            [](const auto& a, const auto& b) { return a.second < b.second; });
+            [](const auto& a, const auto& b) { 
+                return a.second < b.second;
+            });
         return best->first;
     }
 

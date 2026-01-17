@@ -60,7 +60,6 @@ class TrainingSampleDataset:
     MCTS search rather than move labels.
 
     By default, loads all samples into memory and shuffles them for better training.
-    Use stream=True for memory-efficient streaming from disk (no shuffling).
 
     Output format per sample:
         state: (6, 9, 9) tensor - current-player-perspective board representation
@@ -261,7 +260,6 @@ class MultiFileTrainingSampleDataset:
     where multiple self-play runs generated separate sample files.
 
     By default, loads all samples from all files into memory and shuffles them.
-    Use stream=True for memory-efficient streaming (no shuffling, files read sequentially).
 
     Usage:
         with MultiFileTrainingSampleDataset(['tree_0.qsamples', 'tree_1.qsamples'], 64) as dataset:
@@ -269,18 +267,17 @@ class MultiFileTrainingSampleDataset:
                 train_step(model, batch)
     """
 
-    def __init__(self, samples_paths: list[str], batch_size: int, stream: bool = False):
+    def __init__(self, samples_paths: list[str], batch_size: int, max_sample_num: int = 3000000):
         """
         Args:
             samples_paths: List of .qsamples file paths to load
             batch_size: Batch size for training
-            stream: If False (default), load all into memory and shuffle. If True, stream from disk.
         """
         self.samples_paths = samples_paths
         self.batch_size = batch_size
-        self.stream = stream
         self.total_samples = 0
-        self.samples = None  # In-memory storage when not streaming
+        self.max_sample_num = max_sample_num
+        self.samples = None
         self.__enter__()
 
     def __len__(self):
@@ -292,53 +289,38 @@ class MultiFileTrainingSampleDataset:
         return self.samples[idx]
 
     def __enter__(self):
-        if not self.stream:
-            # Load all samples into memory from all files
-            logging.info(f"Loading samples from {len(self.samples_paths)} files into memory...")
-            self.samples = []
+        # Load all samples into memory from all files
+        logging.info(f"Loading samples from {len(self.samples_paths)} files into memory...")
+        self.samples = []
 
-            for path in self.samples_paths:
-                with open(path, 'rb') as f:
-                    header_data = f.read(QSMP_HEADER_SIZE)
-                    if len(header_data) < QSMP_HEADER_SIZE:
-                        raise ValueError(f"Invalid .qsamples file: {path}")
+        ## reverse list so we load in the latest samples first, so if we stop early we leave out the oldest
+        self.samples_paths.reverse()
+        for path in self.samples_paths:
+            with open(path, 'rb') as f:
+                header_data = f.read(QSMP_HEADER_SIZE)
+                if len(header_data) < QSMP_HEADER_SIZE:
+                    raise ValueError(f"Invalid .qsamples file: {path}")
 
-                    magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
-                    if magic != QSMP_MAGIC:
-                        raise ValueError(f"Invalid .qsamples file: bad magic in {path}")
-                    if version > 1:
-                        raise ValueError(f"Unsupported .qsamples version in {path}: {version}")
+                magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
+                if magic != QSMP_MAGIC:
+                    raise ValueError(f"Invalid .qsamples file: bad magic in {path}")
+                if version > 1:
+                    raise ValueError(f"Unsupported .qsamples version in {path}: {version}")
 
-                    logging.info(f"  {path}: {sample_count} samples")
+                logging.info(f"  {path}: {sample_count} samples")
+                self.total_samples += sample_count
 
-                    # Load all samples from this file
-                    for _ in range(sample_count):
-                        sample_data = f.read(TRAINING_SAMPLE_SIZE)
-                        if len(sample_data) < TRAINING_SAMPLE_SIZE:
-                            break
-                        self.samples.append(self._parse_sample(sample_data))
+                # Load all samples from this file
+                for _ in range(sample_count):
+                    sample_data = f.read(TRAINING_SAMPLE_SIZE)
+                    if len(sample_data) < TRAINING_SAMPLE_SIZE:
+                        break
+                    self.samples.append(self._parse_sample(sample_data))
 
-            self.total_samples = len(self.samples)
-            logging.info(f"Loaded {self.total_samples} total samples into memory")
-        else:
-            # Streaming mode: just count samples
-            logging.info(f"Opening {len(self.samples_paths)} files for streaming...")
-            for path in self.samples_paths:
-                with open(path, 'rb') as f:
-                    header_data = f.read(QSMP_HEADER_SIZE)
-                    if len(header_data) < QSMP_HEADER_SIZE:
-                        raise ValueError(f"Invalid .qsamples file: {path}")
+                if self.total_samples >= self.max_sample_num:
+                    break
 
-                    magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
-                    if magic != QSMP_MAGIC:
-                        raise ValueError(f"Invalid .qsamples file: bad magic in {path}")
-                    if version > 1:
-                        raise ValueError(f"Unsupported .qsamples version in {path}: {version}")
-
-                    self.total_samples += sample_count
-                    logging.info(f"  {path}: {sample_count} samples")
-
-            logging.info(f"Total samples across all files: {self.total_samples} (streaming mode)")
+        logging.info(f"Loaded {self.total_samples} total samples into memory")
 
         return self
 
@@ -423,66 +405,26 @@ class MultiFileTrainingSampleDataset:
         Generate batches of training data from all files.
 
         In-memory mode (default): Shuffles all samples before generating batches.
-        Streaming mode: Reads samples sequentially from files.
         """
-        if self.stream:
-            # Streaming mode: read from files sequentially
-            states, policies, values = [], [], []
+        if self.samples is None:
+            raise RuntimeError("Dataset not initialized with context manager")
 
-            # Iterate through all files
-            for path in self.samples_paths:
-                with open(path, 'rb') as f:
-                    # Skip header
-                    f.read(QSMP_HEADER_SIZE)
+        # Shuffle samples for better training
+        indices = list(range(len(self.samples)))
+        random.shuffle(indices)
 
-                    # Read all samples from this file
-                    while True:
-                        sample_data = f.read(TRAINING_SAMPLE_SIZE)
-                        if len(sample_data) < TRAINING_SAMPLE_SIZE:
-                            break
+        # Generate batches from shuffled indices
+        for i in range(0, len(indices), self.batch_size):
+            batch_indices = indices[i:i + self.batch_size]
+            states = [self.samples[idx][0] for idx in batch_indices]
+            policies = [self.samples[idx][1] for idx in batch_indices]
+            values = [self.samples[idx][2] for idx in batch_indices]
 
-                        state_t, policy_t, value_t = self._parse_sample(sample_data)
-                        states.append(state_t)
-                        policies.append(policy_t)
-                        values.append(value_t)
-
-                        # Yield batch when full
-                        if len(states) == self.batch_size:
-                            yield (
-                                torch.stack(states),
-                                torch.stack(policies),
-                                torch.stack(values)
-                            )
-                            states, policies, values = [], [], []
-
-            # Yield remaining samples
-            if states:
-                yield (
-                    torch.stack(states),
-                    torch.stack(policies),
-                    torch.stack(values)
-                )
-        else:
-            # In-memory mode: shuffle and generate batches
-            if self.samples is None:
-                raise RuntimeError("Dataset not initialized with context manager")
-
-            # Shuffle samples for better training
-            indices = list(range(len(self.samples)))
-            random.shuffle(indices)
-
-            # Generate batches from shuffled indices
-            for i in range(0, len(indices), self.batch_size):
-                batch_indices = indices[i:i + self.batch_size]
-                states = [self.samples[idx][0] for idx in batch_indices]
-                policies = [self.samples[idx][1] for idx in batch_indices]
-                values = [self.samples[idx][2] for idx in batch_indices]
-
-                yield (
-                    torch.stack(states),
-                    torch.stack(policies),
-                    torch.stack(values)
-                )
+            yield (
+                torch.stack(states),
+                torch.stack(policies),
+                torch.stack(values)
+            )
 
 
 # =============================================================================
