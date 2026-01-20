@@ -384,6 +384,8 @@ def main():
                         help='Skip arena evaluation (always promote candidate)')
     parser.add_argument('--skip-selfplay', action='store_true', dest='skip_selfplay',
                         help='Skip selfplay (use pre-existing qsample files from this model)')
+    parser.add_argument('--only-selfplay', action='store_true', dest='only_selfplay',
+                        help='does not train or perform evals, only generates samples with existing model')
     parser.add_argument('--all-samples', action='store_true', dest='all_samples',
                         help='use all available samples in the sample file instead of just this model_id')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
@@ -489,6 +491,11 @@ def main():
                 logging.error("Self-play failed, retrying iteration...")
                 continue
 
+            sample_num += 1
+            if args.only_selfplay:
+                #hit it again baby
+                continue
+
         # Find all sample files for this model (including the one we just created)
         # Pattern: tree_<iter#>_<modelhash>.qsamples
         matching_samples = find_samples_for_model(str(samples_dir), model_hash, args.all_samples)
@@ -497,8 +504,6 @@ def main():
             logging.error(f"No training samples found for model hash {model_hash}")
             logging.error("Self-play should generate .qsamples files automatically")
             continue
-
-        sample_num += 1
 
 
         # Phase 2: Train candidate model
