@@ -1011,8 +1011,8 @@ void SelfPlayEngine::run_multi_game(
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
                 auto elapsed = std::chrono::steady_clock::now() - drain_start;
-                if (elapsed > std::chrono::seconds(600)) {
-                    std::cerr << "[SelfPlayEngine] Drain timeout after 10 minutes, forcing reset\n";
+                if (elapsed > std::chrono::seconds(2400)) {
+                    std::cerr << "[SelfPlayEngine] Drain timeout after 40 minutes, forcing reset\n";
                     break;
                 }
             }
