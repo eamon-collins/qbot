@@ -15,13 +15,15 @@ find_package(Boost REQUIRED COMPONENTS program_options)
 # Optional: LibTorch for neural network inference
 # =============================================================================
 
-option(ENABLE_INFERENCE "Enable neural network inference with LibTorch" OFF)
+option(ENABLE_INFERENCE "Enable neural network inference with LibTorch" ON)
 
 if(ENABLE_INFERENCE)
     # Try to use conda environment if available
     if(DEFINED ENV{CONDA_PREFIX})
         set(LIBTORCH_PREFIX $ENV{CONDA_PREFIX})
         message(STATUS "Using conda environment: ${LIBTORCH_PREFIX}")
+
+	link_directories($ENV{CONDA_PREFIX}/lib)
 
         # Set include directories
         set(TORCH_INCLUDE_DIRS
@@ -85,6 +87,7 @@ add_library(qbot_lib_debug STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_debug PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_debug PRIVATE -g -O0)
 # Use standalone ASIO for websocketpp
@@ -118,6 +121,7 @@ add_library(qbot_lib_fast STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_fast PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_fast PRIVATE -O3 -DNDEBUG -march=native -flto)
 # Use standalone ASIO for websocketpp
