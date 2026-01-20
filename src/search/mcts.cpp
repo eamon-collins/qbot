@@ -1037,12 +1037,12 @@ void SelfPlayEngine::run_multi_game(
             }
 
             // Save intermediate qsamples file
-            if (!samples_file.empty() && collector->size() > 0) {
-                auto result = TrainingSampleStorage::save(samples_file, collector->samples());
-                if (!result) {
-                    std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
-                }
-            }
+            // if (!samples_file.empty() && collector->size() > 0) {
+            //     auto result = TrainingSampleStorage::save(samples_file, collector->samples());
+            //     if (!result) {
+            //         std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
+            //     }
+            // }
 
             if (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
                 //if we have more to go, clear tree, if we're done, leave it so it can be saved

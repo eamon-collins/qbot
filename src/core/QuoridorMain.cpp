@@ -901,7 +901,7 @@ int run_selfplay(const Config& config,
 
     // Create training sample collector
     TrainingSampleCollector collector;
-    collector.reserve(config.num_games * 100);  // ~100 moves per game estimate
+    collector.reserve(config.num_games * 40);  // ~100 moves per game estimate
 
     std::cout << "Starting self-play...\n";
     std::cout << "  Games:       " << config.num_games << "\n";
@@ -963,10 +963,16 @@ int run_selfplay(const Config& config,
 
         // Extract final training samples from the last tree (if any remain)
         //
-        // auto tree_samples = extract_samples_from_tree(*pool, root);
-        // for (auto& sample : tree_samples) {
-        //     collector.add_sample_direct(std::move(sample));
-        // }
+        auto tree_samples = extract_samples_from_tree(*pool, root);
+        for (auto& sample : tree_samples) {
+            collector.add_sample_direct(std::move(sample));
+        }
+        if (!samples_file.empty() && collector.size() > 0) {
+            auto result = TrainingSampleStorage::save(samples_file, collector.samples());
+            if (!result) {
+                std::cerr << "[SelfPlayEngine] Warning: Failed to save qsamples\n";
+            }
+        }
 
         int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
         int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
