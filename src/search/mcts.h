@@ -304,27 +304,54 @@ inline void remove_virtual_loss(
 /// Determine winner when both players are out of fences
 /// Uses path length to goal - whoever is closer wins
 /// @return +1 if current player wins, -1 if current player loses (relative perspective)
+// [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
+//     Pathfinder& pf = get_pathfinder();
+//
+//     int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
+//     int p2_dist = pf.path_length(node.fences, node.p2, 0);  // P2 goal is row 0
+//
+//     if (p1_dist < 0 || p2_dist < 0) {
+//         // Should never happen - someone is blocked
+//         return 0;
+//     }
+//
+//     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
+//     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
+//     // node.print_node();
+//     // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
+//
+//     // current player moves first, they win if their distance to
+//     // goal is less than OR equal to the opponent's distance
+//     return (curr_dist <= opp_dist) ? 1 : -1;
+// }
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
-    int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
-    int p2_dist = pf.path_length(node.fences, node.p2, 0);  // P2 goal is row 0
+    auto p1_path = pf.find_path(node.fences, node.p1, 8);
+    auto p2_path = pf.find_path(node.fences, node.p2, 0);
 
-    if (p1_dist < 0 || p2_dist < 0) {
+    if (p1_path.empty() || p2_path.empty()) {
         // Should never happen - someone is blocked
         return 0;
     }
 
+    // Path length is path.size() - 1 (path includes starting position)
+    int p1_dist = static_cast<int>(p1_path.size()) - 1;
+    int p2_dist = static_cast<int>(p2_path.size()) - 1;
+
+    // Check for jump opportunities when distances are close
+    int diff = p1_dist - p2_dist;
+    if (diff >= -1 && diff <= 1) {
+        //since check_jump returns 0 for no jump, 1 for p1 jump, -1 for p2 jump
+        p1_dist -= check_jump_advantage(p1_path, p2_path, node.is_p1_to_move());
+    }
+
     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
-    // node.print_node();
-    // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
-
     // current player moves first, they win if their distance to
     // goal is less than OR equal to the opponent's distance
     return (curr_dist <= opp_dist) ? 1 : -1;
 }
-
 
 /// Evaluate a leaf node
 /// @param node Node to evaluate
@@ -379,8 +406,8 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-    int max_moves_per_game = 60;           // After this many moves, declare a draw and assign partial points to closer player
-    float max_draw_reward = 0.5;           // On a draw, this is maximum reward we give the closest player 
+    int max_moves_per_game = 90;           // After this many moves, declare a draw and assign partial points to closer player
+    float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player 
 };
 
 /// Compute policy distribution from child Q-values

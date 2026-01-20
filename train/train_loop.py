@@ -12,7 +12,10 @@ import argparse
 import logging
 import os
 import re
+import gc
+import ctypes
 import shutil
+import psutil
 import subprocess
 import sys
 from datetime import datetime
@@ -61,6 +64,10 @@ def setup_logging(log_level: str) -> Path:
 
     return log_file
 
+def log_memory(label):
+    process = psutil.Process(os.getpid())
+    mem_gb = process.memory_info().rss / (1024**3)
+    logging.info(f"[MEMORY] {label}: {mem_gb:.2f} GB")
 
 def get_project_root():
     """Get the project root directory."""
@@ -252,7 +259,7 @@ def save_checkpoint(model: QuoridorNet, checkpoint_path: str) -> bool:
 
 
 def run_arena(current_model: str, candidate_model: str, num_threads: int, num_games: int,
-              simulations: int, win_threshold: float = 0.55,
+              simulations: int, promote_alpha: float = 0.07,
               temperature: float = 1.0, temp_drop_ply: int = 30, max_memory: int = 30) -> tuple[bool, bool]:
     """
     Run arena evaluation between candidate and current model.
@@ -269,11 +276,11 @@ def run_arena(current_model: str, candidate_model: str, num_threads: int, num_ga
         "--arena",
         "-m", current_model,
         "--candidate", candidate_model,
-        #4x until arena is on multiple games per worker as well
-        "-t", str(5*num_threads),
+        #10x as arena doesn't have multiple games per worker and also frees memory as it goes
+        "-t", str(10*num_threads),
         "--arena-games", str(num_games),
         "-n", str(simulations),
-        "--win-threshold", str(win_threshold),
+        "--promote-alpha", str(promote_alpha),
         "--temperature", str(temperature),
         "--temp-drop", str(temp_drop_ply),
         "--max-memory", str(max_memory),
@@ -335,33 +342,33 @@ def main():
                         help='Directory for models')
 
     # Training parameters
-    parser.add_argument('--iterations', type=int, default=100,
+    parser.add_argument('--iterations', type=int, default=10,
                         help='Number of training iterations')
     parser.add_argument('--games', type=int, default=500,
                         help='Self-play games per iteration')
-    parser.add_argument('--simulations', type=int, default=800,
+    parser.add_argument('--simulations', type=int, default=500,
                         help='MCTS simulations per move')
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=2,
                         help='Training epochs per iteration')
     parser.add_argument('--batch-size', type=int, default=1024, dest='batch_size',
                         help='Training batch size')
-    parser.add_argument('--threads', type=int, default=8,
+    parser.add_argument('--threads', type=int, default=20,
                         help='Number of threads for self-play')
-    parser.add_argument('--games-per-thread', type=int, default=4,
+    parser.add_argument('--games-per-thread', type=int, default=16,
                         help='Number of games per thread for self-play')
     parser.add_argument('--temperature', type=float, default=1.0,
                         help='Temperature for move selection')
     parser.add_argument('--temp-drop', type=int, default=30, dest='temp_drop',
                         help='Ply at which to drop temperature to 0')
-    parser.add_argument('--max-memory', type=int, default=30, dest='max_memory',
+    parser.add_argument('--max-memory', type=int, default=35, dest='max_memory',
                         help='max memory in GB, resets pool at 80%')
 
     # Arena parameters
     parser.add_argument('--arena-games', type=int, default=200, dest='arena_games',
                         help='Number of arena games for evaluation')
-    parser.add_argument('--arena-sims', type=int, default=400, dest='arena_sims',
+    parser.add_argument('--arena-sims', type=int, default=500, dest='arena_sims',
                         help='MCTS simulations per move in arena')
-    parser.add_argument('--arena-temperature', type=float, default=0.2,
+    parser.add_argument('--arena-temperature', type=float, default=0.0,
                         dest='arena_temperature',
                         help='Temperature for arena move selection')
     parser.add_argument('--arena-temp-drop', type=int, default=30,
@@ -370,7 +377,8 @@ def main():
     parser.add_argument('--win-threshold', type=float, default=0.55,
                         dest='win_threshold',
                         help='Win rate threshold for model promotion. At 200 games, if 50/50 there is ~5% chance of 56% win rate')
-
+    parser.add_argument('--promote-alpha', type=float, default=0.07,dest='promote_alpha',
+                        help='p value threshold for model promotions')
     # Options
     parser.add_argument('--skip-arena', action='store_true', dest='skip_arena',
                         help='Skip arena evaluation (always promote candidate)')
@@ -379,7 +387,7 @@ def main():
     parser.add_argument('--all-samples', action='store_true', dest='all_samples',
                         help='use all available samples in the sample file instead of just this model_id')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
-                        action='store_true', default=False)
+                        action='store_true', default=True)
     parser.add_argument('--stream', action='store_true',
                         help='Stream training data from disk (memory efficient, no shuffling). '
                              'Default: load all into memory and shuffle.')
@@ -496,11 +504,17 @@ def main():
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
 
-        # Reload current best weights before training
-        if current_best_weights.exists():
-            model.load_state_dict(torch.load(current_best_weights))
-            if torch.cuda.is_available():
-                model.cuda()
+        # Reload current best weights before training on first iteration, on next we keep using candidate where we left off last iter
+        if iteration == 0:
+            if current_best_weights.exists():
+                model.load_state_dict(torch.load(current_best_weights))
+                if torch.cuda.is_available():
+                    model.cuda()
+        else:
+            if candidate_weights.exists():
+                model.load_state_dict(torch.load(candidate_weights))
+                if torch.cuda.is_available():
+                    model.cuda()
 
         # Train on all matching samples
         training_files = [str(p) for p in matching_samples]
@@ -512,6 +526,15 @@ def main():
         save_checkpoint(model, str(candidate_weights))
         export_model(model, str(candidate_pt))
 
+        gc.collect()
+        try:
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+        except Exception as e:
+            print(f'uhoh ctypes err {e}')
+            pass
+
+
         # Phase 3: Arena evaluation
         if args.skip_arena:
             logging.info("[Phase 3] Arena skipped, promoting candidate...")
@@ -521,7 +544,7 @@ def main():
             logging.info(f"[Phase 3] Arena evaluation ({args.arena_games} games)...")
             arena_success, candidate_won = run_arena(
                 str(current_best_pt), str(candidate_pt), args.threads,
-                args.arena_games, args.arena_sims, args.win_threshold,
+                args.arena_games, args.arena_sims, args.promote_alpha,
                 args.arena_temperature, args.arena_temp_drop, args.max_memory
             )
 

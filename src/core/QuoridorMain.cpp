@@ -83,6 +83,7 @@ struct Config {
     std::string best_model_path = "model/current_best.pt";  // Path to save best model
     int arena_games = 100;                       // Number of arena games
     float win_threshold = 0.55f;                 // Threshold to replace best model
+    float promote_alpha = 0.06f;                 // Threshold to replace best model as a p value, ie if models 50/50 this result has promote_alpha prob of happening
 
     // Model tracking
     std::string model_id;                        // Model hash/identifier for sample file naming
@@ -123,6 +124,8 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Number of games for arena evaluation")
         ("win-threshold", po::value<float>(&config.win_threshold)->default_value(0.55f),
             "Win rate threshold to replace best model")
+        ("promote-alpha", po::value<float>(&config.promote_alpha)->default_value(0.06f),
+            "p value threshold to replace best model")
         ("verbose,v", po::bool_switch(&config.verbose),
             "Enable verbose output")
         ("games,g", po::value<int>(&config.num_games)->default_value(1000),
@@ -291,6 +294,41 @@ bool save_tree_pruned(const NodePool& pool, uint32_t root, const std::string& pa
         std::cerr << "Error saving tree: " << to_string(result.error()) << "\n";
         return false;
     }
+}
+
+/////UTILITY STATS for arena adjudication
+/// Compute binomial coefficient C(n, k) using log-gamma for numerical stability
+double log_binomial_coeff(int n, int k) {
+    return std::lgamma(n + 1) - std::lgamma(k + 1) - std::lgamma(n - k + 1);
+}
+/// Compute P(X >= k) for X ~ Binomial(n, 0.5)
+/// This is the p-value for a one-tailed test
+double binomial_p_value(int wins, int total) {
+    if (total <= 0) return 1.0;
+    if (wins <= 0) return 1.0;
+    if (wins > total) return 0.0;
+
+    // P(X >= wins) = sum_{i=wins}^{total} C(total, i) * 0.5^total
+    // = 0.5^total * sum_{i=wins}^{total} C(total, i)
+
+    double log_half_n = total * std::log(0.5);
+    double p_value = 0.0;
+
+    for (int i = wins; i <= total; ++i) {
+        p_value += std::exp(log_binomial_coeff(total, i) + log_half_n);
+    }
+
+    return p_value;
+}
+/// Determine if candidate should be promoted based on statistical significance
+/// Returns true if we can reject the null hypothesis (50/50) at the given alpha level
+bool should_promote(int candidate_wins, int current_wins, double alpha = 0.06) {
+    int decisive = candidate_wins + current_wins;
+    if (decisive == 0) return false;
+
+    // One-tailed test: is candidate significantly better than 50%?
+    double p_value = binomial_p_value(candidate_wins, decisive);
+    return p_value <= alpha;
 }
 
 // ============================================================================
@@ -681,7 +719,7 @@ int run_arena(const Config& config) {
     std::cout << "  Threads: " << config.num_threads << "\n";
     std::cout << "  Sims/move: " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops at ply " << config.temperature_drop_ply << ")\n";
-    std::cout << "  Win threshold: " << (config.win_threshold * 100) << "%\n\n";
+    std::cout << "  Promote significance: " << (config.promote_alpha * 100) << "%\n\n";
 
     // Create shared tree for all arena games
     NodePool pool;
@@ -718,6 +756,7 @@ int run_arena(const Config& config) {
         int cw = stats.p1_wins.load(std::memory_order_relaxed);   // candidate wins
         int curr = stats.p2_wins.load(std::memory_order_relaxed); // current wins
         int d = stats.draws.load(std::memory_order_relaxed);
+        int moves = stats.total_moves.load(std::memory_order_relaxed);
 
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
@@ -732,7 +771,7 @@ int run_arena(const Config& config) {
                   << " | Win rate: " << std::fixed << std::setprecision(1)
                   << (rate * 100) << "%"
                   << " | " << std::setprecision(2) << games_per_sec << " g/s"
-                  << " | Nodes: " << p.allocated() << "\n";
+                  << " | Avg moves: " << std::setprecision(3) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
     };
 
     MultiGameStats stats;
@@ -762,7 +801,8 @@ int run_arena(const Config& config) {
         ? static_cast<float>(candidate_wins) / decisive_games
         : 0.0f;
     float avg_draw_score = static_cast<float>(draw_score) / draws;
-	bool promote_candidate = candidate_win_rate >= config.win_threshold;
+    double p_value = (decisive_games > 0) ? binomial_p_value(candidate_wins, decisive_games) : 1.0;
+	bool promote_candidate = p_value <= config.promote_alpha;
 	//Draw conditions, if no one won a single game, do likelihood of draw win > 60%, ie .2 in [-1,1]
 	float draw_promo_thresh = .2;
     if (candidate_wins == 0 && current_wins == 0) {
@@ -781,14 +821,16 @@ int run_arena(const Config& config) {
     std::cout << "  Errors:         " << errors << "\n";
     std::cout << "  Win rate:       " << std::fixed << std::setprecision(1)
               << (candidate_win_rate * 100) << "%\n";
+    std::cout << "  p value:       " << std::fixed << std::setprecision(3)
+              << (p_value ) << "\n";
     std::cout << "  Time:           " << elapsed << "s\n";
 
     // If candidate 
     if (promote_candidate) {
         std::cout << "\nCandidate wins! (";
-		if (candidate_win_rate >= config.win_threshold) {
-			std::cout << (candidate_win_rate * 100) << "% >= "
-				<< (config.win_threshold * 100) << "%)\n";
+		if (p_value <= config.promote_alpha) {
+			std::cout << std::fixed << std::setprecision(2)
+                      << (p_value*100) << "%  <= " << (config.promote_alpha * 100) << "%)\n";
 		} else {
 			std::cout << "Avg draw score " << avg_draw_score << " >= " << draw_promo_thresh << ")\n"; 
 		}
@@ -810,8 +852,9 @@ int run_arena(const Config& config) {
             return 1;
         }
     } else {
-        std::cout << "\nCurrent model retained. (" << (candidate_win_rate * 100)
-                  << "% < " << (config.win_threshold * 100) << "%)\n";
+        std::cout << std::fixed << std::setprecision(2)
+                  << "\nCurrent model retained. (" << (p_value * 100)
+                  << "% > " << (config.promote_alpha * 100) << "%)\n";
     }
 
     return 0;
@@ -850,8 +893,7 @@ int run_selfplay(const Config& config,
     std::string samples_file;
     if (!config.save_file.empty()) {
         std::filesystem::path p(config.save_file);
-        std::string stem = p.stem().string();
-        if (!config.model_id.empty()) {
+        std::string stem = p.stem().string(); if (!config.model_id.empty()) {
             stem += "_" + config.model_id;
         }
         samples_file = (p.parent_path() / stem).string() + ".qsamples";

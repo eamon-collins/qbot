@@ -1706,85 +1706,78 @@ SelfPlayResult SelfPlayEngine::arena_game(
     result.winner = 0;
     result.num_moves = 0;
 
-    std::vector<uint32_t> game_path;
-    game_path.reserve(config_.max_moves_per_game + 1);
-    game_path.push_back(root_idx);
-    pool[root_idx].set_on_game_path();
+    // Allocate a fresh root for each player's search
+    // We maintain the "true" game state by walking down the tree
+    uint32_t game_state_idx = root_idx;
 
-    uint32_t current = root_idx;
+    while (result.num_moves < config_.max_moves_per_game) {
+        StateNode& game_state = pool[game_state_idx];
 
-    while (current != NULL_NODE) {
-        StateNode& node = pool[current];
-
-        // Check terminal
-        if (node.is_terminal()) {
-            int relative_value = static_cast<int>(node.terminal_value);
-            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
+        // Check terminal conditions
+        if (game_state.is_terminal()) {
+            int relative_value = static_cast<int>(game_state.terminal_value);
+            result.winner = game_state.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
-        if (node.p1.row == 8) {
-            result.winner = 1;
-            node.set_terminal(-1.0f);
-            break;
-        }
-        if (node.p2.row == 0) {
-            result.winner = -1;
-            node.set_terminal(-1.0f);
-            break;
-        }
-        if (node.p1.fences == 0 && node.p2.fences == 0) {
-            int relative_winner = early_terminate_no_fences(node);
-            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
-            node.set_terminal(static_cast<float>(relative_winner));
+        if (game_state.p1.row == 8) { result.winner = 1; break; }
+        if (game_state.p2.row == 0) { result.winner = -1; break; }
+        if (game_state.p1.fences == 0 && game_state.p2.fences == 0) {
+            int rel = early_terminate_no_fences(game_state);
+            result.winner = game_state.is_p1_to_move() ? rel : -rel;
             break;
         }
 
-        // Refresh priors on existing children using the model for the player whose turn it is
-        // This is critical for arena: priors may have been set by a different model in a previous game
-        InferenceServer& current_server = node.is_p1_to_move() ? server_p1 : server_p2;
-        if (node.has_children()) {
-            refresh_priors(pool, current, current_server);
-        }
+        // Create fresh search root by copying current game state
+        uint32_t search_root = pool.allocate();
+        StateNode& search_node = pool[search_root];
 
-        // Run MCTS with both servers
-        {
-            ScopedTimer t(timers.mcts_iterations);
-            run_arena_mcts_iterations(pool, current, server_p1, server_p2, config_.simulations_per_move);
-        }
+        // Copy game state (but not tree structure)
+        search_node.p1 = game_state.p1;
+        search_node.p2 = game_state.p2;
+        search_node.fences = game_state.fences;
+        search_node.ply = game_state.ply;
+        search_node.flags = game_state.flags & StateNode::FLAG_P1_TO_MOVE;  // Only preserve turn
+        search_node.first_child = NULL_NODE;
+        search_node.next_sibling = NULL_NODE;
+        search_node.parent = NULL_NODE;
+        search_node.move = Move{};
+        search_node.terminal_value = 0.0f;
+        search_node.stats.reset();
 
-        // Use temperature for exploration early, then drop to deterministic
+        // Get the current player's server
+        InferenceServer& server = search_node.is_p1_to_move() ? server_p1 : server_p2;
+
+        // Expand and run MCTS with ONLY this player's model
+        expand_with_nn_priors(pool, search_root, server);
+        run_mcts_iterations(pool, search_root, server, config_.simulations_per_move);
+
+        // Select move using visit counts
         float temp = (result.num_moves < config_.temperature_drop_ply)
                      ? config_.temperature : 0.0f;
-        bool stochastic = (temp > 0.0f);
+        auto policy = compute_policy_from_visits(pool, search_root, temp);
 
-        std::vector<std::pair<Move, float>> policy;
-        {
-            ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_visits(pool, current, temp);
+        if (policy.empty()) { 
+            result.error = true; 
+            break; 
         }
 
-        if (policy.empty()) {
-            result.error = true;;
-            break;
-        }
+        Move selected = select_move_from_policy(policy, temp > 0.0f);
 
-        Move selected_move;
-        {
-            ScopedTimer t(timers.move_selection);
-            selected_move = select_move_from_policy(policy, stochastic);
+        // Find or create the child in the GAME state tree (not search tree)
+        // This maintains a record of the actual game played
+        if (!game_state.is_expanded()) {
+            // Need to expand to find the child - use current player's server
+            expand_with_nn_priors(pool, game_state_idx, server);
         }
 
         uint32_t next = NULL_NODE;
-        {
-            ScopedTimer t(timers.child_lookup);
-            uint32_t child = node.first_child;
-            while (child != NULL_NODE) {
-                if (pool[child].move == selected_move) {
-                    next = child;
-                    break;
-                }
-                child = pool[child].next_sibling;
+        uint32_t child = game_state.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].move == selected) {
+                next = child;
+                break;
             }
+            child = pool[child].next_sibling;
         }
 
         if (next == NULL_NODE) {
@@ -1792,43 +1785,158 @@ SelfPlayResult SelfPlayEngine::arena_game(
             break;
         }
 
-        current = next;
-        game_path.push_back(current);
-        pool[current].set_on_game_path();
+        game_state_idx = next;
         result.num_moves++;
 
-        // Early termination for long games
+        //check if too many moves, declare draw
         if (result.num_moves >= config_.max_moves_per_game) {
-            int relative_draw = early_terminate_no_fences(pool[current]);
-            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            int relative_draw = early_terminate_no_fences(pool[game_state_idx]);
+            int absolute_draw = pool[game_state_idx].is_p1_to_move() ? relative_draw : -relative_draw;
             float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
             result.draw_score = absolute_draw;
-            for (size_t i = game_path.size(); i > 0; --i) {
-                uint32_t idx = game_path[i - 1];
-                StateNode& n = pool[idx];
-                //conversion back to relative
-                float node_value = n.is_p1_to_move() ? game_value : -game_value;
-                n.stats.update(node_value);
-            }
             return result;
         }
-    }
 
-    // Backpropagate final result
-    if (! result.error) {
-        ScopedTimer t(timers.backprop);
-        float value = static_cast<float>(result.winner);
-        for (size_t i = game_path.size(); i > 0; --i) {
-            uint32_t idx = game_path[i - 1];
-            StateNode& node = pool[idx];
-            float node_value = node.is_p1_to_move() ? value : -value;
-            node.stats.update(node_value);
-        }
+        //delete search tree and continue, will create a new one next iter for the other model.
+        pool.deallocate_subtree(search_root);
     }
 
     return result;
 }
+
+// SelfPlayResult SelfPlayEngine::arena_game(
+//     NodePool& pool, uint32_t root_idx,
+//     InferenceServer& server_p1, InferenceServer& server_p2)
+// {
+//     auto& timers = get_timers();
+//     SelfPlayResult result;
+//     result.winner = 0;
+//     result.num_moves = 0;
+//
+//     std::vector<uint32_t> game_path;
+//     game_path.reserve(config_.max_moves_per_game + 1);
+//     game_path.push_back(root_idx);
+//     pool[root_idx].set_on_game_path();
+//
+//     uint32_t current = root_idx;
+//
+//     while (current != NULL_NODE) {
+//         StateNode& node = pool[current];
+//
+//         // Check terminal
+//         if (node.is_terminal()) {
+//             int relative_value = static_cast<int>(node.terminal_value);
+//             result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
+//             break;
+//         }
+//         if (node.p1.row == 8) {
+//             result.winner = 1;
+//             node.set_terminal(-1.0f);
+//             break;
+//         }
+//         if (node.p2.row == 0) {
+//             result.winner = -1;
+//             node.set_terminal(-1.0f);
+//             break;
+//         }
+//         if (node.p1.fences == 0 && node.p2.fences == 0) {
+//             int relative_winner = early_terminate_no_fences(node);
+//             result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+//             node.set_terminal(static_cast<float>(relative_winner));
+//             break;
+//         }
+//
+//         // Refresh priors on existing children using the model for the player whose turn it is
+//         // This is critical for arena: priors may have been set by a different model in a previous game
+//         InferenceServer& current_server = node.is_p1_to_move() ? server_p1 : server_p2;
+//         if (node.has_children()) {
+//             refresh_priors(pool, current, current_server);
+//         }
+//
+//         // Run MCTS with both servers
+//         {
+//             ScopedTimer t(timers.mcts_iterations);
+//             run_arena_mcts_iterations(pool, current, server_p1, server_p2, config_.simulations_per_move);
+//         }
+//
+//         // Use temperature for exploration early, then drop to deterministic
+//         float temp = (result.num_moves < config_.temperature_drop_ply)
+//                      ? config_.temperature : 0.0f;
+//         bool stochastic = (temp > 0.0f);
+//
+//         std::vector<std::pair<Move, float>> policy;
+//         {
+//             ScopedTimer t(timers.policy_compute);
+//             policy = compute_policy_from_visits(pool, current, temp);
+//         }
+//
+//         if (policy.empty()) {
+//             result.error = true;;
+//             break;
+//         }
+//
+//         Move selected_move;
+//         {
+//             ScopedTimer t(timers.move_selection);
+//             selected_move = select_move_from_policy(policy, stochastic);
+//         }
+//
+//         uint32_t next = NULL_NODE;
+//         {
+//             ScopedTimer t(timers.child_lookup);
+//             uint32_t child = node.first_child;
+//             while (child != NULL_NODE) {
+//                 if (pool[child].move == selected_move) {
+//                     next = child;
+//                     break;
+//                 }
+//                 child = pool[child].next_sibling;
+//             }
+//         }
+//
+//         if (next == NULL_NODE) {
+//             result.error = true;
+//             break;
+//         }
+//
+//         current = next;
+//         game_path.push_back(current);
+//         pool[current].set_on_game_path();
+//         result.num_moves++;
+//
+//         // Early termination for long games
+//         if (result.num_moves >= config_.max_moves_per_game) {
+//             int relative_draw = early_terminate_no_fences(pool[current]);
+//             int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+//             float game_value = absolute_draw * config_.max_draw_reward;
+//             result.winner = 0;
+//             result.draw_score = absolute_draw;
+//             for (size_t i = game_path.size(); i > 0; --i) {
+//                 uint32_t idx = game_path[i - 1];
+//                 StateNode& n = pool[idx];
+//                 //conversion back to relative
+//                 float node_value = n.is_p1_to_move() ? game_value : -game_value;
+//                 n.stats.update(node_value);
+//             }
+//             return result;
+//         }
+//     }
+//
+//     // Backpropagate final result
+//     if (! result.error) {
+//         ScopedTimer t(timers.backprop);
+//         float value = static_cast<float>(result.winner);
+//         for (size_t i = game_path.size(); i > 0; --i) {
+//             uint32_t idx = game_path[i - 1];
+//             StateNode& node = pool[idx];
+//             float node_value = node.is_p1_to_move() ? value : -value;
+//             node.stats.update(node_value);
+//         }
+//     }
+//
+//     return result;
+// }
 
 void SelfPlayEngine::arena_worker_loop(
     std::stop_token stop_token,

@@ -164,7 +164,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
 
     By default, loads all samples into memory and shuffles for better training.
     """
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
 
     if torch.cuda.is_available():
@@ -199,6 +199,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         batch_size=batch_size, 
         shuffle=True, 
         num_workers=4,
+        persistent_workers=False,
         pin_memory=True
     )
 
@@ -226,6 +227,17 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         current_lr = optimizer.param_groups[0]['lr']
         logging.info(f"Epoch {epoch}, LR: {current_lr:.6f}  Avg Loss: {avg_loss:.4f} (value:{avg_v_loss:.4f} policy:{avg_p_loss:.4f})")
 
+    ##cleanup, annoying but has to be done if using workers
+    train_loader._iterator = None
+    if hasattr(train_loader, '_workers'):
+        for w in train_loader._workers:
+            w.terminate()
+    del train_loader
+    if hasattr(dataset, 'samples') and dataset.samples is not None:
+        dataset.samples.clear()
+    del dataset
+    del optimizer
+    del scheduler
 
 def main():
     parser = argparse.ArgumentParser(description='Train Quoridor Policy-Value Network')
