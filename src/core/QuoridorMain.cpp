@@ -751,16 +751,15 @@ int run_arena(const Config& config) {
     auto start_time = std::chrono::steady_clock::now();
 
     // Progress callback
-    auto checkpoint_callback = [&config, &start_time](const MultiGameStats& stats, const NodePool& p) {
+    auto checkpoint_callback = [&config, &candidate_server, &current_server](const MultiGameStats& stats, const NodePool& p) {
         int completed = stats.games_completed.load(std::memory_order_relaxed);
         int cw = stats.p1_wins.load(std::memory_order_relaxed);   // candidate wins
         int curr = stats.p2_wins.load(std::memory_order_relaxed); // current wins
         int d = stats.draws.load(std::memory_order_relaxed);
         int moves = stats.total_moves.load(std::memory_order_relaxed);
 
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-        double games_per_sec = elapsed > 0 ? static_cast<double>(completed) / elapsed : 0;
+        // Compute combined average batch size
+        double avg_batch = (candidate_server.avg_batch_size() + current_server.avg_batch_size()) / 2.0;
 
         int decisive = cw + curr;
         float rate = decisive > 0 ? static_cast<float>(cw) / decisive : 0.0f;
@@ -770,7 +769,8 @@ int run_arena(const Config& config) {
                   << ", Draws: " << d
                   << " | Win rate: " << std::fixed << std::setprecision(1)
                   << (rate * 100) << "%"
-                  << " | " << std::setprecision(2) << games_per_sec << " g/s"
+                  << " | " << std::setprecision(2) << stats.games_per_sec() << " g/s"
+                  << " | Avg batch: " << std::setprecision(1) << avg_batch
                   << " | Avg moves: " << std::setprecision(3) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
     };
 
@@ -919,7 +919,7 @@ int run_selfplay(const Config& config,
         // Create inference server for batched GPU access
         InferenceServerConfig server_config;
         server_config.batch_size = config.batch_size;
-        server_config.max_wait_ms = 0.2;
+        server_config.max_wait_ms = 0.3;
         InferenceServer server(config.model_file, server_config);
         server.start();
 
@@ -928,7 +928,7 @@ int run_selfplay(const Config& config,
         bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
         bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
 
-        auto checkpoint_callback = [&config](const MultiGameStats& stats, const NodePool& p) {
+        auto checkpoint_callback = [&config, &server](const MultiGameStats& stats, const NodePool& p) {
             int completed = stats.games_completed.load(std::memory_order_relaxed);
             int p1 = stats.p1_wins.load(std::memory_order_relaxed);
             int p2 = stats.p2_wins.load(std::memory_order_relaxed);
@@ -937,6 +937,8 @@ int run_selfplay(const Config& config,
 
             std::cout << "[" << completed << "/" << config.num_games << "] "
                       << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
+                      << " | " << std::fixed << std::setprecision(2) << stats.games_per_sec() << " g/s"
+                      << " | Avg batch: " << std::setprecision(1) << server.avg_batch_size()
                       << " | Avg moves: " << std::setprecision(4) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
         };
 
@@ -963,10 +965,10 @@ int run_selfplay(const Config& config,
 
         // Extract final training samples from the last tree (if any remain)
         //
-        auto tree_samples = extract_samples_from_tree(*pool, root);
-        for (auto& sample : tree_samples) {
-            collector.add_sample_direct(std::move(sample));
-        }
+        // auto tree_samples = extract_samples_from_tree(*pool, root);
+        // for (auto& sample : tree_samples) {
+        //     collector.add_sample_direct(std::move(sample));
+        // }
         if (!samples_file.empty() && collector.size() > 0) {
             auto result = TrainingSampleStorage::save(samples_file, collector.samples());
             if (!result) {

@@ -176,7 +176,7 @@ void InferenceServer::process_pending() {
 
         std::vector<EvalResult> full_results;
         {
-            ScopedTimer t(timers.nn_batch_eval);
+            ScopedTimer t(timers.nn_inference);
             full_results = model_.evaluate_batch(full_nodes);
         }
 
@@ -185,6 +185,7 @@ void InferenceServer::process_pending() {
         }
 
         total_batches_.fetch_add(1, std::memory_order_relaxed);
+        total_batch_size_sum_.fetch_add(full_evals.size(), std::memory_order_relaxed);
     }
 
     // Process value-only requests (singles and batches)
@@ -214,7 +215,7 @@ void InferenceServer::process_pending() {
     // Single GPU call for everything
     std::vector<float> all_values;
     {
-        ScopedTimer t(timers.nn_batch_eval);
+        ScopedTimer t(timers.nn_inference);
         all_values = model_.evaluate_batch_values(all_nodes);
     }
 
@@ -233,6 +234,7 @@ void InferenceServer::process_pending() {
     }
 
     total_batches_.fetch_add(1, std::memory_order_relaxed);
+    total_batch_size_sum_.fetch_add(all_nodes.size(), std::memory_order_relaxed);
 }
 
 } // namespace qbot

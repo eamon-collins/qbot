@@ -623,6 +623,7 @@ struct MultiGameStats {
     std::atomic<int> total_moves{0};
     std::atomic<int> draw_score{0}; //if draw, accumulate relative distance metric
     std::atomic<int> games_completed{0};
+    std::chrono::steady_clock::time_point start_time;
 
     void add_result(const SelfPlayResult& result) noexcept {
         if (result.error) errors.fetch_add(1, std::memory_order_relaxed);
@@ -644,6 +645,14 @@ struct MultiGameStats {
         errors.store(0, std::memory_order_relaxed);
         draw_score.store(0, std::memory_order_relaxed);
         games_completed.store(0, std::memory_order_relaxed);
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    [[nodiscard]] double games_per_sec() const noexcept {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        if (elapsed == 0) return 0.0;
+        return static_cast<double>(games_completed.load(std::memory_order_relaxed)) / elapsed;
     }
 
     // Non-copyable due to atomics

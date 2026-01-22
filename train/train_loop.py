@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import gc
+import copy
 import ctypes
 import shutil
 import psutil
@@ -233,9 +234,16 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
 
         # New 6-channel input format: (batch, 6, 9, 9)
         # Channels: my_pawn, opp_pawn, h_walls, v_walls, my_fences, opp_fences
-        example_input = torch.zeros(1, 6, 9, 9)
-
-        traced = torch.jit.trace(model, example_input)
+        # half the model to fp16 for inference
+        export_model = copy.deepcopy(model)
+        export_model.eval()
+        export_model.half()
+        if torch.cuda.is_available():
+            export_model.cuda()
+            example_input = torch.zeros(1, 6, 9, 9).half().cuda()
+        else:
+            example_input = torch.zeros(1, 6, 9, 9).half()
+        traced = torch.jit.trace(export_model, example_input)
         traced.save(export_path)
 
         return True

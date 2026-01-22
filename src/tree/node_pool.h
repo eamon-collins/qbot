@@ -32,8 +32,8 @@ class NodePool {
 public:
     /// Configuration for node pool
     struct Config {
-        size_t initial_capacity = 10'000'000;  // Initial number of nodes (10M)
-        size_t chunk_size = 10'000'000;        // Nodes per chunk (10M)
+        size_t initial_capacity = 100'000'000;  // Initial number of nodes (10M)
+        size_t chunk_size = 20'000'000;        // Nodes per chunk (10M)
         size_t recycle_batch = 1000;           // Nodes to recycle when pool exhausted
         bool enable_lru = true;                // Enable LRU tracking for recycling
     };

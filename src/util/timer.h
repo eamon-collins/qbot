@@ -62,46 +62,14 @@ private:
 
 /// All timers for self-play profiling
 struct SelfPlayTimers {
-    TimerAccumulator expansion;        // expand_with_nn_priors
-    TimerAccumulator mcts_iterations;  // run_mcts_iterations (all iterations for one move)
-    TimerAccumulator single_mcts;      // single mcts_iteration
-    TimerAccumulator policy_compute;   // compute_policy_from_q
-    TimerAccumulator move_selection;   // select_move_from_policy
-    TimerAccumulator child_lookup;     // finding child for selected move
-    TimerAccumulator backprop;         // backpropagation
-    TimerAccumulator nn_batch_eval;    // NN batch evaluation specifically
-    TimerAccumulator nn_single_eval;   // NN single node evaluation
-    TimerAccumulator generate_children;// generate_valid_children
-
-    // Detailed inference breakdown (with explicit CUDA syncs for accuracy)
-    TimerAccumulator tensor_alloc;     // torch::zeros calls
-    TimerAccumulator tensor_fill;      // filling tensor data
-    TimerAccumulator tensor_to_gpu;    // .to(device_) launch
-    TimerAccumulator gpu_sync_upload;  // sync after upload completes
-    TimerAccumulator model_forward;    // model_.forward() launch
-    TimerAccumulator gpu_sync_forward; // sync after forward completes (actual GPU compute)
-    TimerAccumulator tensor_to_cpu;    // copy to CPU launch
-    TimerAccumulator gpu_sync_download;// sync after download completes
+    TimerAccumulator nn_inference;     // Total NN inference time (including batching, GPU transfers, etc.)
+    TimerAccumulator mcts_core;        // MCTS core logic (selection, expansion, backprop) excluding NN
+    TimerAccumulator pathfinding;      // Pathfinding for wall validation
 
     void reset() noexcept {
-        expansion.reset();
-        mcts_iterations.reset();
-        single_mcts.reset();
-        policy_compute.reset();
-        move_selection.reset();
-        child_lookup.reset();
-        backprop.reset();
-        nn_batch_eval.reset();
-        nn_single_eval.reset();
-        generate_children.reset();
-        tensor_alloc.reset();
-        tensor_fill.reset();
-        tensor_to_gpu.reset();
-        gpu_sync_upload.reset();
-        model_forward.reset();
-        gpu_sync_forward.reset();
-        tensor_to_cpu.reset();
-        gpu_sync_download.reset();
+        nn_inference.reset();
+        mcts_core.reset();
+        pathfinding.reset();
     }
 
     void print() const {
@@ -114,25 +82,9 @@ struct SelfPlayTimers {
         };
 
         std::cout << "\n=== Self-Play Timing Breakdown ===\n";
-        print_line("mcts_iterations", mcts_iterations);
-        print_line("  single_mcts", single_mcts);
-        print_line("expansion", expansion);
-        print_line("  generate_children", generate_children);
-        print_line("  nn_batch_eval", nn_batch_eval);
-        print_line("nn_single_eval", nn_single_eval);
-        print_line("policy_compute", policy_compute);
-        print_line("move_selection", move_selection);
-        print_line("child_lookup", child_lookup);
-        print_line("backprop", backprop);
-        std::cout << "--- Inference Detail (with CUDA syncs) ---\n";
-        print_line("  tensor_alloc", tensor_alloc);
-        print_line("  tensor_fill", tensor_fill);
-        print_line("  tensor_to_gpu", tensor_to_gpu);
-        print_line("  gpu_sync_upload", gpu_sync_upload);
-        print_line("  model_forward", model_forward);
-        print_line("  gpu_sync_forward", gpu_sync_forward);
-        print_line("  tensor_to_cpu", tensor_to_cpu);
-        print_line("  gpu_sync_download", gpu_sync_download);
+        print_line("NN Inference", nn_inference);
+        print_line("MCTS Core", mcts_core);
+        print_line("Pathfinding", pathfinding);
         std::cout << "==================================\n\n";
     }
 };

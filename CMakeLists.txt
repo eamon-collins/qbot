@@ -28,11 +28,15 @@ if(ENABLE_INFERENCE)
         # Set include directories
         set(TORCH_INCLUDE_DIRS
             ${LIBTORCH_PREFIX}/include
-            ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
+            # ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include/torch/csrc/api/include)
 
         # Set library directory
-        set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib)
+        # set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib)
+        set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/lib)
 
+        set(NVIDIA_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/nvidia/lib)
         # Manually specify torch libraries (matches old Makefile approach)
         # Use -Wl,--no-as-needed to ensure CUDA libs are linked even if not directly referenced
         set(TORCH_LIBRARIES
@@ -41,7 +45,8 @@ if(ENABLE_INFERENCE)
             ${TORCH_LIBRARY_DIR}/libtorch_cpu.so
             ${TORCH_LIBRARY_DIR}/libtorch_cuda.so
             ${TORCH_LIBRARY_DIR}/libc10.so
-            ${TORCH_LIBRARY_DIR}/libc10_cuda.so)
+            ${TORCH_LIBRARY_DIR}/libc10_cuda.so
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2)
 
         message(STATUS "LibTorch include dirs: ${TORCH_INCLUDE_DIRS}")
         message(STATUS "LibTorch libraries: ${TORCH_LIBRARIES}")
@@ -96,7 +101,7 @@ target_compile_definitions(qbot_lib_debug PUBLIC ASIO_STANDALONE)
 set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
 target_link_libraries(qbot_lib_debug PUBLIC pthread)
 if(ENABLE_INFERENCE)
-    target_include_directories(qbot_lib_debug PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_include_directories(qbot_lib_debug SYSTEM PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_debug PUBLIC ${TORCH_LIBRARIES})
     target_compile_definitions(qbot_lib_debug PUBLIC QBOT_ENABLE_INFERENCE)
 endif()
@@ -130,7 +135,7 @@ target_compile_definitions(qbot_lib_fast PUBLIC ASIO_STANDALONE)
 set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
 target_link_libraries(qbot_lib_fast PUBLIC pthread)
 if(ENABLE_INFERENCE)
-    target_include_directories(qbot_lib_fast PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_include_directories(qbot_lib_fast SYSTEM PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_fast PUBLIC ${TORCH_LIBRARIES})
     target_compile_definitions(qbot_lib_fast PUBLIC QBOT_ENABLE_INFERENCE)
 endif()

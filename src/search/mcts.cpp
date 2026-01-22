@@ -315,7 +315,6 @@ template<InferenceProvider Inference>
 SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx, Inference& inference,
                                                TrainingSampleCollector* collector) {
     SelfPlayResult result;
-    auto& timers = get_timers();
 
     std::vector<uint32_t> game_path;
     game_path.reserve(config_.max_moves_per_game + 1);
@@ -363,18 +362,15 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         if constexpr (is_inference_server_v<Inference>) {
             if (config_.progressive_expansion) {
                 if (!node.priors_set.load(std::memory_order_acquire)) {
-                    ScopedTimer t(timers.expansion);
                     compute_priors_progressive(pool, current, inference);
                 }
             } else if (!node.is_expanded()) {
-                ScopedTimer t(timers.expansion);
                 expand_with_nn_priors(pool, current, inference);
             }
         } else
 #endif
         {
             if (!node.is_expanded()) {
-                ScopedTimer t(timers.expansion);
                 expand_with_nn_priors(pool, current, inference);
             }
         }
@@ -393,10 +389,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         }
 
         // Run MCTS iterations
-        {
-            ScopedTimer t(timers.mcts_iterations);
-            run_mcts_iterations(pool, current, inference, config_.simulations_per_move);
-        }
+        run_mcts_iterations(pool, current, inference, config_.simulations_per_move);
 
         if (collector) {
             sample_positions.push_back(current);
@@ -406,10 +399,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         float temp = (result.num_moves < config_.temperature_drop_ply)
                      ? config_.temperature : 0.0f;
         std::vector<std::pair<Move, float>> policy;
-        {
-            ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_visits(pool, current, temp);
-        }
+        policy = compute_policy_from_visits(pool, current, temp);
 
         if (policy.empty()) {
             result.error = true;
@@ -417,22 +407,16 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         }
 
         Move selected_move;
-        {
-            ScopedTimer t(timers.move_selection);
-            selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
-        }
+        selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
 
         uint32_t next = NULL_NODE;
-        {
-            ScopedTimer t(timers.child_lookup);
-            uint32_t child = node.first_child;
-            while (child != NULL_NODE) {
-                if (pool[child].move == selected_move) {
-                    next = child;
-                    break;
-                }
-                child = pool[child].next_sibling;
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].move == selected_move) {
+                next = child;
+                break;
             }
+            child = pool[child].next_sibling;
         }
 
         if (next == NULL_NODE) {
@@ -471,7 +455,6 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
 
     // Backpropagate game result
     if (result.winner != 0) {
-        ScopedTimer t(timers.backprop);
         float value = static_cast<float>(result.winner);
         for (size_t i = game_path.size(); i > 0; --i) {
             uint32_t idx = game_path[i - 1];
@@ -536,10 +519,7 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
 
             if (!nodes_to_eval.empty()) {
                 std::vector<float> values;
-                {
-                    ScopedTimer t(timers.nn_single_eval);
-                    values = inference.evaluate_batch_values(nodes_to_eval);
-                }
+                values = inference.evaluate_batch_values(nodes_to_eval);
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
                     pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
@@ -555,8 +535,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
     dummy_config.fpu = 0.0f;
 
     for (int i = 0; i < iterations; ++i) {
-        ScopedTimer t(timers.single_mcts);
-
         std::vector<uint32_t> path;
         path.reserve(64);
         uint32_t current = root_idx;
@@ -572,7 +550,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                     if (node.is_terminal()) break;
 
                     if (!node.priors_set.load(std::memory_order_acquire)) {
-                        ScopedTimer t2(timers.expansion);
                         compute_priors_progressive(pool, current, inference);
                     }
 
@@ -621,7 +598,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         constexpr bool skip_expansion = false;
 #endif
         if (!skip_expansion && !leaf.is_expanded()) {
-            ScopedTimer t2(timers.expansion);
             expand_with_nn_priors(pool, leaf_idx, inference);
         }
 
@@ -667,23 +643,17 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
 
     // Get policy from NN - method differs by inference type
     EvalResult parent_eval;
-    {
-        ScopedTimer t(timers.nn_single_eval);
-        if constexpr (is_inference_server_v<Inference>) {
-            auto future = inference.submit_full(&node);
-            parent_eval = future.get();
-        } else {
-            parent_eval = inference.evaluate_node(&node);
-        }
+    if constexpr (is_inference_server_v<Inference>) {
+        auto future = inference.submit_full(&node);
+        parent_eval = future.get();
+    } else {
+        parent_eval = inference.evaluate_node(&node);
     }
 
     // Cache NN value (already in relative perspective)
     node.stats.set_nn_value(parent_eval.value);
 
-    {
-        ScopedTimer t(timers.generate_children);
-        node.generate_valid_children();
-    }
+    node.generate_valid_children();
 
     if (!node.has_children()) return;
 
@@ -1037,12 +1007,12 @@ void SelfPlayEngine::run_multi_game(
             }
 
             // Save intermediate qsamples file
-            // if (!samples_file.empty() && collector->size() > 0) {
-            //     auto result = TrainingSampleStorage::save(samples_file, collector->samples());
-            //     if (!result) {
-            //         std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
-            //     }
-            // }
+            if (!samples_file.empty() && collector->size() > 0) {
+                auto result = TrainingSampleStorage::save(samples_file, collector->samples());
+                if (!result) {
+                    std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
+                }
+            }
 
             if (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
                 //if we have more to go, clear tree, if we're done, leave it so it can be saved
@@ -1110,6 +1080,7 @@ void SelfPlayEngine::run_multi_game_worker(
     MultiGameWorkerSync& sync,
     TrainingSampleCollector* collector)
 {
+    auto& timers = get_timers();
     std::vector<GameContext> games(games_per_worker);
     int active_games = 0;
 
@@ -1448,6 +1419,8 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (!g.active || !g.needs_mcts) continue;
                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 
+                ScopedTimer timer(timers.mcts_core);
+
                 std::vector<uint32_t> path;
                 path.reserve(64);
                 uint32_t current = g.current_node;
@@ -1640,8 +1613,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
     dummy_config.fpu = 0.0f;
 
     for (int i = 0; i < iterations; ++i) {
-        ScopedTimer t(timers.single_mcts);
-
         std::vector<uint32_t> path;
         path.reserve(64);
 
@@ -1667,7 +1638,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         }
 
         if (!leaf.is_expanded()) {
-            ScopedTimer t2(timers.expansion);
             // Expand using the server for the player at this position
             InferenceServer& server = get_server_for_player(leaf, server_p1, server_p2);
             expand_with_nn_priors(pool, leaf_idx, server);

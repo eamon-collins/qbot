@@ -60,7 +60,7 @@ def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool 
             # Extract iteration from "tree_123_abc.qsamples"
             parts = path.stem.split('_')
             if len(parts) >= 2:
-                return int(parts[1])
+                return str(parts[1])
         except (ValueError, IndexError):
             pass
         return 0

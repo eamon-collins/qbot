@@ -264,44 +264,31 @@ std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const S
     results.resize(batch_size);
 
     // Ensure we have enough buffer space
-    {
-        ScopedTimer t(timers.tensor_alloc);
-        ensure_buffer_capacity(batch_size);
-    }
+    ensure_buffer_capacity(batch_size);
 
     // Zero and fill only the portion we need
-    {
-        ScopedTimer t(timers.tensor_fill);
+    float* tensor_ptr = unified_buffer_.data_ptr<float>();
+    constexpr size_t tensor_stride = 6 * 9 * 9;
 
-        float* tensor_ptr = unified_buffer_.data_ptr<float>();
-        constexpr size_t tensor_stride = 6 * 9 * 9;
+    // Zero the buffer for this batch
+    std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(float));
 
-        // Zero the buffer for this batch
-        std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(float));
-
-        // Fill the tensors
-        for (int i = 0; i < batch_size; ++i) {
-            fill_unified_tensor(tensor_ptr, tensor_stride, i, nodes[i]);
-        }
+    // Fill the tensors
+    for (int i = 0; i < batch_size; ++i) {
+        fill_unified_tensor(tensor_ptr, tensor_stride, i, nodes[i]);
     }
 
     // Slice buffer to actual batch size and move to GPU (async)
-    torch::Tensor batch_tensor;
-    {
-        ScopedTimer t(timers.tensor_to_gpu);
-        batch_tensor = unified_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
-    }
+    torch::Tensor batch_tensor = unified_buffer_.slice(0, 0, batch_size).to(device_, /*non_blocking=*/true);
 
     // Sync to measure actual upload time
     if (device_.is_cuda()) {
-        ScopedTimer t(timers.gpu_sync_upload);
         torch::cuda::synchronize();
     }
 
     // Run inference (async launch)
     torch::Tensor policy_output, value_output;
     {
-        ScopedTimer t(timers.model_forward);
         std::vector<torch::jit::IValue> inputs;
         inputs.push_back(batch_tensor);
 
@@ -316,20 +303,15 @@ std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const S
 
     // Sync to measure actual forward time
     if (device_.is_cuda()) {
-        ScopedTimer t(timers.gpu_sync_forward);
         torch::cuda::synchronize();
     }
 
     // Copy outputs to pinned CPU buffers (async)
-    {
-        ScopedTimer t(timers.tensor_to_cpu);
-        value_output_buffer_.slice(0, 0, batch_size).copy_(value_output.flatten(), /*non_blocking=*/true);
-        policy_output_buffer_.slice(0, 0, batch_size).copy_(policy_output, /*non_blocking=*/true);
-    }
+    value_output_buffer_.slice(0, 0, batch_size).copy_(value_output.flatten(), /*non_blocking=*/true);
+    policy_output_buffer_.slice(0, 0, batch_size).copy_(policy_output, /*non_blocking=*/true);
 
     // Sync to measure actual download time
     if (device_.is_cuda()) {
-        ScopedTimer t(timers.gpu_sync_download);
         torch::cuda::synchronize();
     }
 

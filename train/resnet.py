@@ -2,6 +2,7 @@
 import logging
 import argparse
 import sys
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -248,8 +249,8 @@ def main():
                         action='store_true', default=False)
     parser.add_argument('--batch-size', type=int, dest="batch_size", default=64, help='Training batch size')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--channels', type=int, default=64, help='Number of channels in residual tower')
-    parser.add_argument('--blocks', type=int, default=6, help='Number of residual blocks')
+    parser.add_argument('--channels', type=int, default=128, help='Number of channels in residual tower')
+    parser.add_argument('--blocks', type=int, default=15, help='Number of residual blocks')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
                         action='store_true', default=False)
     parser.add_argument('--log-level', dest="log_level", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -258,10 +259,7 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level))
-    if args.big_model:
-        model = BigQuoridorNet()
-    else:
-        model = QuoridorNet(num_channels=args.channels, num_blocks=args.blocks)
+    model = QuoridorNet(num_channels=args.channels, num_blocks=args.blocks)
     logging.info(f"Created model with {args.channels} channels, {args.blocks} residual blocks")
 
     if args.load_model:
@@ -283,9 +281,16 @@ def main():
         logging.info(f"Saved trainable weights to {weights_path}")
 
         # Export TorchScript model (.pt file for C++ inference)
-        example_input = torch.zeros(1, 6, 9, 9)
-        traced_model = torch.jit.trace(model, example_input)
-        traced_model.save(args.save_model)
+        export_model = copy.deepcopy(model)
+        export_model.eval()
+        export_model.half()
+        if torch.cuda.is_available():
+            export_model.cuda()
+            example_input = torch.zeros(1, 6, 9, 9).half().cuda()
+        else:
+            example_input = torch.zeros(1, 6, 9, 9).half()
+        traced = torch.jit.trace(export_model, example_input)
+        traced.save(args.save_model)
         logging.info(f"Exported TorchScript model to {args.save_model}")
         sys.exit(0)
 
