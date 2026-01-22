@@ -315,7 +315,6 @@ template<InferenceProvider Inference>
 SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx, Inference& inference,
                                                TrainingSampleCollector* collector) {
     SelfPlayResult result;
-    auto& timers = get_timers();
 
     std::vector<uint32_t> game_path;
     game_path.reserve(config_.max_moves_per_game + 1);
@@ -363,18 +362,15 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         if constexpr (is_inference_server_v<Inference>) {
             if (config_.progressive_expansion) {
                 if (!node.priors_set.load(std::memory_order_acquire)) {
-                    ScopedTimer t(timers.expansion);
                     compute_priors_progressive(pool, current, inference);
                 }
             } else if (!node.is_expanded()) {
-                ScopedTimer t(timers.expansion);
                 expand_with_nn_priors(pool, current, inference);
             }
         } else
 #endif
         {
             if (!node.is_expanded()) {
-                ScopedTimer t(timers.expansion);
                 expand_with_nn_priors(pool, current, inference);
             }
         }
@@ -393,10 +389,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         }
 
         // Run MCTS iterations
-        {
-            ScopedTimer t(timers.mcts_iterations);
-            run_mcts_iterations(pool, current, inference, config_.simulations_per_move);
-        }
+        run_mcts_iterations(pool, current, inference, config_.simulations_per_move);
 
         if (collector) {
             sample_positions.push_back(current);
@@ -406,10 +399,7 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         float temp = (result.num_moves < config_.temperature_drop_ply)
                      ? config_.temperature : 0.0f;
         std::vector<std::pair<Move, float>> policy;
-        {
-            ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_q(pool, current, temp);
-        }
+        policy = compute_policy_from_visits(pool, current, temp);
 
         if (policy.empty()) {
             result.error = true;
@@ -417,22 +407,16 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
         }
 
         Move selected_move;
-        {
-            ScopedTimer t(timers.move_selection);
-            selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
-        }
+        selected_move = select_move_from_policy(policy, config_.stochastic && temp > 0);
 
         uint32_t next = NULL_NODE;
-        {
-            ScopedTimer t(timers.child_lookup);
-            uint32_t child = node.first_child;
-            while (child != NULL_NODE) {
-                if (pool[child].move == selected_move) {
-                    next = child;
-                    break;
-                }
-                child = pool[child].next_sibling;
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].move == selected_move) {
+                next = child;
+                break;
             }
+            child = pool[child].next_sibling;
         }
 
         if (next == NULL_NODE) {
@@ -471,7 +455,6 @@ SelfPlayResult SelfPlayEngine::self_play_impl(NodePool& pool, uint32_t root_idx,
 
     // Backpropagate game result
     if (result.winner != 0) {
-        ScopedTimer t(timers.backprop);
         float value = static_cast<float>(result.winner);
         for (size_t i = game_path.size(); i > 0; --i) {
             uint32_t idx = game_path[i - 1];
@@ -496,7 +479,7 @@ template<InferenceProvider Inference>
 void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                                           Inference& inference, int iterations) {
     auto& timers = get_timers();
-    constexpr int EVAL_BATCH_SIZE = 64;
+    constexpr int EVAL_BATCH_SIZE = 128;
 
     // PendingEval structure differs: InferenceServer uses futures, ModelInference uses batch eval
     struct PendingEval {
@@ -536,10 +519,7 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
 
             if (!nodes_to_eval.empty()) {
                 std::vector<float> values;
-                {
-                    ScopedTimer t(timers.nn_single_eval);
-                    values = inference.evaluate_batch_values(nodes_to_eval);
-                }
+                values = inference.evaluate_batch_values(nodes_to_eval);
                 for (size_t j = 0; j < needs_eval_idx.size(); ++j) {
                     size_t i = needs_eval_idx[j];
                     pool[pending[i].eval_node_idx].stats.set_nn_value(values[j]);
@@ -555,8 +535,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
     dummy_config.fpu = 0.0f;
 
     for (int i = 0; i < iterations; ++i) {
-        ScopedTimer t(timers.single_mcts);
-
         std::vector<uint32_t> path;
         path.reserve(64);
         uint32_t current = root_idx;
@@ -572,7 +550,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
                     if (node.is_terminal()) break;
 
                     if (!node.priors_set.load(std::memory_order_acquire)) {
-                        ScopedTimer t2(timers.expansion);
                         compute_priors_progressive(pool, current, inference);
                     }
 
@@ -621,7 +598,6 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
         constexpr bool skip_expansion = false;
 #endif
         if (!skip_expansion && !leaf.is_expanded()) {
-            ScopedTimer t2(timers.expansion);
             expand_with_nn_priors(pool, leaf_idx, inference);
         }
 
@@ -667,23 +643,17 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
 
     // Get policy from NN - method differs by inference type
     EvalResult parent_eval;
-    {
-        ScopedTimer t(timers.nn_single_eval);
-        if constexpr (is_inference_server_v<Inference>) {
-            auto future = inference.submit_full(&node);
-            parent_eval = future.get();
-        } else {
-            parent_eval = inference.evaluate_node(&node);
-        }
+    if constexpr (is_inference_server_v<Inference>) {
+        auto future = inference.submit_full(&node);
+        parent_eval = future.get();
+    } else {
+        parent_eval = inference.evaluate_node(&node);
     }
 
     // Cache NN value (already in relative perspective)
     node.stats.set_nn_value(parent_eval.value);
 
-    {
-        ScopedTimer t(timers.generate_children);
-        node.generate_valid_children();
-    }
+    node.generate_valid_children();
 
     if (!node.has_children()) return;
 
@@ -920,7 +890,9 @@ void SelfPlayEngine::run_multi_game(
 
     // Synchronization for memory-bounded pool reset
     std::atomic<bool> pause_requested{false};
+    std::atomic<bool> draining{false};
     std::atomic<int> workers_paused{0};
+    std::atomic<int> total_active_games{0};
     std::mutex pause_mutex;
     std::condition_variable pause_cv;
     std::condition_variable resume_cv;
@@ -929,16 +901,18 @@ void SelfPlayEngine::run_multi_game(
     std::atomic<uint32_t> current_root{root_idx};
 
     MultiGameWorkerSync sync{
-        pause_requested, workers_paused, paused, 
+        pause_requested, draining, workers_paused, total_active_games, 
         current_root, pause_mutex, pause_cv, resume_cv
     };
 
     int pool_reset_count = 0;
 
+    //220000 is approx constant for # bytes per game per simulationpermove.
+    size_t soft_limit_bytes = bounds.max_bytes - (220000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
-              << "soft limit: " << (bounds.soft_limit_ratio * 100) << "%\n";
+              << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB\n";
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -947,69 +921,77 @@ void SelfPlayEngine::run_multi_game(
     workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        // workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
-        //                       &sync, collector, games_per_worker](std::stop_token st) {
-        //     run_multi_game_worker(st, pool, server, games_per_worker,
-        //                           games_remaining, stats, sync, collector);
-        // });
-        workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
-                              &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
-                              &resume_cv, &paused, i](std::stop_token st) {
-            while (!st.stop_requested()) {
-                // Check if pause is requested - if so, wait
-                if (pause_requested.load(std::memory_order_acquire)) {
-                    workers_paused.fetch_add(1, std::memory_order_relaxed);
-                    {
-                        std::unique_lock lock(pause_mutex);
-                        pause_cv.notify_all();  // Signal main thread we're paused
-                        resume_cv.wait(lock, [&]() {
-                            return !paused.load(std::memory_order_acquire) || st.stop_requested();
-                        });
-                    }
-                    workers_paused.fetch_sub(1, std::memory_order_relaxed);
-                    if (st.stop_requested()) break;
-                }
-
-                // Claim a game to play
-                int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
-                if (remaining <= 0) {
-                    games_remaining.fetch_add(1, std::memory_order_relaxed);
-                    break;
-                }
-
-                // Play one game using current root
-                uint32_t root = current_root.load(std::memory_order_acquire);
-                SelfPlayResult result = self_play(pool, root, server);
-                stats.add_result(result);
-            }
+        workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
+                              &sync, collector, games_per_worker](std::stop_token st) {
+            run_multi_game_worker(st, pool, server, games_per_worker,
+                                  games_remaining, stats, sync, collector);
         });
+        //// older way of doing things, with single game per thread.
+        // workers.emplace_back([this, &pool, &current_root, &server, &games_remaining, &stats,
+        //                       &pause_requested, &workers_paused, &pause_mutex, &pause_cv,
+        //                       &resume_cv, &paused, i](std::stop_token st) {
+        //     while (!st.stop_requested()) {
+        //         // Check if pause is requested - if so, wait
+        //         if (pause_requested.load(std::memory_order_acquire)) {
+        //             workers_paused.fetch_add(1, std::memory_order_relaxed);
+        //             {
+        //                 std::unique_lock lock(pause_mutex);
+        //                 pause_cv.notify_all();  // Signal main thread we're paused
+        //                 resume_cv.wait(lock, [&]() {
+        //                     return !paused.load(std::memory_order_acquire) || st.stop_requested();
+        //                 });
+        //             }
+        //             workers_paused.fetch_sub(1, std::memory_order_relaxed);
+        //             if (st.stop_requested()) break;
+        //         }
+        //
+        //         // Claim a game to play
+        //         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
+        //         if (remaining <= 0) {
+        //             games_remaining.fetch_add(1, std::memory_order_relaxed);
+        //             break;
+        //         }
+        //
+        //         // Play one game using current root
+        //         uint32_t root = current_root.load(std::memory_order_acquire);
+        //         SelfPlayResult result = self_play(pool, root, server);
+        //         stats.add_result(result);
+        //     }
+        // });
     }
 
     // Monitor progress, call checkpoints, and handle memory-bounded resets
     int last_checkpoint = 0;
-    // while (games_remaining.load(std::memory_order_relaxed) > 0) {
     while (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Check memory usage
         size_t current_bytes = pool.memory_usage_bytes();
-        float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
 
-        if (utilization >= bounds.soft_limit_ratio && collector != nullptr) {
+        if (current_bytes >= soft_limit_bytes && collector != nullptr) {
             std::cout << "\n[SelfPlayEngine] Memory at " << std::fixed << std::setprecision(1)
-                      << (utilization * 100) << "% - initiating pool reset..." << std::endl;
+                      << (current_bytes / 1073741824) << " GB - initiating pool reset..." << std::endl;
 
-            // Request workers to pause
-            paused.store(true, std::memory_order_release);
-            pause_requested.store(true, std::memory_order_release);
+            // request workers to pause
+            draining.store(true, std::memory_order_release);
 
-            // Wait for all workers to pause (with timeout)
+            // wait for all active games to finish
+            auto drain_start = std::chrono::steady_clock::now();
+            while (total_active_games.load(std::memory_order_relaxed) > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                auto elapsed = std::chrono::steady_clock::now() - drain_start;
+                if (elapsed > std::chrono::seconds(2400)) {
+                    std::cerr << "[SelfPlayEngine] Drain timeout after 40 minutes, forcing reset\n";
+                    break;
+                }
+            }
+
+            //they should be paused already basically from above
             {
                 std::unique_lock lock(pause_mutex);
-                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-                pause_cv.wait_until(lock, deadline, [&]() {
-                    return workers_paused.load(std::memory_order_relaxed) >= num_workers ||
-                           games_remaining.load(std::memory_order_relaxed) <= 0;
+                pause_cv.wait_for(lock, std::chrono::seconds(10), [&]() {
+                    return workers_paused.load(std::memory_order_relaxed) >= num_workers;
                 });
             }
 
@@ -1032,23 +1014,25 @@ void SelfPlayEngine::run_multi_game(
                 }
             }
 
-            pool.clear();
+            if (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
+                //if we have more to go, clear tree, if we're done, leave it so it can be saved
+                pool.clear();
 
-            // Reinitialize root node
-            uint32_t new_root = pool.allocate();
-            pool[new_root].init_root(true);
-            current_root.store(new_root, std::memory_order_release);
-            root_idx = new_root;
+                // Reinitialize root node
+                uint32_t new_root = pool.allocate();
+                pool[new_root].init_root(true);
+                current_root.store(new_root, std::memory_order_release);
+                root_idx = new_root;
 
-            ++pool_reset_count;
-            std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
-                      << " complete" << std::endl;
+                ++pool_reset_count;
+                std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
+                          << " complete" << std::endl;
+            }
 
             // Resume workers
             {
                 std::lock_guard lock(pause_mutex);
-                pause_requested.store(false, std::memory_order_release);
-                paused.store(false, std::memory_order_release);
+                draining.store(false, std::memory_order_release);
             }
             resume_cv.notify_all();
         }
@@ -1096,6 +1080,7 @@ void SelfPlayEngine::run_multi_game_worker(
     MultiGameWorkerSync& sync,
     TrainingSampleCollector* collector)
 {
+    auto& timers = get_timers();
     std::vector<GameContext> games(games_per_worker);
     int active_games = 0;
 
@@ -1130,11 +1115,17 @@ void SelfPlayEngine::run_multi_game_worker(
     };
 
     auto try_claim_game = [&](GameContext& g) -> bool {
+        // Don't claim new games while draining
+        if (sync.draining.load(std::memory_order_acquire)) {
+            return false;
+        }
+
         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
         if (remaining <= 0) {
             games_remaining.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
+
         uint32_t root = sync.current_root.load(std::memory_order_acquire);
         g.current_node = root;
         g.game_path.clear();
@@ -1146,6 +1137,8 @@ void SelfPlayEngine::run_multi_game_worker(
         g.needs_mcts = false;
         g.mcts_iterations_done = 0;
         pool[root].set_on_game_path();
+
+        sync.total_active_games.fetch_add(1, std::memory_order_relaxed);
         return true;
     };
 
@@ -1162,14 +1155,15 @@ void SelfPlayEngine::run_multi_game_worker(
 
         if (collector && result.winner != 0 && !result.error) {
             float game_outcome = static_cast<float>(result.winner);
-            for (uint32_t pos : g.sample_positions) {
-                collector->add_sample(pool, pos, game_outcome);
-            }
+            // for (uint32_t pos : g.sample_positions) {
+            //     collector->add_sample(pool, pos, game_outcome);
+            // }
         }
 
         stats.add_result(result);
         g.active = false;
         active_games--;
+        sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
     };
 
     if (check_pause()) return;
@@ -1197,18 +1191,41 @@ void SelfPlayEngine::run_multi_game_worker(
     mcts_config.c_puct = 1.5f;
     mcts_config.fpu = 0.0f;
 
-    while (active_games > 0) {
-        if (check_pause()) {
-            std::cerr << "check pause true\n";
-            if (stop_token.stop_requested()) break;
-            std::cerr << "try_claim_game\n";
-            for (auto& g : games) {
-                if (!g.active && try_claim_game(g)) {
-                    active_games++;
+    while (! stop_token.stop_requested()) {
+        if (active_games == 0) {
+            if (sync.draining.load(std::memory_order_acquire)) {
+                // Enter pause state, wait for drain to complete
+                sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
+                {
+                    std::unique_lock lock(sync.pause_mutex);
+                    sync.pause_cv.notify_all();
+                    sync.resume_cv.wait(lock, [&]() {
+                        return !sync.draining.load(std::memory_order_acquire) ||
+                               stop_token.stop_requested();
+                    });
                 }
+                sync.workers_paused.fetch_sub(1, std::memory_order_relaxed);
+
+                if (stop_token.stop_requested()) break;
+
+                // Reclaim games after drain complete
+                for (auto& g : games) {
+                    if (!g.active && try_claim_game(g)) {
+                        active_games++;
+                    }
+                }
+                if (active_games == 0) break;  // No more games to claim
+                continue;
+            } else {
+                // Not draining, try to claim more games
+                for (auto& g : games) {
+                    if (!g.active && try_claim_game(g)) {
+                        active_games++;
+                    }
+                }
+                if (active_games == 0) break;  // No more games available
+                continue;
             }
-            if (active_games == 0) break;
-            continue;
         }
 
         std::vector<PendingExpansion> pending_expansions;
@@ -1275,11 +1292,11 @@ void SelfPlayEngine::run_multi_game_worker(
                     float nv = n.is_p1_to_move() ? game_value : -game_value;
                     n.stats.update(nv);
                 }
-                if (collector) {
-                    for (uint32_t pos : g.sample_positions) {
-                        collector->add_sample(pool, pos, game_value);
-                    }
-                }
+                // if (collector) {
+                //     for (uint32_t pos : g.sample_positions) {
+                //         collector->add_sample(pool, pos, game_value);
+                //     }
+                // }
                 stats.add_result(result);
                 g.active = false;
                 active_games--;
@@ -1402,6 +1419,8 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (!g.active || !g.needs_mcts) continue;
                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 
+                ScopedTimer timer(timers.mcts_core);
+
                 std::vector<uint32_t> path;
                 path.reserve(64);
                 uint32_t current = g.current_node;
@@ -1477,7 +1496,7 @@ void SelfPlayEngine::run_multi_game_worker(
 
             float temp = (g.num_moves < config_.temperature_drop_ply) 
                        ? config_.temperature : 0.0f;
-            auto policy = compute_policy_from_q(pool, g.current_node, temp);
+            auto policy = compute_policy_from_visits(pool, g.current_node, temp);
 
             if (policy.empty()) {
                 SelfPlayResult result;
@@ -1594,8 +1613,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
     dummy_config.fpu = 0.0f;
 
     for (int i = 0; i < iterations; ++i) {
-        ScopedTimer t(timers.single_mcts);
-
         std::vector<uint32_t> path;
         path.reserve(64);
 
@@ -1621,7 +1638,6 @@ void SelfPlayEngine::run_arena_mcts_iterations(
         }
 
         if (!leaf.is_expanded()) {
-            ScopedTimer t2(timers.expansion);
             // Expand using the server for the player at this position
             InferenceServer& server = get_server_for_player(leaf, server_p1, server_p2);
             expand_with_nn_priors(pool, leaf_idx, server);
@@ -1660,85 +1676,78 @@ SelfPlayResult SelfPlayEngine::arena_game(
     result.winner = 0;
     result.num_moves = 0;
 
-    std::vector<uint32_t> game_path;
-    game_path.reserve(config_.max_moves_per_game + 1);
-    game_path.push_back(root_idx);
-    pool[root_idx].set_on_game_path();
+    // Allocate a fresh root for each player's search
+    // We maintain the "true" game state by walking down the tree
+    uint32_t game_state_idx = root_idx;
 
-    uint32_t current = root_idx;
+    while (result.num_moves < config_.max_moves_per_game) {
+        StateNode& game_state = pool[game_state_idx];
 
-    while (current != NULL_NODE) {
-        StateNode& node = pool[current];
-
-        // Check terminal
-        if (node.is_terminal()) {
-            int relative_value = static_cast<int>(node.terminal_value);
-            result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
+        // Check terminal conditions
+        if (game_state.is_terminal()) {
+            int relative_value = static_cast<int>(game_state.terminal_value);
+            result.winner = game_state.is_p1_to_move() ? relative_value : -relative_value;
             break;
         }
-        if (node.p1.row == 8) {
-            result.winner = 1;
-            node.set_terminal(-1.0f);
-            break;
-        }
-        if (node.p2.row == 0) {
-            result.winner = -1;
-            node.set_terminal(-1.0f);
-            break;
-        }
-        if (node.p1.fences == 0 && node.p2.fences == 0) {
-            int relative_winner = early_terminate_no_fences(node);
-            result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
-            node.set_terminal(static_cast<float>(relative_winner));
+        if (game_state.p1.row == 8) { result.winner = 1; break; }
+        if (game_state.p2.row == 0) { result.winner = -1; break; }
+        if (game_state.p1.fences == 0 && game_state.p2.fences == 0) {
+            int rel = early_terminate_no_fences(game_state);
+            result.winner = game_state.is_p1_to_move() ? rel : -rel;
             break;
         }
 
-        // Refresh priors on existing children using the model for the player whose turn it is
-        // This is critical for arena: priors may have been set by a different model in a previous game
-        InferenceServer& current_server = node.is_p1_to_move() ? server_p1 : server_p2;
-        if (node.has_children()) {
-            refresh_priors(pool, current, current_server);
-        }
+        // Create fresh search root by copying current game state
+        uint32_t search_root = pool.allocate();
+        StateNode& search_node = pool[search_root];
 
-        // Run MCTS with both servers
-        {
-            ScopedTimer t(timers.mcts_iterations);
-            run_arena_mcts_iterations(pool, current, server_p1, server_p2, config_.simulations_per_move);
-        }
+        // Copy game state (but not tree structure)
+        search_node.p1 = game_state.p1;
+        search_node.p2 = game_state.p2;
+        search_node.fences = game_state.fences;
+        search_node.ply = game_state.ply;
+        search_node.flags = game_state.flags & StateNode::FLAG_P1_TO_MOVE;  // Only preserve turn
+        search_node.first_child = NULL_NODE;
+        search_node.next_sibling = NULL_NODE;
+        search_node.parent = NULL_NODE;
+        search_node.move = Move{};
+        search_node.terminal_value = 0.0f;
+        search_node.stats.reset();
 
-        // Use temperature for exploration early, then drop to deterministic
+        // Get the current player's server
+        InferenceServer& server = search_node.is_p1_to_move() ? server_p1 : server_p2;
+
+        // Expand and run MCTS with ONLY this player's model
+        expand_with_nn_priors(pool, search_root, server);
+        run_mcts_iterations(pool, search_root, server, config_.simulations_per_move);
+
+        // Select move using visit counts
         float temp = (result.num_moves < config_.temperature_drop_ply)
                      ? config_.temperature : 0.0f;
-        bool stochastic = (temp > 0.0f);
+        auto policy = compute_policy_from_visits(pool, search_root, temp);
 
-        std::vector<std::pair<Move, float>> policy;
-        {
-            ScopedTimer t(timers.policy_compute);
-            policy = compute_policy_from_q(pool, current, temp);
+        if (policy.empty()) { 
+            result.error = true; 
+            break; 
         }
 
-        if (policy.empty()) {
-            result.error = true;;
-            break;
-        }
+        Move selected = select_move_from_policy(policy, temp > 0.0f);
 
-        Move selected_move;
-        {
-            ScopedTimer t(timers.move_selection);
-            selected_move = select_move_from_policy(policy, stochastic);
+        // Find or create the child in the GAME state tree (not search tree)
+        // This maintains a record of the actual game played
+        if (!game_state.is_expanded()) {
+            // Need to expand to find the child - use current player's server
+            expand_with_nn_priors(pool, game_state_idx, server);
         }
 
         uint32_t next = NULL_NODE;
-        {
-            ScopedTimer t(timers.child_lookup);
-            uint32_t child = node.first_child;
-            while (child != NULL_NODE) {
-                if (pool[child].move == selected_move) {
-                    next = child;
-                    break;
-                }
-                child = pool[child].next_sibling;
+        uint32_t child = game_state.first_child;
+        while (child != NULL_NODE) {
+            if (pool[child].move == selected) {
+                next = child;
+                break;
             }
+            child = pool[child].next_sibling;
         }
 
         if (next == NULL_NODE) {
@@ -1746,43 +1755,158 @@ SelfPlayResult SelfPlayEngine::arena_game(
             break;
         }
 
-        current = next;
-        game_path.push_back(current);
-        pool[current].set_on_game_path();
+        game_state_idx = next;
         result.num_moves++;
 
-        // Early termination for long games
+        //check if too many moves, declare draw
         if (result.num_moves >= config_.max_moves_per_game) {
-            int relative_draw = early_terminate_no_fences(pool[current]);
-            int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+            int relative_draw = early_terminate_no_fences(pool[game_state_idx]);
+            int absolute_draw = pool[game_state_idx].is_p1_to_move() ? relative_draw : -relative_draw;
             float game_value = absolute_draw * config_.max_draw_reward;
             result.winner = 0;
             result.draw_score = absolute_draw;
-            for (size_t i = game_path.size(); i > 0; --i) {
-                uint32_t idx = game_path[i - 1];
-                StateNode& n = pool[idx];
-                //conversion back to relative
-                float node_value = n.is_p1_to_move() ? game_value : -game_value;
-                n.stats.update(node_value);
-            }
             return result;
         }
-    }
 
-    // Backpropagate final result
-    if (! result.error) {
-        ScopedTimer t(timers.backprop);
-        float value = static_cast<float>(result.winner);
-        for (size_t i = game_path.size(); i > 0; --i) {
-            uint32_t idx = game_path[i - 1];
-            StateNode& node = pool[idx];
-            float node_value = node.is_p1_to_move() ? value : -value;
-            node.stats.update(node_value);
-        }
+        //delete search tree and continue, will create a new one next iter for the other model.
+        pool.deallocate_subtree(search_root);
     }
 
     return result;
 }
+
+// SelfPlayResult SelfPlayEngine::arena_game(
+//     NodePool& pool, uint32_t root_idx,
+//     InferenceServer& server_p1, InferenceServer& server_p2)
+// {
+//     auto& timers = get_timers();
+//     SelfPlayResult result;
+//     result.winner = 0;
+//     result.num_moves = 0;
+//
+//     std::vector<uint32_t> game_path;
+//     game_path.reserve(config_.max_moves_per_game + 1);
+//     game_path.push_back(root_idx);
+//     pool[root_idx].set_on_game_path();
+//
+//     uint32_t current = root_idx;
+//
+//     while (current != NULL_NODE) {
+//         StateNode& node = pool[current];
+//
+//         // Check terminal
+//         if (node.is_terminal()) {
+//             int relative_value = static_cast<int>(node.terminal_value);
+//             result.winner = node.is_p1_to_move() ? relative_value : -relative_value;
+//             break;
+//         }
+//         if (node.p1.row == 8) {
+//             result.winner = 1;
+//             node.set_terminal(-1.0f);
+//             break;
+//         }
+//         if (node.p2.row == 0) {
+//             result.winner = -1;
+//             node.set_terminal(-1.0f);
+//             break;
+//         }
+//         if (node.p1.fences == 0 && node.p2.fences == 0) {
+//             int relative_winner = early_terminate_no_fences(node);
+//             result.winner = node.is_p1_to_move() ? relative_winner : -relative_winner;
+//             node.set_terminal(static_cast<float>(relative_winner));
+//             break;
+//         }
+//
+//         // Refresh priors on existing children using the model for the player whose turn it is
+//         // This is critical for arena: priors may have been set by a different model in a previous game
+//         InferenceServer& current_server = node.is_p1_to_move() ? server_p1 : server_p2;
+//         if (node.has_children()) {
+//             refresh_priors(pool, current, current_server);
+//         }
+//
+//         // Run MCTS with both servers
+//         {
+//             ScopedTimer t(timers.mcts_iterations);
+//             run_arena_mcts_iterations(pool, current, server_p1, server_p2, config_.simulations_per_move);
+//         }
+//
+//         // Use temperature for exploration early, then drop to deterministic
+//         float temp = (result.num_moves < config_.temperature_drop_ply)
+//                      ? config_.temperature : 0.0f;
+//         bool stochastic = (temp > 0.0f);
+//
+//         std::vector<std::pair<Move, float>> policy;
+//         {
+//             ScopedTimer t(timers.policy_compute);
+//             policy = compute_policy_from_visits(pool, current, temp);
+//         }
+//
+//         if (policy.empty()) {
+//             result.error = true;;
+//             break;
+//         }
+//
+//         Move selected_move;
+//         {
+//             ScopedTimer t(timers.move_selection);
+//             selected_move = select_move_from_policy(policy, stochastic);
+//         }
+//
+//         uint32_t next = NULL_NODE;
+//         {
+//             ScopedTimer t(timers.child_lookup);
+//             uint32_t child = node.first_child;
+//             while (child != NULL_NODE) {
+//                 if (pool[child].move == selected_move) {
+//                     next = child;
+//                     break;
+//                 }
+//                 child = pool[child].next_sibling;
+//             }
+//         }
+//
+//         if (next == NULL_NODE) {
+//             result.error = true;
+//             break;
+//         }
+//
+//         current = next;
+//         game_path.push_back(current);
+//         pool[current].set_on_game_path();
+//         result.num_moves++;
+//
+//         // Early termination for long games
+//         if (result.num_moves >= config_.max_moves_per_game) {
+//             int relative_draw = early_terminate_no_fences(pool[current]);
+//             int absolute_draw = pool[current].is_p1_to_move() ? relative_draw : -relative_draw;
+//             float game_value = absolute_draw * config_.max_draw_reward;
+//             result.winner = 0;
+//             result.draw_score = absolute_draw;
+//             for (size_t i = game_path.size(); i > 0; --i) {
+//                 uint32_t idx = game_path[i - 1];
+//                 StateNode& n = pool[idx];
+//                 //conversion back to relative
+//                 float node_value = n.is_p1_to_move() ? game_value : -game_value;
+//                 n.stats.update(node_value);
+//             }
+//             return result;
+//         }
+//     }
+//
+//     // Backpropagate final result
+//     if (! result.error) {
+//         ScopedTimer t(timers.backprop);
+//         float value = static_cast<float>(result.winner);
+//         for (size_t i = game_path.size(); i > 0; --i) {
+//             uint32_t idx = game_path[i - 1];
+//             StateNode& node = pool[idx];
+//             float node_value = node.is_p1_to_move() ? value : -value;
+//             node.stats.update(node_value);
+//         }
+//     }
+//
+//     return result;
+// }
 
 void SelfPlayEngine::arena_worker_loop(
     std::stop_token stop_token,

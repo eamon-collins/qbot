@@ -1,7 +1,7 @@
 #include "StateNode.h"
 #include "node_pool.h"
 #include "../util/pathfinding.h"
-#include "../inference/inference.h"
+#include "../util/timer.h"
 
 #include <iostream>
 #include <sstream>
@@ -274,11 +274,15 @@ size_t StateNode::generate_valid_children() noexcept {
     child_indices.reserve(moves.size());
 
     Pathfinder& pf = get_pathfinder();
+    auto& timers = get_timers();
 
     for (const Move& m : moves) {
         // For fence moves, validate that it doesn't block either player
-        if (m.is_fence() && !pf.check_paths_with_fence(*this, m)) {
-            continue;
+        if (m.is_fence()) {
+            ScopedTimer timer(timers.pathfinding);
+            if (!pf.check_paths_with_fence(*this, m)) {
+                continue;
+            }
         }
 
         uint32_t child_idx = p.allocate();
@@ -416,9 +420,18 @@ void StateNode::compute_valid_action_mask() noexcept {
 
     std::vector<Move> moves = generate_valid_moves();
     Pathfinder& pf = get_pathfinder();
+    auto& timers = get_timers();
 
     for (const Move& m : moves) {
-        if (m.is_fence() && !pf.check_paths_with_fence(*this, m)) {
+        if (m.is_fence()) {
+            ScopedTimer timer(timers.pathfinding);
+            if (!pf.check_paths_with_fence(*this, m)) {
+                continue;
+            }
+        } else {
+            // Pawn move
+            int action_idx = move_to_action_index(m);
+            set_action_valid(action_idx);
             continue;
         }
         int action_idx = move_to_action_index(m);

@@ -15,7 +15,7 @@ find_package(Boost REQUIRED COMPONENTS program_options)
 # Optional: LibTorch for neural network inference
 # =============================================================================
 
-option(ENABLE_INFERENCE "Enable neural network inference with LibTorch" OFF)
+option(ENABLE_INFERENCE "Enable neural network inference with LibTorch" ON)
 
 if(ENABLE_INFERENCE)
     # Try to use conda environment if available
@@ -23,14 +23,20 @@ if(ENABLE_INFERENCE)
         set(LIBTORCH_PREFIX $ENV{CONDA_PREFIX})
         message(STATUS "Using conda environment: ${LIBTORCH_PREFIX}")
 
+	link_directories($ENV{CONDA_PREFIX}/lib)
+
         # Set include directories
         set(TORCH_INCLUDE_DIRS
             ${LIBTORCH_PREFIX}/include
-            ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
+            # ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include/torch/csrc/api/include)
 
         # Set library directory
-        set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib)
+        # set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib)
+        set(TORCH_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/lib)
 
+        set(NVIDIA_LIBRARY_DIR ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/nvidia/lib)
         # Manually specify torch libraries (matches old Makefile approach)
         # Use -Wl,--no-as-needed to ensure CUDA libs are linked even if not directly referenced
         set(TORCH_LIBRARIES
@@ -39,7 +45,8 @@ if(ENABLE_INFERENCE)
             ${TORCH_LIBRARY_DIR}/libtorch_cpu.so
             ${TORCH_LIBRARY_DIR}/libtorch_cuda.so
             ${TORCH_LIBRARY_DIR}/libc10.so
-            ${TORCH_LIBRARY_DIR}/libc10_cuda.so)
+            ${TORCH_LIBRARY_DIR}/libc10_cuda.so
+            ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2)
 
         message(STATUS "LibTorch include dirs: ${TORCH_INCLUDE_DIRS}")
         message(STATUS "LibTorch libraries: ${TORCH_LIBRARIES}")
@@ -85,6 +92,7 @@ add_library(qbot_lib_debug STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_debug PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_debug PRIVATE -g -O0)
 # Use standalone ASIO for websocketpp
@@ -93,7 +101,7 @@ target_compile_definitions(qbot_lib_debug PUBLIC ASIO_STANDALONE)
 set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
 target_link_libraries(qbot_lib_debug PUBLIC pthread)
 if(ENABLE_INFERENCE)
-    target_include_directories(qbot_lib_debug PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_include_directories(qbot_lib_debug SYSTEM PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_debug PUBLIC ${TORCH_LIBRARIES})
     target_compile_definitions(qbot_lib_debug PUBLIC QBOT_ENABLE_INFERENCE)
 endif()
@@ -118,6 +126,7 @@ add_library(qbot_lib_fast STATIC ${QBOT_LIB_SOURCES})
 target_include_directories(qbot_lib_fast PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
 target_compile_options(qbot_lib_fast PRIVATE -O3 -DNDEBUG -march=native -flto)
 # Use standalone ASIO for websocketpp
@@ -126,7 +135,7 @@ target_compile_definitions(qbot_lib_fast PUBLIC ASIO_STANDALONE)
 set_source_files_properties(src/util/gui_client.cpp PROPERTIES COMPILE_FLAGS "-std=c++17")
 target_link_libraries(qbot_lib_fast PUBLIC pthread)
 if(ENABLE_INFERENCE)
-    target_include_directories(qbot_lib_fast PUBLIC ${TORCH_INCLUDE_DIRS})
+    target_include_directories(qbot_lib_fast SYSTEM PUBLIC ${TORCH_INCLUDE_DIRS})
     target_link_libraries(qbot_lib_fast PUBLIC ${TORCH_LIBRARIES})
     target_compile_definitions(qbot_lib_fast PUBLIC QBOT_ENABLE_INFERENCE)
 endif()

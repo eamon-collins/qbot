@@ -257,6 +257,15 @@ struct EdgeStats {
         }
     }
 
+    void reset() noexcept {
+        total_value.store(0.0f, std::memory_order_relaxed);
+        visits.store(0, std::memory_order_relaxed);
+        virtual_loss.store(0, std::memory_order_relaxed);
+        nn_evaluated.store(false, std::memory_order_relaxed);
+        prior = 0.0f;
+        nn_value = 0.0f;
+    }
+
     /// Check if we have a cached NN value
     [[nodiscard]] bool has_nn_value() const noexcept {
         return nn_evaluated.load(std::memory_order_acquire);

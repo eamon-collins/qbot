@@ -69,6 +69,7 @@ concept InferenceProvider = std::same_as<T, ModelInference> || std::same_as<T, I
 struct TreeBoundsConfig {
     size_t max_bytes = 40ULL * 1024 * 1024 * 1024;  // 40GB default
     float soft_limit_ratio = 0.80f;   // Start being selective about expansion
+    // size_t soft_limit_bytes = 30ULL * 1024 * 1024 * 1024;  // 30GB default
     float hard_limit_ratio = 0.95f;   // Stop expanding entirely
     uint32_t min_visits_to_expand = 8; // Min visits at soft limit to expand
     bool enable_recycling = false;    // LRU recycling when full (future)
@@ -303,27 +304,54 @@ inline void remove_virtual_loss(
 /// Determine winner when both players are out of fences
 /// Uses path length to goal - whoever is closer wins
 /// @return +1 if current player wins, -1 if current player loses (relative perspective)
+// [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
+//     Pathfinder& pf = get_pathfinder();
+//
+//     int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
+//     int p2_dist = pf.path_length(node.fences, node.p2, 0);  // P2 goal is row 0
+//
+//     if (p1_dist < 0 || p2_dist < 0) {
+//         // Should never happen - someone is blocked
+//         return 0;
+//     }
+//
+//     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
+//     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
+//     // node.print_node();
+//     // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
+//
+//     // current player moves first, they win if their distance to
+//     // goal is less than OR equal to the opponent's distance
+//     return (curr_dist <= opp_dist) ? 1 : -1;
+// }
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
-    int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
-    int p2_dist = pf.path_length(node.fences, node.p2, 0);  // P2 goal is row 0
+    auto p1_path = pf.find_path(node.fences, node.p1, 8);
+    auto p2_path = pf.find_path(node.fences, node.p2, 0);
 
-    if (p1_dist < 0 || p2_dist < 0) {
+    if (p1_path.empty() || p2_path.empty()) {
         // Should never happen - someone is blocked
         return 0;
     }
 
+    // Path length is path.size() - 1 (path includes starting position)
+    int p1_dist = static_cast<int>(p1_path.size()) - 1;
+    int p2_dist = static_cast<int>(p2_path.size()) - 1;
+
+    // Check for jump opportunities when distances are close
+    int diff = p1_dist - p2_dist;
+    if (diff >= -1 && diff <= 1) {
+        //since check_jump returns 0 for no jump, 1 for p1 jump, -1 for p2 jump
+        p1_dist -= check_jump_advantage(p1_path, p2_path, node.is_p1_to_move());
+    }
+
     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
-    // node.print_node();
-    // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
-
     // current player moves first, they win if their distance to
     // goal is less than OR equal to the opponent's distance
     return (curr_dist <= opp_dist) ? 1 : -1;
 }
-
 
 /// Evaluate a leaf node
 /// @param node Node to evaluate
@@ -378,8 +406,8 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-    int max_moves_per_game = 60;           // After this many moves, declare a draw and assign partial points to closer player
-    float max_draw_reward = 0.5;           // On a draw, this is maximum reward we give the closest player 
+    int max_moves_per_game = 90;           // After this many moves, declare a draw and assign partial points to closer player
+    float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player 
 };
 
 /// Compute policy distribution from child Q-values
@@ -443,6 +471,70 @@ struct SelfPlayConfig {
     return policy;
 }
 
+[[nodiscard]] inline std::vector<std::pair<Move, float>> compute_policy_from_visits(
+    NodePool& pool,
+    uint32_t parent_idx,
+    float temperature) noexcept
+{
+    std::vector<std::pair<Move, float>> policy;
+    if (!pool[parent_idx].has_children()) return policy;
+
+    uint32_t child = pool[parent_idx].first_child;
+    while (child != NULL_NODE) {
+        uint32_t visits = pool[child].stats.visits.load(std::memory_order_relaxed);
+        policy.push_back({pool[child].move, static_cast<float>(visits)});
+        child = pool[child].next_sibling;
+    }
+
+    if (policy.empty()) return policy;
+
+    // Temperature = 0 means deterministic (argmax)
+    if (temperature <= 1e-6f) {
+        size_t best_idx = 0;
+        float best_visits = policy[0].second;
+        int tie_count = 1;
+        for (size_t i = 1; i < policy.size(); ++i) {
+            float visits = policy[i].second;
+            if (visits > best_visits) {
+                // strict improvement: reset ties
+                best_visits = visits;
+                best_idx = i;
+                tie_count = 1;
+            } 
+            else if (visits == best_visits) {
+                tie_count++;
+                thread_local std::mt19937 rng(std::random_device{}());
+                std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                // replace with probability 1/n
+                if (dist(rng) < (1.0f / tie_count)) {
+                    best_idx = i;
+                }
+            }
+        }
+        for (size_t i = 0; i < policy.size(); ++i) {
+            policy[i].second = (i == best_idx) ? 1.0f : 0.0f;
+        }
+        return policy;
+    }
+
+    // π(a) ∝ N(a)^(1/τ)
+    float inv_temp = 1.0f / temperature;
+    float sum = 0.0f;
+    for (auto& [move, visits] : policy) {
+        visits = std::pow(visits, inv_temp);
+        sum += visits;
+    }
+
+    //normalize
+    if (sum > 0.0f) {
+        for (auto& [move, prob] : policy) {
+            prob /= sum;
+        }
+    }
+
+    return policy;
+}
+
 /// Select a move from the policy distribution
 /// @param policy Vector of (move, probability) pairs
 /// @param stochastic If true, sample from distribution; if false, take argmax
@@ -456,7 +548,9 @@ struct SelfPlayConfig {
     if (!stochastic) {
         // Deterministic: return move with highest probability
         auto best = std::max_element(policy.begin(), policy.end(),
-            [](const auto& a, const auto& b) { return a.second < b.second; });
+            [](const auto& a, const auto& b) { 
+                return a.second < b.second;
+            });
         return best->first;
     }
 
@@ -529,6 +623,7 @@ struct MultiGameStats {
     std::atomic<int> total_moves{0};
     std::atomic<int> draw_score{0}; //if draw, accumulate relative distance metric
     std::atomic<int> games_completed{0};
+    std::chrono::steady_clock::time_point start_time;
 
     void add_result(const SelfPlayResult& result) noexcept {
         if (result.error) errors.fetch_add(1, std::memory_order_relaxed);
@@ -550,6 +645,14 @@ struct MultiGameStats {
         errors.store(0, std::memory_order_relaxed);
         draw_score.store(0, std::memory_order_relaxed);
         games_completed.store(0, std::memory_order_relaxed);
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    [[nodiscard]] double games_per_sec() const noexcept {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        if (elapsed == 0) return 0.0;
+        return static_cast<double>(games_completed.load(std::memory_order_relaxed)) / elapsed;
     }
 
     // Non-copyable due to atomics
@@ -625,10 +728,12 @@ public:
         bool needs_mcts{false};
         int mcts_iterations_done{0};
     };
+
     struct MultiGameWorkerSync {
         std::atomic<bool>& pause_requested;
+        std::atomic<bool>& draining; //waiting for games to finish
         std::atomic<int>& workers_paused;
-        std::atomic<bool>& paused;
+        std::atomic<int>& total_active_games;
         std::atomic<uint32_t>& current_root;
         std::mutex& pause_mutex;
         std::condition_variable& pause_cv;
@@ -747,7 +852,7 @@ private:
     SelfPlayConfig config_;
 
     // Striped mutexes for expansion - 256 for better parallelism with many workers
-    static constexpr size_t NUM_EXPANSION_MUTEXES = 256;
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 1024;
     std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 };
 

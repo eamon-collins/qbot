@@ -136,6 +136,19 @@ private:
     // Statistics
     std::atomic<size_t> total_requests_{0};
     std::atomic<size_t> total_batches_{0};
+    std::atomic<size_t> total_batch_size_sum_{0};  // Sum of all batch sizes for averaging
+    std::atomic<size_t> total_flushes_{0};
+    std::atomic<size_t> total_batch_triggers_{0};
+    std::atomic<size_t> total_total_time_triggers_{0};
+
+public:
+    /// Get average batch size
+    [[nodiscard]] double avg_batch_size() const noexcept {
+        size_t batches = total_batches_.load(std::memory_order_relaxed);
+        if (batches == 0) return 0.0;
+        size_t sum = total_batch_size_sum_.load(std::memory_order_relaxed);
+        return static_cast<double>(sum) / batches;
+    }
 };
 
 } // namespace qbot

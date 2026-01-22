@@ -306,4 +306,63 @@ Pathfinder& get_pathfinder() noexcept {
     return pf;
 }
 
+int check_jump_advantage(
+    const std::vector<Coord>& p1_path,
+    const std::vector<Coord>& p2_path,
+    bool p1_moves_first) noexcept
+{
+    if (p1_path.size() < 2 || p2_path.size() < 2) {
+        return 0;
+    }
+
+    size_t p1_idx = 0;
+    size_t p2_idx = 0;
+
+    while (p1_idx + 1 < p1_path.size() || p2_idx + 1 < p2_path.size()) {
+        if (p1_moves_first) {
+            // P1 moves
+            if (p1_idx + 1 < p1_path.size()) {
+                Coord p1_next = p1_path[p1_idx + 1];
+                Coord p2_current = p2_path[p2_idx];
+                if (p1_next.row == p2_current.row && p1_next.col == p2_current.col) {
+                    return 1;  // P1 jumps P2
+                }
+                p1_idx++;
+            }
+
+            // P2 moves
+            if (p2_idx + 1 < p2_path.size()) {
+                Coord p2_next = p2_path[p2_idx + 1];
+                Coord p1_current = p1_path[p1_idx];
+                if (p2_next.row == p1_current.row && p2_next.col == p1_current.col) {
+                    return -1;  // P2 jumps P1
+                }
+                p2_idx++;
+            }
+        } else {
+            // P2 moves first
+            if (p2_idx + 1 < p2_path.size()) {
+                Coord p2_next = p2_path[p2_idx + 1];
+                Coord p1_current = p1_path[p1_idx];
+                if (p2_next.row == p1_current.row && p2_next.col == p1_current.col) {
+                    return -1;  // P2 jumps P1
+                }
+                p2_idx++;
+            }
+
+            // P1 moves
+            if (p1_idx + 1 < p1_path.size()) {
+                Coord p1_next = p1_path[p1_idx + 1];
+                Coord p2_current = p2_path[p2_idx];
+                if (p1_next.row == p2_current.row && p1_next.col == p2_current.col) {
+                    return 1;  // P1 jumps P2
+                }
+                p1_idx++;
+            }
+        }
+    }
+
+    return 0;
+}
+
 } // namespace qbot

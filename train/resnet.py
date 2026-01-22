@@ -2,6 +2,7 @@
 import logging
 import argparse
 import sys
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -105,11 +106,6 @@ class QuoridorNet(nn.Module):
 
         return p, v
 
-
-# Keep old class name as alias for backward compatibility during transition
-QuoridorValueNet = QuoridorNet
-
-
 def train_step(model, optimizer, data_batch):
     """
     Single training step with combined policy and value loss.
@@ -183,17 +179,10 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
     all_qsamples = all(f.endswith('.qsamples') for f in data_files)
 
     if all_qsamples and len(data_files) > 1:
-        # Multiple .qsamples files - use multi-file dataset
-        # with MultiFileTrainingSampleDataset(data_files, batch_size, stream) as dataset:
-        #     for batch in dataset.generate_batches():
-        #         batches.append(batch)
-        dataset = MultiFileTrainingSampleDataset(data_files, batch_size, stream)
+        dataset = MultiFileTrainingSampleDataset(data_files, batch_size)
     elif all_qsamples:
         # Single .qsamples file
         logging.info(f"Loading .qsamples file: {data_files[0]}")
-        # with TrainingSampleDataset(data_files[0], batch_size, stream) as dataset:
-        #     for batch in dataset.generate_batches():
-        #         batches.append(batch)
         dataset = TrainingSampleDataset(data_files[0], batch_size, stream)
     else:
         # Legacy format: tree file processed via leopard
@@ -211,6 +200,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         batch_size=batch_size, 
         shuffle=True, 
         num_workers=4,
+        persistent_workers=False,
         pin_memory=True
     )
 
@@ -227,7 +217,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
             epoch_policy_loss += p_loss
             num_batches += 1
 
-            if num_batches % 100 == 0:
+            if num_batches % 100 == 1:
                 logging.debug(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f} (v:{v_loss:.4f} p:{p_loss:.4f})")
 
         avg_loss = epoch_loss / num_batches
@@ -238,6 +228,17 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         current_lr = optimizer.param_groups[0]['lr']
         logging.info(f"Epoch {epoch}, LR: {current_lr:.6f}  Avg Loss: {avg_loss:.4f} (value:{avg_v_loss:.4f} policy:{avg_p_loss:.4f})")
 
+    ##cleanup, annoying but has to be done if using workers
+    train_loader._iterator = None
+    if hasattr(train_loader, '_workers'):
+        for w in train_loader._workers:
+            w.terminate()
+    del train_loader
+    if hasattr(dataset, 'samples') and dataset.samples is not None:
+        dataset.samples.clear()
+    del dataset
+    del optimizer
+    del scheduler
 
 def main():
     parser = argparse.ArgumentParser(description='Train Quoridor Policy-Value Network')
@@ -248,15 +249,16 @@ def main():
                         action='store_true', default=False)
     parser.add_argument('--batch-size', type=int, dest="batch_size", default=64, help='Training batch size')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--channels', type=int, default=64, help='Number of channels in residual tower')
-    parser.add_argument('--blocks', type=int, default=6, help='Number of residual blocks')
+    parser.add_argument('--channels', type=int, default=128, help='Number of channels in residual tower')
+    parser.add_argument('--blocks', type=int, default=15, help='Number of residual blocks')
+    parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
+                        action='store_true', default=False)
     parser.add_argument('--log-level', dest="log_level", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO', help='Logging level')
 
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level))
-
     model = QuoridorNet(num_channels=args.channels, num_blocks=args.blocks)
     logging.info(f"Created model with {args.channels} channels, {args.blocks} residual blocks")
 
@@ -279,9 +281,16 @@ def main():
         logging.info(f"Saved trainable weights to {weights_path}")
 
         # Export TorchScript model (.pt file for C++ inference)
-        example_input = torch.zeros(1, 6, 9, 9)
-        traced_model = torch.jit.trace(model, example_input)
-        traced_model.save(args.save_model)
+        export_model = copy.deepcopy(model)
+        export_model.eval()
+        export_model.half()
+        if torch.cuda.is_available():
+            export_model.cuda()
+            example_input = torch.zeros(1, 6, 9, 9).half().cuda()
+        else:
+            example_input = torch.zeros(1, 6, 9, 9).half()
+        traced = torch.jit.trace(export_model, example_input)
+        traced.save(args.save_model)
         logging.info(f"Exported TorchScript model to {args.save_model}")
         sys.exit(0)
 

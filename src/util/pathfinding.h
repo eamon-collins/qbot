@@ -97,4 +97,11 @@ private:
 /// Thread-local pathfinder instance for convenient access
 Pathfinder& get_pathfinder() noexcept;
 
+//checks for if one player can jump the other on the path.
+// returns 0 for no jump, 1 for p1 jumps, -1 for p2 jumps
+[[nodiscard]] int check_jump_advantage(
+    const std::vector<Coord>& p1_path,
+    const std::vector<Coord>& p2_path,
+    bool p1_moves_first) noexcept;
+
 } // namespace qbot

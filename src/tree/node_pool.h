@@ -32,8 +32,8 @@ class NodePool {
 public:
     /// Configuration for node pool
     struct Config {
-        size_t initial_capacity = 10'000'000;  // Initial number of nodes (10M)
-        size_t chunk_size = 10'000'000;        // Nodes per chunk (10M)
+        size_t initial_capacity = 100'000'000;  // Initial number of nodes (10M)
+        size_t chunk_size = 20'000'000;        // Nodes per chunk (10M)
         size_t recycle_batch = 1000;           // Nodes to recycle when pool exhausted
         bool enable_lru = true;                // Enable LRU tracking for recycling
     };
@@ -137,6 +137,35 @@ public:
             std::memory_order_release, std::memory_order_relaxed));
 
         allocated_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
+
+    /// Deallocate an entire subtree rooted at idx (including idx itself)
+    /// Iterative to avoid stack overflow on deep trees
+    void deallocate_subtree(uint32_t root_idx) noexcept {
+        if (root_idx == NULL_NODE) return;
+
+        std::vector<uint32_t> to_delete;
+        to_delete.reserve(1024);
+        to_delete.push_back(root_idx);
+
+        size_t i = 0;
+        while (i < to_delete.size()) {
+            uint32_t idx = to_delete[i++];
+            uint32_t child = node_at(idx).first_child;
+            while (child != NULL_NODE) {
+                to_delete.push_back(child);
+                child = node_at(child).next_sibling;
+            }
+        }
+
+        // Deallocate in reverse order (leaves first, though it doesn't matter much)
+        for (auto it = to_delete.rbegin(); it != to_delete.rend(); ++it) {
+            StateNode& node = node_at(*it);
+            node.first_child = NULL_NODE;
+            node.next_sibling = NULL_NODE;
+            node.parent = NULL_NODE;
+            deallocate(*it);
+        }
     }
 
     /// Access a node by index (chunked indexing)
