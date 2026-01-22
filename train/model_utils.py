@@ -57,13 +57,24 @@ def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool 
     # Sort by iteration number (extract from filename)
     def get_iter_num(path: Path) -> int:
         try:
-            # Extract iteration from "tree_123_abc.qsamples"
             parts = path.stem.split('_')
-            if len(parts) >= 2:
-                return str(parts[1])
+            if len(parts) < 2:
+                return (0, "")
+
+            raw_val = parts[1]
+
+            match = re.match(r"(\d+)([a-z]?)", raw_val, re.I)
+            if match:
+                num_part = int(match.group(1))
+                char_part = match.group(2)
+
+                # We return (-num_part) to sort 100 before 99 (descending)
+                # We return char_part to sort "78" before "78a" (ascending)
+                return (-num_part, char_part)
+
         except (ValueError, IndexError):
             pass
-        return 0
+        return (0, "")
 
     matching_files.sort(key=get_iter_num)
     return matching_files
