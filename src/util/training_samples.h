@@ -122,12 +122,9 @@ struct TrainingSample {
     // This is computed as (wins - losses) / (wins + losses) when loading
     // During save, if wins+losses > 0, value is computed; otherwise uses legacy value
     float value;
-    
-    // Padding to maintain alignment
-    uint32_t reserved{0};
 };
 
-static_assert(sizeof(TrainingSample) == 880, "TrainingSample should be 880 bytes");
+static_assert(sizeof(TrainingSample) == 872, "TrainingSample should be 872 bytes");
 
 /// Extract compact state from a StateNode
 /// Flips board for P2's perspective so model always sees from "current player" view

@@ -172,40 +172,6 @@ void TrainingSampleCollector::reserve(size_t count) {
     samples_.reserve(count);
 }
 
-void TrainingSampleCollector::add_sample(const NodePool& pool, uint32_t node_idx, float game_outcome) {
-    const StateNode& node = pool[node_idx];
-
-    TrainingSample sample;
-
-    // Extract compact state
-    sample.state = extract_compact_state(node);
-
-    // Extract MCTS visit distribution as policy target
-    sample.policy = extract_visit_distribution(pool, node_idx);
-
-    // Value target: game outcome from current player's perspective
-    // game_outcome is from P1's perspective (+1 = P1 wins)
-    // We need it from current player's perspective
-    float relative_outcome = node.is_p1_to_move() ? game_outcome : -game_outcome;
-    
-    // Convert to wins/losses
-    if (relative_outcome > 0.0f) {
-        sample.wins = 1;
-        sample.losses = 0;
-    } else if (relative_outcome < 0.0f) {
-        sample.wins = 0;
-        sample.losses = 1;
-    } else {
-        // Draw
-        sample.wins = 0;
-        sample.losses = 0;
-    }
-    sample.value = relative_outcome;
-    sample.reserved = 0;
-
-    std::lock_guard lock(mutex_);
-    samples_.push_back(sample);
-}
 
 void TrainingSampleCollector::add_sample_direct(TrainingSample sample) {
     std::lock_guard lock(mutex_);
@@ -263,8 +229,12 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
         sample.losses = losses;
         
         // Compute scalar value for convenience/compatibility
-        sample.value = static_cast<float>(wins - losses) / static_cast<float>(total_games);
-        sample.reserved = 0;
+        sample.value = (wins + losses > 0)
+            ? static_cast<float>(static_cast<int>(wins) - static_cast<int>(losses)) / static_cast<float>(total_games)
+            : 0.0f;
+        // if (sample.state.p1_row > 8) std::cout << "error p1 row is " << sample.state.p1_row << std::endl;
+        // if (sample.wins > 16) std::cout << "error wins is " << sample.wins << std::endl;
+        // if (sample.value > 10.0f || sample.value < -10.0f) std::cout << "error value is " << sample.value << std::endl;
 
         samples.push_back(sample);
     }

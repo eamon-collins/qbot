@@ -755,7 +755,7 @@ void SelfPlayEngine::run_multi_game_worker(
         std::vector<PendingEval> pending_evals;
         int iterations_since_pause_check = 0;
         constexpr int PAUSE_CHECK_INTERVAL = 100;
-        constexpr int MAX_PENDING_PER_FLUSH = 256;  // Flush when we have this many
+        constexpr int MAX_PENDING_PER_FLUSH = 32;  // Flush when we have this many
 
         auto flush_evals = [&]() {
             if (pending_evals.empty()) return;

@@ -322,7 +322,7 @@ struct EdgeStats {
     /// Record an actual game outcome (called when game finishes)
     /// value: +1.0 = current player won, -1.0 = current player lost
     void record_game_outcome(float value) noexcept {
-        if (value > 0.0f) {
+        if (value >= 0.0f) {
             wins.fetch_add(1, std::memory_order_relaxed);
         } else if (value < 0.0f) {
             losses.fetch_add(1, std::memory_order_relaxed);

@@ -8,7 +8,7 @@ import logging
 from io import BufferedReader
 import os
 import struct
-
+from torch.utils.data import Dataset
 # Action space constants (must match resnet.py)
 NUM_PAWN_ACTIONS = 81   # 9x9 board destinations
 NUM_WALL_ACTIONS = 128  # 8x8 * 2 orientations
@@ -48,18 +48,178 @@ QSMP_HEADER_SIZE = 64
 #     float value;                              // 4 bytes
 # };
 
-TRAINING_SAMPLE_SIZE = 864
+TRAINING_SAMPLE_SIZE = 872
 
 # Numpy dtype for fast binary loading matching the C++ struct layout
 # This maps exactly to the 864-byte TrainingSample struct
 QSMP_DTYPE = np.dtype([
     ('p1_row', 'u1'), ('p1_col', 'u1'), ('p2_row', 'u1'), ('p2_col', 'u1'),
     ('p1_fences', 'u1'), ('p2_fences', 'u1'),
-    ('flags', 'u1'), ('reserved', 'u1'),
+    ('flags', 'u1'), ('reserved_byte', 'u1'),
     ('fences_h', '<u8'), ('fences_v', '<u8'),
     ('policy', '<f4', (209,)),
+    ('wins', '<u4'),
+    ('losses', '<u4'),
     ('value', '<f4')
 ])
+
+def load_qsamples_raw(file_path: str, max_count: int = None):
+    """
+    Load raw sample data from a v2 .qsamples file.
+
+    Returns:
+        raw_data: numpy structured array with all fields
+    """
+    with open(file_path, 'rb') as f:
+        header_data = f.read(QSMP_HEADER_SIZE)
+        if len(header_data) < QSMP_HEADER_SIZE:
+            raise ValueError(f"Invalid .qsamples file: {file_path}")
+
+        magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
+        if magic != QSMP_MAGIC:
+            raise ValueError(f"Invalid magic: {hex(magic)}")
+        if version < 2:
+            raise ValueError(f"Unsupported version {version}. Run convert_qsamples.py first.")
+
+        if max_count is not None:
+            count = min(int(sample_count), int(max_count))
+        else:
+            count = int(sample_count)
+
+        if count == 0:
+            return None
+
+        print(f"loading {count} samples of length {QSMP_DTYPE.itemsize}")
+        raw_data = np.fromfile(f, dtype=QSMP_DTYPE, count=count)
+
+    return raw_data
+
+
+
+def _raw_to_state_tensor(raw_data: np.ndarray) -> np.ndarray:
+    """Vectorized conversion of raw sample data to state tensors."""
+    N = len(raw_data)
+    states = np.zeros((N, 6, 9, 9), dtype=np.float32)
+
+    p1_row = raw_data['p1_row']
+    p1_col = raw_data['p1_col']
+    p2_row = raw_data['p2_row']
+    p2_col = raw_data['p2_col']
+    p1_fences = raw_data['p1_fences']
+    p2_fences = raw_data['p2_fences']
+    flags = raw_data['flags']
+
+    is_p1_turn = (flags & 0x04) != 0
+
+    # print(raw_data)
+    my_row = np.where(is_p1_turn, p1_row, p2_row)
+    my_col = np.where(is_p1_turn, p1_col, p2_col)
+    my_fences = np.where(is_p1_turn, p1_fences, p2_fences)
+
+    opp_row = np.where(is_p1_turn, p2_row, p1_row)
+    opp_col = np.where(is_p1_turn, p2_col, p1_col)
+    opp_fences = np.where(is_p1_turn, p2_fences, p1_fences)
+
+    batch_idx = np.arange(N)
+    states[batch_idx, 0, my_row, my_col] = 1.0
+    states[batch_idx, 1, opp_row, opp_col] = 1.0
+
+    bit_indices = np.arange(64, dtype=np.uint64)
+    masks = (1 << bit_indices)
+
+    walls_h_flat = (raw_data['fences_h'][:, None] & masks) > 0
+    walls_v_flat = (raw_data['fences_v'][:, None] & masks) > 0
+
+    states[:, 2, :8, :8] = walls_h_flat.reshape(N, 8, 8)
+    states[:, 3, :8, :8] = walls_v_flat.reshape(N, 8, 8)
+
+    states[:, 4, :, :] = (my_fences[:, None, None] / 10.0)
+    states[:, 5, :, :] = (opp_fences[:, None, None] / 10.0)
+
+    return states
+
+class TrainingSampleDataset(Dataset):
+    """
+    Dataset that expands samples based on wins/losses count.
+
+    For each position with W wins and L losses, creates W+L virtual samples:
+    - W samples with value target +1 (win)
+    - L samples with value target -1 (loss)
+
+    Memory-efficient: stores raw data once, expands indices on-demand.
+
+    Usage:
+        dataset = TrainingSampleDataset(['file1.qsamples', 'file2.qsamples'])
+        loader = DataLoader(dataset, batch_size=64, shuffle=True)
+    """
+
+    def __init__(self, samples_paths: list[str], max_samples: int = 5_000_000):
+        self.samples_paths = samples_paths
+        self.max_samples = max_samples
+
+        all_raw = []
+        total_loaded = 0
+
+        for path in reversed(samples_paths):
+            remaining = int(max_samples - total_loaded)
+            if remaining <= 0:
+                break
+
+            raw = load_qsamples_raw(path, max_count=remaining)
+            if raw is not None:
+                all_raw.append(raw)
+                total_loaded += len(raw)
+                logging.info(f"  + {path}: {len(raw)} samples")
+
+        if not all_raw:
+            raise ValueError("No samples found in provided files")
+
+        self.raw_data = np.concatenate(all_raw)
+        logging.info(f"Loaded {len(self.raw_data)} base samples")
+
+        wins = self.raw_data['wins']
+        losses = self.raw_data['losses']
+        games_per_sample = wins + losses
+        games_per_sample = np.maximum(games_per_sample, 1)
+
+        self.cumsum = np.zeros(len(self.raw_data) + 1, dtype=np.int64)
+        self.cumsum[1:] = np.cumsum(games_per_sample)
+        self.total_samples = int(self.cumsum[-1])
+
+        logging.info(f"Expanded to {self.total_samples} virtual samples "
+                     f"({self.total_samples / len(self.raw_data):.2f}x expansion)")
+
+        self.states = torch.from_numpy(_raw_to_state_tensor(self.raw_data))
+        self.policies = torch.from_numpy(self.raw_data['policy'].copy())
+
+    def __len__(self):
+        return self.total_samples
+
+    def __getitem__(self, idx):
+        base_idx = np.searchsorted(self.cumsum[1:], idx, side='right')
+        offset = idx - self.cumsum[base_idx]
+        wins = int(self.raw_data['wins'][base_idx])
+
+        value = 1.0 if offset < wins else -1.0
+
+        return (
+            self.states[base_idx],
+            self.policies[base_idx],
+            torch.tensor([value], dtype=torch.float32)
+        )
+    # def __getitem__(self, idx):
+    #     idx = int(idx)
+    #     base_idx = int(np.searchsorted(self.cumsum[1:], idx, side='right'))
+    #     offset = idx - int(self.cumsum[base_idx])
+    #     wins = int(self.raw_data['wins'][base_idx])
+    #     
+    #     value = 1.0 if offset < wins else -1.0
+    #     
+    #     return (
+    #         self.states[base_idx],
+    #         self.policies[base_idx],
+    #         torch.tensor([value], dtype=torch.float32)
+    #     )
 
 def load_qsamples_fast(file_path: str, max_count: int = None):
     """
@@ -71,17 +231,17 @@ def load_qsamples_fast(file_path: str, max_count: int = None):
         header_data = f.read(QSMP_HEADER_SIZE)
         if len(header_data) < QSMP_HEADER_SIZE:
             raise ValueError(f"Invalid .qsamples file: {file_path}")
-            
+
         magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
         if magic != QSMP_MAGIC:
             raise ValueError(f"Invalid magic: {hex(magic)}")
-        
+
         # Limit count if requested
         if max_count is not None:
             count = min(sample_count, max_count)
         else:
             count = sample_count
-            
+
         if count == 0:
             return None, None, None
 
@@ -102,15 +262,15 @@ def load_qsamples_fast(file_path: str, max_count: int = None):
     p1_fences = raw_data['p1_fences']
     p2_fences = raw_data['p2_fences']
     flags = raw_data['flags']
-    
+
     # Identify current player (bit 2 is FLAG_P1_TO_MOVE)
     is_p1_turn = (flags & 0x04) != 0
-    
+
     # Vectorized "Current Player" perspective swap
     my_row = np.where(is_p1_turn, p1_row, p2_row)
     my_col = np.where(is_p1_turn, p1_col, p2_col)
     my_fences = np.where(is_p1_turn, p1_fences, p2_fences)
-    
+
     opp_row = np.where(is_p1_turn, p2_row, p1_row)
     opp_col = np.where(is_p1_turn, p2_col, p1_col)
     opp_fences = np.where(is_p1_turn, p2_fences, p1_fences)
@@ -125,16 +285,16 @@ def load_qsamples_fast(file_path: str, max_count: int = None):
     # Create a mask of shape (1, 64) -> (N, 64)
     bit_indices = np.arange(64, dtype=np.uint64)
     masks = (1 << bit_indices)
-    
+
     # Expand fences to (N, 64) boolean mask
     # We must cast to int64 or uint64 to avoid overflow during bitshift
     walls_h_flat = (raw_data['fences_h'][:, None] & masks) > 0
     walls_v_flat = (raw_data['fences_v'][:, None] & masks) > 0
-    
+
     # Reshape (N, 64) -> (N, 8, 8)
     walls_h_8x8 = walls_h_flat.reshape(N, 8, 8)
     walls_v_8x8 = walls_v_flat.reshape(N, 8, 8)
-    
+
     # Assign to 9x9 grid (leaving last row/col zero as padding)
     states[:, 2, :8, :8] = walls_h_8x8
     states[:, 3, :8, :8] = walls_v_8x8
@@ -176,11 +336,11 @@ class MultiFileTrainingSampleDataset:
         self.samples_paths = samples_paths
         self.batch_size = batch_size
         self.max_sample_num = max_sample_num
-        
+
         self.states = None
         self.policies = None
         self.values = None
-        
+
         self.__enter__()
 
     def __len__(self):
@@ -191,7 +351,7 @@ class MultiFileTrainingSampleDataset:
 
     def __enter__(self):
         logging.info(f"Loading samples from {len(self.samples_paths)} files...")
-        
+
         all_states = []
         all_policies = []
         all_values = []
@@ -199,12 +359,12 @@ class MultiFileTrainingSampleDataset:
 
         # Load latest files first
         self.samples_paths.reverse()
-        
+
         for path in self.samples_paths:
             remaining = self.max_sample_num - total_loaded
             if remaining <= 0:
                 break
-                
+
             s, p, v = load_qsamples_fast(path, max_count=remaining)
             if s is not None:
                 all_states.append(s)
@@ -221,10 +381,10 @@ class MultiFileTrainingSampleDataset:
         self.states = torch.cat(all_states)
         self.policies = torch.cat(all_policies)
         self.values = torch.cat(all_values)
-        
+
         # Free temp lists
         del all_states, all_policies, all_values
-        
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

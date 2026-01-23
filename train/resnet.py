@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from StateNode import QuoridorDataset, MultiFileTrainingSampleDataset
+from StateNode import QuoridorDataset, TrainingSampleDataset, MultiFileTrainingSampleDataset
 
 # Action space:
 #   0-80:    pawn move to square (row * 9 + col)
@@ -168,7 +168,7 @@ def train_step(model, optimizer, data_batch):
     return loss.item(), value_loss.item(), policy_loss.item()
 
 
-def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, stream: bool = False):
+def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, max_samples: int):
     """
     Train the model on training data.
     """
@@ -186,7 +186,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
     all_qsamples = all(f.endswith('.qsamples') for f in data_files)
 
     if all_qsamples:
-        dataset = MultiFileTrainingSampleDataset(data_files, batch_size)
+        dataset = TrainingSampleDataset(data_files, max_samples)
     else:
         logging.warning("This method of training samples is deprecated, quitting")
         sys.exit(-1)
