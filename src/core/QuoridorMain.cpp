@@ -15,9 +15,7 @@
 #include "../search/mcts.h"
 #include "Game.h"
 
-#ifdef QBOT_ENABLE_INFERENCE
 #include "../inference/inference.h"
-#endif
 
 #include <csignal>
 
@@ -35,15 +33,9 @@ namespace po = boost::program_options;
 
 namespace qbot {
 
-// Global pointer for signal handler to stop training gracefully
-static MCTSEngine* g_mcts_engine = nullptr;
-
 void signal_handler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         std::cout << "\nReceived signal " << signum << ", stopping...\n";
-        if (g_mcts_engine) {
-            g_mcts_engine->stop();
-        }
     }
 }
 
@@ -492,62 +484,6 @@ int run_interactive(const Config& config,
     return 0;
 }
 
-/// Run MCTS tree building / training
-int run_training(const Config& config,
-                 std::unique_ptr<NodePool> pool,
-                 uint32_t root) {
-    std::cout << "\n=== MCTS Training Mode ===\n";
-
-    // Initialize the root node only if it's a fresh tree (not loaded)
-    StateNode& root_node = (*pool)[root];
-    if (!root_node.is_expanded() && !root_node.has_children()) {
-        root_node.init_root(true);  // P1 starts
-    }
-
-    // Configure MCTS engine
-    MCTSConfig mcts_config;
-    mcts_config.num_threads = config.num_threads;
-    mcts_config.checkpoint_interval_seconds = 300;  // 5 minutes
-    mcts_config.checkpoint_path = config.save_file;
-
-    if (!config.model_file.empty()) {
-        mcts_config.model_path = config.model_file;
-    }
-
-    // Create engine
-    MCTSEngine engine(mcts_config);
-
-    // Set up signal handler for graceful shutdown
-    g_mcts_engine = &engine;
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
-
-    // Start training
-    std::cout << "Starting MCTS tree building...\n";
-    std::cout << "Press Ctrl+C to stop and save.\n\n";
-
-    engine.start_training(*pool, root);
-
-    // Wait for training to complete (runs until signal)
-    while (engine.is_running()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Clean up signal handler
-    g_mcts_engine = nullptr;
-    std::signal(SIGINT, SIG_DFL);
-    std::signal(SIGTERM, SIG_DFL);
-
-    // Final save
-    std::cout << "\nSaving final tree...\n";
-    if (!config.save_file.empty()) {
-        save_tree(*pool, root, config.save_file);
-    }
-
-    std::cout << "Training complete!\n";
-    return 0;
-}
-
 #ifdef QBOT_ENABLE_INFERENCE
 
 /// Play a single game between two models
@@ -914,140 +850,87 @@ int run_selfplay(const Config& config,
     std::cout << "  Tree file:   " << config.save_file << "\n";
     std::cout << "  Samples:     " << samples_file << "\n\n";
 
-    // Use multi-threaded path if threads > 1
-    if (config.num_threads > 1) {
-        // Create inference server for batched GPU access
-        InferenceServerConfig server_config;
-        server_config.batch_size = config.batch_size;
-        server_config.max_wait_ms = 0.3;
-        InferenceServer server(config.model_file, server_config);
-        server.start();
+    // ONly multithreaded path
+    // Create inference server for batched GPU access
+    InferenceServerConfig server_config;
+    server_config.batch_size = config.batch_size;
+    server_config.max_wait_ms = 0.3;
+    InferenceServer server(config.model_file, server_config);
+    server.start();
 
-        // Configure memory bounds for pool reset
-        TreeBoundsConfig bounds;
-        bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
-        bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
+    // Configure memory bounds for pool reset
+    TreeBoundsConfig bounds;
+    bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
+    bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
 
-        auto checkpoint_callback = [&config, &server](const MultiGameStats& stats, const NodePool& p) {
-            int completed = stats.games_completed.load(std::memory_order_relaxed);
-            int p1 = stats.p1_wins.load(std::memory_order_relaxed);
-            int p2 = stats.p2_wins.load(std::memory_order_relaxed);
-            int d = stats.draws.load(std::memory_order_relaxed);
-            int moves = stats.total_moves.load(std::memory_order_relaxed);
+    auto checkpoint_callback = [&config, &server](const MultiGameStats& stats, const NodePool& p) {
+        int completed = stats.games_completed.load(std::memory_order_relaxed);
+        int p1 = stats.p1_wins.load(std::memory_order_relaxed);
+        int p2 = stats.p2_wins.load(std::memory_order_relaxed);
+        int d = stats.draws.load(std::memory_order_relaxed);
+        int moves = stats.total_moves.load(std::memory_order_relaxed);
 
-            std::cout << "[" << completed << "/" << config.num_games << "] "
-                      << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
-                      << " | " << std::fixed << std::setprecision(2) << stats.games_per_sec() << " g/s"
-                      << " | Avg batch: " << std::setprecision(1) << server.avg_batch_size()
-                      << " | Avg moves: " << std::setprecision(4) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
-        };
+        std::cout << "[" << completed << "/" << config.num_games << "] "
+                  << "P1: " << p1 << ", P2: " << p2 << ", Draw: " << d
+                  << " | " << std::fixed << std::setprecision(2) << stats.games_per_sec() << " g/s"
+                  << " | Avg batch: " << std::setprecision(1) << server.avg_batch_size()
+                  << " | Avg moves: " << std::setprecision(4) << (completed > 0 ? static_cast<float>(moves) / completed : 0) << std::endl;
+    };
 
-        MultiGameStats stats;
-        engine.run_multi_game(
-            *pool, root, server,
-            config.num_games, config.num_threads, config.games_per_thread,
-            stats, bounds, &collector,
-            samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
-            checkpoint_callback, 10);
+    MultiGameStats stats;
+    engine.run_multi_game(
+        *pool, root, server,
+        config.num_games, config.num_threads, config.games_per_thread,
+        stats, bounds, &collector,
+        samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
+        checkpoint_callback, 10);
 
-        // Capture server stats before stopping
-        size_t total_requests = server.total_requests();
-        size_t total_batches = server.total_batches();
-        double avg_batch_size = total_batches > 0
-            ? static_cast<double>(total_requests) / total_batches : 0.0;
+    // Capture server stats before stopping
+    size_t total_requests = server.total_requests();
+    size_t total_batches = server.total_batches();
+    double avg_batch_size = total_batches > 0
+        ? static_cast<double>(total_requests) / total_batches : 0.0;
 
-        server.stop();
+    server.stop();
 
-        // Final save (pruned to only game-path nodes from current tree)
-        if (!config.save_file.empty()) {
-            save_tree_pruned(*pool, root, config.save_file);
-        }
-
-        // Extract final training samples from the last tree (if any remain)
-        //
-        // auto tree_samples = extract_samples_from_tree(*pool, root);
-        // for (auto& sample : tree_samples) {
-        //     collector.add_sample_direct(std::move(sample));
-        // }
-        if (!samples_file.empty() && collector.size() > 0) {
-            auto result = TrainingSampleStorage::save(samples_file, collector.samples());
-            if (!result) {
-                std::cerr << "[SelfPlayEngine] Warning: Failed to save qsamples\n";
-            }
-        }
-
-        int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
-        int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
-        int draws = stats.draws.load(std::memory_order_relaxed);
-        int total_moves = stats.total_moves.load(std::memory_order_relaxed);
-		int errors = stats.errors.load(std::memory_order_relaxed);
-		int draw_score = stats.draw_score.load(std::memory_order_relaxed);
-		float avg_draw_score = static_cast<float>(draw_score) / draws;
-
-        std::cout << "\nSelf-play complete!\n";
-        std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
-        std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
-        std::cout << "  Draws:\t" << draws << "\n";
-        if (!std::isnan(avg_draw_score)) {
-            std::cout << "  Draw Score:     " << avg_draw_score << "\n";
-        }
-		std::cout << "  Errors:\t" << errors << "\n";
-        std::cout << "  moves/game:\t" << std::setprecision(4) << (static_cast<float>(total_moves) / config.num_games) << "\n";
-        std::cout << "  Samples:\t" << collector.size() << "\n";
-        std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
-                  << " (" << total_requests << " requests / " << total_batches << " batches)" << std::endl;
-
-    } else {
-        // Single-threaded path (original implementation)
-        std::cout << "Loading model from: " << config.model_file << "\n";
-        ModelInference model(config.model_file);
-        if (!model.is_ready()) {
-            std::cerr << "Error: Failed to load model\n";
-            return 1;
-        }
-        std::cout << "Model loaded successfully!\n\n";
-
-        int p1_wins = 0, p2_wins = 0, draws = 0;
-        int total_moves = 0;
-        auto start_time = std::chrono::steady_clock::now();
-
-        for (int game = 0; game < config.num_games; ++game) {
-            SelfPlayResult result = engine.self_play(*pool, root, model, &collector);
-
-            if (result.winner == 1) ++p1_wins;
-            else if (result.winner == -1) ++p2_wins;
-            else ++draws;
-            total_moves += result.num_moves;
-
-            if ((game + 1) % 10 == 0 || game == config.num_games - 1) {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-                double games_per_sec = elapsed > 0 ? static_cast<double>(game + 1) / elapsed : 0;
-
-                std::cout << "[" << (game + 1) << "/" << config.num_games << "] "
-                          << "P1: " << p1_wins << ", P2: " << p2_wins << ", Draw: " << draws
-                          << " | Nodes: " << pool->allocated()
-                          << " | Samples: " << collector.size()
-                          << " | Avg moves: " << (total_moves / (game + 1))
-                          << " | " << std::fixed << std::setprecision(1) << games_per_sec << " g/s"<< std::endl;
-            }
-
-            if ((game + 1) % config.games_per_checkpoint == 0 && !config.save_file.empty()) {
-                save_tree(*pool, root, config.save_file);
-            }
-        }
-
-        // Final save (pruned to only game-path nodes)
-        if (!config.save_file.empty()) {
-            save_tree_pruned(*pool, root, config.save_file);
-        }
-
-        std::cout << "\nSelf-play complete!\n";
-        std::cout << "  P1 wins: " << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
-        std::cout << "  P2 wins: " << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
-        std::cout << "  Draws:   " << draws << "\n";
-        std::cout << "  Avg moves per game: " << (total_moves / config.num_games) << std::endl;
+    // Final save (pruned to only game-path nodes from current tree)
+    if (!config.save_file.empty()) {
+        save_tree_pruned(*pool, root, config.save_file);
     }
+
+    // Extract final training samples from the last tree (if any remain)
+    //
+    // auto tree_samples = extract_samples_from_tree(*pool, root);
+    // for (auto& sample : tree_samples) {
+    //     collector.add_sample_direct(std::move(sample));
+    // }
+    if (!samples_file.empty() && collector.size() > 0) {
+        auto result = TrainingSampleStorage::save(samples_file, collector.samples());
+        if (!result) {
+            std::cerr << "[SelfPlayEngine] Warning: Failed to save qsamples\n";
+        }
+    }
+
+    int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
+    int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);
+    int draws = stats.draws.load(std::memory_order_relaxed);
+    int total_moves = stats.total_moves.load(std::memory_order_relaxed);
+    int errors = stats.errors.load(std::memory_order_relaxed);
+    int draw_score = stats.draw_score.load(std::memory_order_relaxed);
+    float avg_draw_score = static_cast<float>(draw_score) / draws;
+
+    std::cout << "\nSelf-play complete!\n";
+    std::cout << "  P1 wins:\t" << p1_wins << " (" << (100.0 * p1_wins / config.num_games) << "%)\n";
+    std::cout << "  P2 wins:\t" << p2_wins << " (" << (100.0 * p2_wins / config.num_games) << "%)\n";
+    std::cout << "  Draws:\t" << draws << "\n";
+    if (!std::isnan(avg_draw_score)) {
+        std::cout << "  Draw Score:     " << avg_draw_score << "\n";
+    }
+    std::cout << "  Errors:\t" << errors << "\n";
+    std::cout << "  moves/game:\t" << std::setprecision(4) << (static_cast<float>(total_moves) / config.num_games) << "\n";
+    std::cout << "  Samples:\t" << collector.size() << "\n";
+    std::cout << "  Avg batch sz: " << std::fixed << std::setprecision(1) << avg_batch_size
+              << " (" << total_requests << " requests / " << total_batches << " batches)" << std::endl;
 
     // Save training samples
     if (!samples_file.empty() && collector.size() > 0) {
@@ -1095,26 +978,11 @@ int main(int argc, char* argv[]) {
         case RunMode::Interactive:
             return run_interactive(config, std::move(pool), root);
 
-        case RunMode::Train:
-            return run_training(config, std::move(pool), root);
-
         case RunMode::SelfPlay:
-#ifdef QBOT_ENABLE_INFERENCE
             return run_selfplay(config, std::move(pool), root);
-#else
-            std::cerr << "Error: Self-play mode requires QBOT_ENABLE_INFERENCE\n";
-            std::cerr << "Rebuild with: cmake -DENABLE_INFERENCE=ON ..\n";
-            return 1;
-#endif
 
         case RunMode::Arena:
-#ifdef QBOT_ENABLE_INFERENCE
             return run_arena(config);
-#else
-            std::cerr << "Error: Arena mode requires QBOT_ENABLE_INFERENCE\n";
-            std::cerr << "Rebuild with: cmake -DENABLE_INFERENCE=ON ..\n";
-            return 1;
-#endif
     }
 
     return 0;

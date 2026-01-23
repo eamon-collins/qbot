@@ -31,10 +31,8 @@
 #include <vector>
 
 // Include inference for NN evaluation
-#ifdef QBOT_ENABLE_INFERENCE
 #include "../inference/inference.h"
 #include "../inference/inference_server.h"
-#endif
 
 namespace qbot {
 
@@ -42,7 +40,6 @@ namespace qbot {
 // Inference Type Traits (for unifying ModelInference and InferenceServer)
 // ============================================================================
 
-#ifdef QBOT_ENABLE_INFERENCE
 
 /// Type trait to distinguish direct model inference from async server
 template<typename T>
@@ -304,26 +301,6 @@ inline void remove_virtual_loss(
 /// Determine winner when both players are out of fences
 /// Uses path length to goal - whoever is closer wins
 /// @return +1 if current player wins, -1 if current player loses (relative perspective)
-// [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
-//     Pathfinder& pf = get_pathfinder();
-//
-//     int p1_dist = pf.path_length(node.fences, node.p1, 8);  // P1 goal is row 8
-//     int p2_dist = pf.path_length(node.fences, node.p2, 0);  // P2 goal is row 0
-//
-//     if (p1_dist < 0 || p2_dist < 0) {
-//         // Should never happen - someone is blocked
-//         return 0;
-//     }
-//
-//     int curr_dist = node.is_p1_to_move() ? p1_dist : p2_dist;
-//     int opp_dist = node.is_p1_to_move() ? p2_dist : p1_dist;
-//     // node.print_node();
-//     // std::cout << "earlyterm rel " << ((curr_dist <= opp_dist) ? 1 : -1) << " p1move " << node.is_p1_to_move() << " p1: " << p1_dist << " p2: " << p2_dist << std::endl;
-//
-//     // current player moves first, they win if their distance to
-//     // goal is less than OR equal to the opponent's distance
-//     return (curr_dist <= opp_dist) ? 1 : -1;
-// }
 [[nodiscard]] inline int early_terminate_no_fences(const StateNode& node) noexcept {
     Pathfinder& pf = get_pathfinder();
 
@@ -377,7 +354,6 @@ inline void remove_virtual_loss(
     //     return early_terminate_no_fences(node);
     // }
 
-#ifdef QBOT_ENABLE_INFERENCE
     // Use neural network evaluation if available
     if (inference != nullptr) {
         auto* model = static_cast<ModelInference*>(inference);
@@ -386,7 +362,6 @@ inline void remove_virtual_loss(
             return model->evaluate_node(&node).value;
         }
     }
-#endif
 
     // No NN available - use path distance heuristic
     // this now returns just +/- 1, so this doesn't make sense, but should always have inference
@@ -612,8 +587,6 @@ struct SelfPlayResult {
 // Self-Play Engine
 // ============================================================================
 
-#ifdef QBOT_ENABLE_INFERENCE
-
 /// Statistics for multi-threaded self-play (thread-safe accumulator)
 struct MultiGameStats {
     std::atomic<int> p1_wins{0};
@@ -672,23 +645,6 @@ public:
     explicit SelfPlayEngine(SelfPlayConfig config = SelfPlayConfig{})
         : config_(std::move(config)) {}
 
-    /// Play a single self-play game, accumulating stats in the tree
-    /// @param pool Node pool (persistent across games)
-    /// @param root_idx Root node index
-    /// @param model Neural network for evaluation
-    /// @param collector Optional training sample collector (if nullptr, no samples collected)
-    /// @return Game result
-    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, ModelInference& model,
-                             TrainingSampleCollector* collector = nullptr);
-
-    /// Play a single self-play game using InferenceServer (for multi-threaded use)
-    /// @param pool Node pool (shared across workers)
-    /// @param root_idx Root node index
-    /// @param server Inference server for batched GPU evaluation
-    /// @param collector Optional training sample collector (if nullptr, no samples collected)
-    /// @return Game result
-    SelfPlayResult self_play(NodePool& pool, uint32_t root_idx, InferenceServer& server,
-                             TrainingSampleCollector* collector = nullptr);
 
     /// Run multiple self-play games in parallel
     /// Supports memory-bounded operation: when pool reaches 80% of memory limit,
@@ -788,10 +744,6 @@ public:
     [[nodiscard]] SelfPlayConfig& config() noexcept { return config_; }
 
 private:
-    /// Unified self-play implementation for any inference provider
-    template<InferenceProvider Inference>
-    SelfPlayResult self_play_impl(NodePool& pool, uint32_t root_idx, Inference& inference,
-                                   TrainingSampleCollector* collector);
 
     /// Unified MCTS iterations for any inference provider
     template<InferenceProvider Inference>
@@ -806,20 +758,6 @@ private:
 
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
-
-    // === Progressive expansion methods ===
-    // Disabled by default - define QBOT_ENABLE_PROGRESSIVE to re-enable.
-#ifdef QBOT_ENABLE_PROGRESSIVE
-    /// Compute valid action mask and policy priors without creating children
-    /// Thread-safe, only computed once per node
-    void compute_priors_progressive(NodePool& pool, uint32_t node_idx, InferenceServer& server);
-
-    /// Select best action using PUCT over all valid actions (including unmade children)
-    /// Creates the child if it doesn't exist yet
-    /// @return Child index if selection/creation succeeded, NULL_NODE otherwise
-    uint32_t select_and_expand_progressive(NodePool& pool, uint32_t node_idx,
-                                           float c_puct = 1.5f, float fpu = 0.0f);
-#endif
 
     /// Worker thread main loop for multi-game self-play
     void worker_loop(
@@ -856,102 +794,5 @@ private:
     std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 };
 
-#endif // QBOT_ENABLE_INFERENCE
-
-// ============================================================================
-// MCTS Engine
-// ============================================================================
-
-/// Parallel MCTS search engine
-///
-/// Manages worker threads that perform MCTS iterations concurrently.
-/// Uses virtual loss for tree parallelism and supports periodic checkpointing.
-class MCTSEngine {
-public:
-    explicit MCTSEngine(MCTSConfig config = MCTSConfig{})
-        : config_(std::move(config)) {}
-
-    ~MCTSEngine() {
-        stop();
-    }
-
-    // Non-copyable, non-movable
-    MCTSEngine(const MCTSEngine&) = delete;
-    MCTSEngine& operator=(const MCTSEngine&) = delete;
-    MCTSEngine(MCTSEngine&&) = delete;
-    MCTSEngine& operator=(MCTSEngine&&) = delete;
-
-    /// Start training workers
-    /// All threads run MCTS iterations from the same root
-    /// @param pool Node pool (must outlive the engine while running)
-    /// @param root_idx Root of the search tree
-    void start_training(NodePool& pool, uint32_t root_idx);
-
-    /// Stop all workers gracefully
-    void stop();
-
-    /// Check if training is running
-    [[nodiscard]] bool is_running() const noexcept {
-        return running_.load(std::memory_order_acquire);
-    }
-
-    /// Get current statistics
-    [[nodiscard]] const TrainingStats& stats() const noexcept { return stats_; }
-
-    /// Get configuration
-    [[nodiscard]] const MCTSConfig& config() const noexcept { return config_; }
-
-    /// Set optional neural network inference engine
-    void set_inference(void* inference) noexcept { inference_ = inference; }
-
-private:
-    /// Single MCTS iteration: select -> expand -> evaluate -> backprop
-    void mcts_iteration(NodePool& pool, uint32_t root_idx);
-
-    /// Backpropagate value up the tree and remove virtual loss
-    void backpropagate(NodePool& pool, const std::vector<uint32_t>& path,
-                       float value) noexcept;
-
-    /// Worker thread main loop
-    void worker_loop(std::stop_token stop_token, int thread_id,
-                     NodePool& pool, uint32_t root_idx);
-
-    /// Checkpoint thread: periodically saves tree
-    void checkpoint_loop(std::stop_token stop_token, NodePool& pool, uint32_t root_idx);
-
-    /// Signal workers to pause for checkpointing
-    void pause_workers();
-
-    /// Resume workers after checkpoint
-    void resume_workers();
-
-    /// Print current statistics
-    void print_stats(const NodePool& pool) const;
-
-    MCTSConfig config_;
-    TrainingStats stats_;
-    void* inference_{nullptr};
-
-    // Threading
-    std::vector<std::jthread> workers_;
-    std::jthread checkpoint_thread_;
-
-    std::atomic<bool> running_{false};
-    std::atomic<bool> paused_{false};
-
-    // Synchronization for checkpointing
-    std::mutex pause_mutex_;
-    std::condition_variable pause_cv_;
-    std::atomic<int> workers_paused_{0};
-
-    // Striped expansion mutexes - allows parallel expansion of different nodes
-    // while preventing races on the same node. Index = node_idx % array_size
-    static constexpr size_t NUM_EXPANSION_MUTEXES = 256;
-    std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
-
-    // Reference to pool and root for checkpointing
-    NodePool* pool_ptr_{nullptr};
-    uint32_t root_idx_{NULL_NODE};
-};
 
 } // namespace qbot

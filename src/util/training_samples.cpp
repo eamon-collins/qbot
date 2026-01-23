@@ -243,7 +243,8 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
         sample.policy = extract_visit_distribution(pool, node_idx);
 
         //should already be from current player's perspective and backpropagated sum of lower game path nodes.
-        sample.value = node.stats.Q();
+        // sample.value = node.stats.Q();
+        // sample.value = node.stats
 
         samples.push_back(sample);
     }
