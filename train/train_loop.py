@@ -397,7 +397,7 @@ def main():
     parser.add_argument('--all-samples', action='store_true', dest='all_samples',
                         help='use all available samples in the sample file instead of just this model_id')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
-                        action='store_true', default=True)
+                        action='store_true', default=False)
     parser.add_argument('--stream', action='store_true',
                         help='Stream training data from disk (memory efficient, no shuffling). '
                              'Default: load all into memory and shuffle.')

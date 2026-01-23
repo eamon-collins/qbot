@@ -1,5 +1,6 @@
 """Utilities for model management and identification."""
 import hashlib
+import re
 from pathlib import Path
 
 
@@ -76,7 +77,7 @@ def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool 
             pass
         return (0, "")
 
-    matching_files.sort(key=get_iter_num)
+    matching_files.sort(key=get_iter_num, reverse=True)
     return matching_files
 
 

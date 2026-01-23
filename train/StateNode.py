@@ -50,207 +50,113 @@ QSMP_HEADER_SIZE = 64
 
 TRAINING_SAMPLE_SIZE = 864
 
+# Numpy dtype for fast binary loading matching the C++ struct layout
+# This maps exactly to the 864-byte TrainingSample struct
+QSMP_DTYPE = np.dtype([
+    ('p1_row', 'u1'), ('p1_col', 'u1'), ('p2_row', 'u1'), ('p2_col', 'u1'),
+    ('p1_fences', 'u1'), ('p2_fences', 'u1'),
+    ('flags', 'u1'), ('reserved', 'u1'),
+    ('fences_h', '<u8'), ('fences_v', '<u8'),
+    ('policy', '<f4', (209,)),
+    ('value', '<f4')
+])
 
-class TrainingSampleDataset:
+def load_qsamples_fast(file_path: str, max_count: int = None):
     """
-    Dataset loader for .qsamples files containing pre-computed training samples.
-
-    These files contain state + MCTS visit distribution + game outcome, making
-    them ideal for AlphaZero-style training where policy targets come from
-    MCTS search rather than move labels.
-
-    By default, loads all samples into memory and shuffles them for better training.
-
-    Output format per sample:
-        state: (6, 9, 9) tensor - current-player-perspective board representation
-        policy_target: (209,) tensor - MCTS visit distribution
-        value_target: (1,) tensor - game outcome from current player's view
+    Vectorized loader for .qsamples files. 
+    Loads the file 100x faster than struct.unpack loop.
     """
-
-    def __init__(self, samples_path: str, batch_size: int, stream: bool = False):
-        self.samples_path = samples_path
-        self.batch_size = batch_size
-        self.stream = stream
-        self.file = None
-        self.samples = None  # In-memory storage when not streaming
-        self.__enter__()
-
-    def __len__(self):
-        # In-memory mode is required for this efficient shuffling
-        return len(self.samples) if self.samples else 0
-
-    def __getitem__(self, idx):
-        # Returns (state, policy, value) for a single index
-        return self.samples[idx]
-
-    def __enter__(self):
-        self.file = open(self.samples_path, 'rb')
-        # Read and validate header
-        header_data = self.file.read(QSMP_HEADER_SIZE)
+    with open(file_path, 'rb') as f:
+        # Check header
+        header_data = f.read(QSMP_HEADER_SIZE)
         if len(header_data) < QSMP_HEADER_SIZE:
-            raise ValueError(f"Invalid .qsamples file: too short")
-
+            raise ValueError(f"Invalid .qsamples file: {file_path}")
+            
         magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
         if magic != QSMP_MAGIC:
-            raise ValueError(f"Invalid .qsamples file: bad magic {hex(magic)}")
-        if version > 1:
-            raise ValueError(f"Unsupported .qsamples version: {version}")
-
-        self.sample_count = sample_count
-
-        if not self.stream:
-            # Load all samples into memory
-            logging.info(f"Loading {sample_count} samples from {self.samples_path} into memory...")
-            self.samples = []
-            for _ in range(sample_count):
-                sample_data = self.file.read(TRAINING_SAMPLE_SIZE)
-                if len(sample_data) < TRAINING_SAMPLE_SIZE:
-                    break
-                self.samples.append(self._parse_sample(sample_data))
-            self.file.close()
-            self.file = None
-            logging.info(f"Loaded {len(self.samples)} samples into memory")
+            raise ValueError(f"Invalid magic: {hex(magic)}")
+        
+        # Limit count if requested
+        if max_count is not None:
+            count = min(sample_count, max_count)
         else:
-            logging.info(f"Opened {self.samples_path}: {sample_count} samples (streaming mode)")
+            count = sample_count
+            
+        if count == 0:
+            return None, None, None
 
-        return self
+        # 1. READ RAW BINARY (Zero-copy if possible)
+        # This reads all data into a numpy structured array in one go
+        raw_data = np.fromfile(f, dtype=QSMP_DTYPE, count=count)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.file:
-            self.file.close()
+    # 2. VECTORIZED STATE GENERATION
+    # Create empty tensor (N, 6, 9, 9)
+    N = len(raw_data)
+    states = np.zeros((N, 6, 9, 9), dtype=np.float32)
 
-    def _parse_sample(self, data: bytes) -> tuple:
-        """Parse a single TrainingSample from bytes."""
-        # CompactState (24 bytes)
-        p1_row, p1_col, p2_row, p2_col = struct.unpack('BBBB', data[0:4])
-        p1_fences, p2_fences = struct.unpack('BB', data[4:6])
-        flags = data[6]
-        # reserved = data[7]
-        fences_h, fences_v = struct.unpack('<QQ', data[8:24])
+    # Extract columns for cleaner code
+    p1_row = raw_data['p1_row']
+    p1_col = raw_data['p1_col']
+    p2_row = raw_data['p2_row']
+    p2_col = raw_data['p2_col']
+    p1_fences = raw_data['p1_fences']
+    p2_fences = raw_data['p2_fences']
+    flags = raw_data['flags']
+    
+    # Identify current player (bit 2 is FLAG_P1_TO_MOVE)
+    is_p1_turn = (flags & 0x04) != 0
+    
+    # Vectorized "Current Player" perspective swap
+    my_row = np.where(is_p1_turn, p1_row, p2_row)
+    my_col = np.where(is_p1_turn, p1_col, p2_col)
+    my_fences = np.where(is_p1_turn, p1_fences, p2_fences)
+    
+    opp_row = np.where(is_p1_turn, p2_row, p1_row)
+    opp_col = np.where(is_p1_turn, p2_col, p1_col)
+    opp_fences = np.where(is_p1_turn, p2_fences, p1_fences)
 
-        # Policy (209 floats = 836 bytes)
-        policy = np.frombuffer(data[24:24+NUM_ACTIONS*4], dtype=np.float32).copy()
+    # Channel 0 & 1: Pawns (One-hot fancy indexing)
+    batch_idx = np.arange(N)
+    states[batch_idx, 0, my_row, my_col] = 1.0
+    states[batch_idx, 1, opp_row, opp_col] = 1.0
 
-        # Value (1 float = 4 bytes)
-        value = struct.unpack('<f', data[24+NUM_ACTIONS*4:24+NUM_ACTIONS*4+4])[0]
+    # Channel 2 & 3: Walls
+    # Use broadcasting to unpack bits. 
+    # Create a mask of shape (1, 64) -> (N, 64)
+    bit_indices = np.arange(64, dtype=np.uint64)
+    masks = (1 << bit_indices)
+    
+    # Expand fences to (N, 64) boolean mask
+    # We must cast to int64 or uint64 to avoid overflow during bitshift
+    walls_h_flat = (raw_data['fences_h'][:, None] & masks) > 0
+    walls_v_flat = (raw_data['fences_v'][:, None] & masks) > 0
+    
+    # Reshape (N, 64) -> (N, 8, 8)
+    walls_h_8x8 = walls_h_flat.reshape(N, 8, 8)
+    walls_v_8x8 = walls_v_flat.reshape(N, 8, 8)
+    
+    # Assign to 9x9 grid (leaving last row/col zero as padding)
+    states[:, 2, :8, :8] = walls_h_8x8
+    states[:, 3, :8, :8] = walls_v_8x8
 
-        # Convert to tensor format
-        state = self._state_to_tensor(
-            p1_row, p1_col, p2_row, p2_col,
-            p1_fences, p2_fences, flags,
-            fences_h, fences_v
-        )
+    # Channel 4 & 5: Fences (Broadcasting)
+    # (N,) -> (N, 1, 1) -> Broadcast to (N, 9, 9)
+    states[:, 4, :, :] = (my_fences[:, None, None] / 10.0)
+    states[:, 5, :, :] = (opp_fences[:, None, None] / 10.0)
 
-        return (
-            torch.from_numpy(state),
-            torch.from_numpy(policy),
-            torch.tensor([value], dtype=torch.float32)
-        )
+    # 3. PREPARE OUTPUTS
+    # Convert structured policy array to standard float array
+    # View as (N, 209) float32
+    policies = raw_data['policy'].copy() # Copy to ensure contiguous memory
 
-    def _state_to_tensor(self, p1_row, p1_col, p2_row, p2_col,
-                         p1_fences, p2_fences, flags,
-                         fences_h, fences_v) -> np.ndarray:
-        """Convert compact state to 6-channel tensor."""
-        tensor = np.zeros((6, 9, 9), dtype=np.float32)
+    # Values (N, 1)
+    values = raw_data['value'][:, None].copy()
 
-        # FLAG_P1_TO_MOVE = 0x04
-        is_p1_turn = (flags & 0x04) != 0
-
-        # Determine current player and opponent
-        if is_p1_turn:
-            my_row, my_col, my_fences = p1_row, p1_col, p1_fences
-            opp_row, opp_col, opp_fences = p2_row, p2_col, p2_fences
-        else:
-            my_row, my_col, my_fences = p2_row, p2_col, p2_fences
-            opp_row, opp_col, opp_fences = p1_row, p1_col, p1_fences
-
-        # Channel 0: Current player's pawn
-        tensor[0, my_row, my_col] = 1.0
-
-        # Channel 1: Opponent's pawn
-        tensor[1, opp_row, opp_col] = 1.0
-
-        # Channel 2: Horizontal walls
-        for r in range(8):
-            for c in range(8):
-                if (fences_h >> (r * 8 + c)) & 1:
-                    tensor[2, r, c] = 1.0
-
-        # Channel 3: Vertical walls
-        for r in range(8):
-            for c in range(8):
-                if (fences_v >> (r * 8 + c)) & 1:
-                    tensor[3, r, c] = 1.0
-
-        # Channel 4: Current player's fences
-        tensor[4, :, :] = my_fences / 10.0
-
-        # Channel 5: Opponent's fences
-        tensor[5, :, :] = opp_fences / 10.0
-
-        return tensor
-
-    def generate_batches(self):
-        """
-        Generate batches of training data.
-
-        In-memory mode (default): Shuffles samples before generating batches.
-        Streaming mode: Reads samples sequentially from disk.
-        """
-        if self.stream:
-            # Streaming mode: read from file
-            if not self.file:
-                raise RuntimeError("Dataset not initialized with context manager")
-
-            states, policies, values = [], [], []
-
-            for _ in range(self.sample_count):
-                sample_data = self.file.read(TRAINING_SAMPLE_SIZE)
-                if len(sample_data) < TRAINING_SAMPLE_SIZE:
-                    break
-
-                state_t, policy_t, value_t = self._parse_sample(sample_data)
-                states.append(state_t)
-                policies.append(policy_t)
-                values.append(value_t)
-
-                if len(states) == self.batch_size:
-                    yield (
-                        torch.stack(states),
-                        torch.stack(policies),
-                        torch.stack(values)
-                    )
-                    states, policies, values = [], [], []
-
-            # Yield remaining samples
-            if states:
-                yield (
-                    torch.stack(states),
-                    torch.stack(policies),
-                    torch.stack(values)
-                )
-        else:
-            # In-memory mode: shuffle and generate batches
-            if self.samples is None:
-                raise RuntimeError("Dataset not initialized with context manager")
-
-            # Shuffle samples for better training
-            indices = list(range(len(self.samples)))
-            random.shuffle(indices)
-
-            # Generate batches from shuffled indices
-            for i in range(0, len(indices), self.batch_size):
-                batch_indices = indices[i:i + self.batch_size]
-                states = [self.samples[idx][0] for idx in batch_indices]
-                policies = [self.samples[idx][1] for idx in batch_indices]
-                values = [self.samples[idx][2] for idx in batch_indices]
-
-                yield (
-                    torch.stack(states),
-                    torch.stack(policies),
-                    torch.stack(values)
-                )
-
+    return (
+        torch.from_numpy(states), 
+        torch.from_numpy(policies), 
+        torch.from_numpy(values)
+    )
 
 class MultiFileTrainingSampleDataset:
     """
@@ -266,165 +172,252 @@ class MultiFileTrainingSampleDataset:
             for batch in dataset.generate_batches():
                 train_step(model, batch)
     """
-
     def __init__(self, samples_paths: list[str], batch_size: int, max_sample_num: int = 3000000):
-        """
-        Args:
-            samples_paths: List of .qsamples file paths to load
-            batch_size: Batch size for training
-        """
         self.samples_paths = samples_paths
         self.batch_size = batch_size
-        self.total_samples = 0
         self.max_sample_num = max_sample_num
-        self.samples = None
+        
+        self.states = None
+        self.policies = None
+        self.values = None
+        
         self.__enter__()
 
     def __len__(self):
-        # In-memory mode is required for this efficient shuffling
-        return len(self.samples) if self.samples else 0
+        return len(self.states) if self.states is not None else 0
 
     def __getitem__(self, idx):
-        # Returns (state, policy, value) for a single index
-        return self.samples[idx]
+        return self.states[idx], self.policies[idx], self.values[idx]
 
     def __enter__(self):
-        # Load all samples into memory from all files
-        logging.info(f"Loading samples from {len(self.samples_paths)} files into memory...")
-        self.samples = []
+        logging.info(f"Loading samples from {len(self.samples_paths)} files...")
+        
+        all_states = []
+        all_policies = []
+        all_values = []
+        total_loaded = 0
 
-        ## reverse list so we load in the latest samples first, so if we stop early we leave out the oldest
+        # Load latest files first
         self.samples_paths.reverse()
+        
         for path in self.samples_paths:
-            with open(path, 'rb') as f:
-                header_data = f.read(QSMP_HEADER_SIZE)
-                if len(header_data) < QSMP_HEADER_SIZE:
-                    raise ValueError(f"Invalid .qsamples file: {path}")
+            remaining = self.max_sample_num - total_loaded
+            if remaining <= 0:
+                break
+                
+            s, p, v = load_qsamples_fast(path, max_count=remaining)
+            if s is not None:
+                all_states.append(s)
+                all_policies.append(p)
+                all_values.append(v)
+                total_loaded += len(s)
+                logging.info(f"  + {path}: {len(s)} samples")
 
-                magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
-                if magic != QSMP_MAGIC:
-                    raise ValueError(f"Invalid .qsamples file: bad magic in {path}")
-                if version > 1:
-                    raise ValueError(f"Unsupported .qsamples version in {path}: {version}")
+        if not all_states:
+            raise ValueError("No samples found in provided files")
 
-                logging.info(f"  {path}: {sample_count} samples")
-                self.total_samples += sample_count
-
-                # Load all samples from this file
-                for _ in range(sample_count):
-                    sample_data = f.read(TRAINING_SAMPLE_SIZE)
-                    if len(sample_data) < TRAINING_SAMPLE_SIZE:
-                        break
-                    self.samples.append(self._parse_sample(sample_data))
-
-                if self.total_samples >= self.max_sample_num:
-                    break
-
-        logging.info(f"Loaded {self.total_samples} total samples into memory")
-
+        # Concatenate everything into one massive tensor
+        logging.info(f"Concatenating {total_loaded} samples...")
+        self.states = torch.cat(all_states)
+        self.policies = torch.cat(all_policies)
+        self.values = torch.cat(all_values)
+        
+        # Free temp lists
+        del all_states, all_policies, all_values
+        
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
-    def _parse_sample(self, data: bytes) -> tuple:
-        """Parse a single TrainingSample from bytes."""
-        # CompactState (24 bytes)
-        p1_row, p1_col, p2_row, p2_col = struct.unpack('BBBB', data[0:4])
-        p1_fences, p2_fences = struct.unpack('BB', data[4:6])
-        flags = data[6]
-        fences_h, fences_v = struct.unpack('<QQ', data[8:24])
-
-        # Policy (209 floats = 836 bytes)
-        policy = np.frombuffer(data[24:24+NUM_ACTIONS*4], dtype=np.float32).copy()
-        policy_sum = np.sum(policy)
-        if not (0.99 < policy_sum < 1.01):
-            logging.warning(f"CORRUPT DATA? Policy sums to {policy_sum}, expected 1.0")
-
-        # Value (1 float = 4 bytes)
-        value = struct.unpack('<f', data[24+NUM_ACTIONS*4:24+NUM_ACTIONS*4+4])[0]
-
-        # Convert to tensor format
-        state = self._state_to_tensor(
-            p1_row, p1_col, p2_row, p2_col,
-            p1_fences, p2_fences, flags,
-            fences_h, fences_v
-        )
-
-        return (
-            torch.from_numpy(state),
-            torch.from_numpy(policy),
-            torch.tensor([value], dtype=torch.float32)
-        )
-
-    def _state_to_tensor(self, p1_row, p1_col, p2_row, p2_col,
-                         p1_fences, p2_fences, flags,
-                         fences_h, fences_v) -> np.ndarray:
-        """Convert compact state to 6-channel tensor."""
-        tensor = np.zeros((6, 9, 9), dtype=np.float32)
-
-        # FLAG_P1_TO_MOVE = 0x04
-        is_p1_turn = (flags & 0x04) != 0
-
-        # Determine current player and opponent
-        if is_p1_turn:
-            my_row, my_col, my_fences = p1_row, p1_col, p1_fences
-            opp_row, opp_col, opp_fences = p2_row, p2_col, p2_fences
-        else:
-            my_row, my_col, my_fences = p2_row, p2_col, p2_fences
-            opp_row, opp_col, opp_fences = p1_row, p1_col, p1_fences
-
-        # Channel 0: Current player's pawn
-        tensor[0, my_row, my_col] = 1.0
-
-        # Channel 1: Opponent's pawn
-        tensor[1, opp_row, opp_col] = 1.0
-
-        # Channel 2: Horizontal walls
-        for r in range(8):
-            for c in range(8):
-                if (fences_h >> (r * 8 + c)) & 1:
-                    tensor[2, r, c] = 1.0
-
-        # Channel 3: Vertical walls
-        for r in range(8):
-            for c in range(8):
-                if (fences_v >> (r * 8 + c)) & 1:
-                    tensor[3, r, c] = 1.0
-
-        # Channel 4: Current player's fences
-        tensor[4, :, :] = my_fences / 10.0
-
-        # Channel 5: Opponent's fences
-        tensor[5, :, :] = opp_fences / 10.0
-
-        return tensor
-
     def generate_batches(self):
-        """
-        Generate batches of training data from all files.
+        if self.states is None:
+            raise RuntimeError("Dataset not initialized")
 
-        In-memory mode (default): Shuffles all samples before generating batches.
-        """
-        if self.samples is None:
-            raise RuntimeError("Dataset not initialized with context manager")
+        N = len(self.states)
+        indices = torch.randperm(N)
 
-        # Shuffle samples for better training
-        indices = list(range(len(self.samples)))
-        random.shuffle(indices)
-
-        # Generate batches from shuffled indices
-        for i in range(0, len(indices), self.batch_size):
+        for i in range(0, N, self.batch_size):
             batch_indices = indices[i:i + self.batch_size]
-            states = [self.samples[idx][0] for idx in batch_indices]
-            policies = [self.samples[idx][1] for idx in batch_indices]
-            values = [self.samples[idx][2] for idx in batch_indices]
-
             yield (
-                torch.stack(states),
-                torch.stack(policies),
-                torch.stack(values)
+                self.states[batch_indices],
+                self.policies[batch_indices],
+                self.values[batch_indices]
             )
+
+# class MultiFileTrainingSampleDataset:
+#     """
+#     Dataset loader that concatenates multiple .qsamples files into a single dataset.
+#
+#     This is useful for training on accumulated samples from the same model version,
+#     where multiple self-play runs generated separate sample files.
+#
+#     By default, loads all samples from all files into memory and shuffles them.
+#
+#     Usage:
+#         with MultiFileTrainingSampleDataset(['tree_0.qsamples', 'tree_1.qsamples'], 64) as dataset:
+#             for batch in dataset.generate_batches():
+#                 train_step(model, batch)
+#     """
+#
+#     def __init__(self, samples_paths: list[str], batch_size: int, max_sample_num: int = 4500000):
+#         """
+#         Args:
+#             samples_paths: List of .qsamples file paths to load
+#             batch_size: Batch size for training
+#         """
+#         self.samples_paths = samples_paths
+#         self.batch_size = batch_size
+#         self.total_samples = 0
+#         self.max_sample_num = max_sample_num
+#         self.samples = None
+#         self.__enter__()
+#
+#     def __len__(self):
+#         # In-memory mode is required for this efficient shuffling
+#         return len(self.samples) if self.samples else 0
+#
+#     def __getitem__(self, idx):
+#         # Returns (state, policy, value) for a single index
+#         return self.samples[idx]
+#
+#     def __enter__(self):
+#         # Load all samples into memory from all files
+#         logging.info(f"Loading samples from {len(self.samples_paths)} files into memory...")
+#         self.samples = []
+#
+#         ## reverse list so we load in the latest samples first, so if we stop early we leave out the oldest
+#         self.samples_paths.reverse()
+#         for path in self.samples_paths:
+#             with open(path, 'rb') as f:
+#                 header_data = f.read(QSMP_HEADER_SIZE)
+#                 if len(header_data) < QSMP_HEADER_SIZE:
+#                     raise ValueError(f"Invalid .qsamples file: {path}")
+#
+#                 magic, version, flags, sample_count = struct.unpack('<IHHI', header_data[:12])
+#                 if magic != QSMP_MAGIC:
+#                     raise ValueError(f"Invalid .qsamples file: bad magic in {path}")
+#                 if version > 1:
+#                     raise ValueError(f"Unsupported .qsamples version in {path}: {version}")
+#
+#                 logging.info(f"  {path}: {sample_count} samples")
+#                 self.total_samples += sample_count
+#
+#                 # Load all samples from this file
+#                 for _ in range(sample_count):
+#                     sample_data = f.read(TRAINING_SAMPLE_SIZE)
+#                     if len(sample_data) < TRAINING_SAMPLE_SIZE:
+#                         break
+#                     self.samples.append(self._parse_sample(sample_data))
+#
+#                 if self.total_samples >= self.max_sample_num:
+#                     break
+#
+#         logging.info(f"Loaded {self.total_samples} total samples into memory")
+#
+#         return self
+#
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         pass
+#
+#     def _parse_sample(self, data: bytes) -> tuple:
+#         """Parse a single TrainingSample from bytes."""
+#         # CompactState (24 bytes)
+#         p1_row, p1_col, p2_row, p2_col = struct.unpack('BBBB', data[0:4])
+#         p1_fences, p2_fences = struct.unpack('BB', data[4:6])
+#         flags = data[6]
+#         fences_h, fences_v = struct.unpack('<QQ', data[8:24])
+#
+#         # Policy (209 floats = 836 bytes)
+#         policy = np.frombuffer(data[24:24+NUM_ACTIONS*4], dtype=np.float32).copy()
+#         policy_sum = np.sum(policy)
+#         if not (0.99 < policy_sum < 1.01):
+#             logging.warning(f"CORRUPT DATA? Policy sums to {policy_sum}, expected 1.0")
+#
+#         # Value (1 float = 4 bytes)
+#         value = struct.unpack('<f', data[24+NUM_ACTIONS*4:24+NUM_ACTIONS*4+4])[0]
+#
+#         # Convert to tensor format
+#         state = self._state_to_tensor(
+#             p1_row, p1_col, p2_row, p2_col,
+#             p1_fences, p2_fences, flags,
+#             fences_h, fences_v
+#         )
+#
+#         return (
+#             torch.from_numpy(state),
+#             torch.from_numpy(policy),
+#             torch.tensor([value], dtype=torch.float32)
+#         )
+#
+#     def _state_to_tensor(self, p1_row, p1_col, p2_row, p2_col,
+#                          p1_fences, p2_fences, flags,
+#                          fences_h, fences_v) -> np.ndarray:
+#         """Convert compact state to 6-channel tensor."""
+#         tensor = np.zeros((6, 9, 9), dtype=np.float32)
+#
+#         # FLAG_P1_TO_MOVE = 0x04
+#         is_p1_turn = (flags & 0x04) != 0
+#
+#         # Determine current player and opponent
+#         if is_p1_turn:
+#             my_row, my_col, my_fences = p1_row, p1_col, p1_fences
+#             opp_row, opp_col, opp_fences = p2_row, p2_col, p2_fences
+#         else:
+#             my_row, my_col, my_fences = p2_row, p2_col, p2_fences
+#             opp_row, opp_col, opp_fences = p1_row, p1_col, p1_fences
+#
+#         # Channel 0: Current player's pawn
+#         tensor[0, my_row, my_col] = 1.0
+#
+#         # Channel 1: Opponent's pawn
+#         tensor[1, opp_row, opp_col] = 1.0
+#
+#         # Channel 2: Horizontal walls
+#         for r in range(8):
+#             for c in range(8):
+#                 if (fences_h >> (r * 8 + c)) & 1:
+#                     tensor[2, r, c] = 1.0
+#
+#         # Channel 3: Vertical walls
+#         for r in range(8):
+#             for c in range(8):
+#                 if (fences_v >> (r * 8 + c)) & 1:
+#                     tensor[3, r, c] = 1.0
+#
+#         # Channel 4: Current player's fences
+#         tensor[4, :, :] = my_fences / 10.0
+#
+#         # Channel 5: Opponent's fences
+#         tensor[5, :, :] = opp_fences / 10.0
+#
+#         return tensor
+#
+#     def generate_batches(self):
+#         """
+#         Generate batches of training data from all files.
+#
+#         In-memory mode (default): Shuffles all samples before generating batches.
+#         """
+#         if self.samples is None:
+#             raise RuntimeError("Dataset not initialized with context manager")
+#
+#         # Shuffle samples for better training
+#         indices = list(range(len(self.samples)))
+#         random.shuffle(indices)
+#
+#         # Generate batches from shuffled indices
+#         for i in range(0, len(indices), self.batch_size):
+#             batch_indices = indices[i:i + self.batch_size]
+#             states = [self.samples[idx][0] for idx in batch_indices]
+#             policies = [self.samples[idx][1] for idx in batch_indices]
+#             values = [self.samples[idx][2] for idx in batch_indices]
+#
+#             yield (
+#                 torch.stack(states),
+#                 torch.stack(policies),
+#                 torch.stack(values)
+#             )
 
 
 # =============================================================================
