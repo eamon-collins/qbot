@@ -204,6 +204,28 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
     }
 }
 
+/// @param game_path Path from root to terminal state (actual game played)
+/// @param winner Absolute winner: +1 = P1 wins, -1 = P2 wins, 0 = draw
+void SelfPlayEngine::backpropagate_game_outcome(NodePool& pool, const std::vector<uint32_t>& game_path, int winner) {
+    if (winner == 0) {
+        // Draw - don't record wins or losses
+        return;
+    }
+    
+    for (uint32_t idx : game_path) {
+        StateNode& node = pool[idx];
+        // Convert absolute winner to relative (from current player's perspective)
+        // winner = +1 means P1 won, winner = -1 means P2 won
+        // If it's P1's turn at this node, P1 winning means +1 (win)
+        // If it's P2's turn at this node, P1 winning means -1 (loss)
+        float relative_value = node.is_p1_to_move() 
+            ? static_cast<float>(winner) 
+            : static_cast<float>(-winner);
+        
+        node.stats.record_game_outcome(relative_value);
+    }
+}
+
 void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
     StateNode& node = pool[node_idx];
 
@@ -486,7 +508,33 @@ void SelfPlayEngine::run_multi_game_worker(
         return true;
     };
 
+    // auto finish_game = [&](GameContext& g, SelfPlayResult result) {
+    //     if (result.winner != 0 && !result.error) {
+    //         float value = static_cast<float>(result.winner);
+    //         for (size_t i = g.game_path.size(); i > 0; --i) {
+    //             uint32_t idx = g.game_path[i - 1];
+    //             StateNode& n = pool[idx];
+    //             float node_value = n.is_p1_to_move() ? value : -value;
+    //             n.stats.update(node_value);
+    //         }
+    //     }
+    //
+    //     if (collector && result.winner != 0 && !result.error) {
+    //         float game_outcome = static_cast<float>(result.winner);
+    //     }
+    //
+    //     stats.add_result(result);
+    //     g.active = false;
+    //     active_games--;
+    //     sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
+    // };
+    
     auto finish_game = [&](GameContext& g, SelfPlayResult result) {
+        // Backpropagate actual game outcome for training targets
+        if (result.winner != 0 && !result.error) {
+            backpropagate_game_outcome(pool, g.game_path, result.winner);
+        }
+
         if (result.winner != 0 && !result.error) {
             float value = static_cast<float>(result.winner);
             for (size_t i = g.game_path.size(); i > 0; --i) {
@@ -495,13 +543,6 @@ void SelfPlayEngine::run_multi_game_worker(
                 float node_value = n.is_p1_to_move() ? value : -value;
                 n.stats.update(node_value);
             }
-        }
-
-        if (collector && result.winner != 0 && !result.error) {
-            float game_outcome = static_cast<float>(result.winner);
-            // for (uint32_t pos : g.sample_positions) {
-            //     collector->add_sample(pool, pos, game_outcome);
-            // }
         }
 
         stats.add_result(result);
@@ -636,14 +677,10 @@ void SelfPlayEngine::run_multi_game_worker(
                     float nv = n.is_p1_to_move() ? game_value : -game_value;
                     n.stats.update(nv);
                 }
-                // if (collector) {
-                //     for (uint32_t pos : g.sample_positions) {
-                //         collector->add_sample(pool, pos, game_value);
-                //     }
-                // }
                 stats.add_result(result);
                 g.active = false;
                 active_games--;
+                sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
                 if (try_claim_game(g)) active_games++;
                 continue;
             }

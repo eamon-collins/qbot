@@ -5,7 +5,7 @@
 /// Stores training samples with:
 /// - Board state (compact representation)
 /// - MCTS visit distribution (policy target)
-/// - Game outcome (value target)
+/// - Game outcome (value target) - actual wins/losses, not Q values
 ///
 /// File format (.qsamples):
 ///   Header (64 bytes)
@@ -51,7 +51,7 @@ enum class TrainingSampleError {
 /// File header for training samples format
 struct TrainingSampleHeader {
     static constexpr uint32_t MAGIC = 0x51534D50;  // "QSMP" in little-endian
-    static constexpr uint16_t CURRENT_VERSION = 1;
+    static constexpr uint16_t CURRENT_VERSION = 2; // Bumped for wins/losses format
 
     uint32_t magic = MAGIC;
     uint16_t version = CURRENT_VERSION;
@@ -98,6 +98,13 @@ static_assert(sizeof(CompactState) == 24, "CompactState should be 24 bytes");
 
 /// Single training sample with state, policy target, and value target
 /// Policy is stored as visit counts (will be normalized during training)
+///
+/// VALUE TARGETS:
+/// Per AlphaGo Zero, the value target z_t = ±r_T is the actual game outcome
+/// from the current player's perspective, NOT the MCTS Q-value.
+/// We store wins/losses separately to allow flexible loss functions:
+/// - WDL head: win/draw/loss classification
+/// - Scalar value head: (wins - losses) / total
 struct TrainingSample {
     // Board state (24 bytes)
     CompactState state;
@@ -106,41 +113,31 @@ struct TrainingSample {
     // Stored as proportions (0.0-1.0), already normalized
     std::array<float, NUM_ACTIONS> policy;
 
-    // Game outcome from current player's perspective (4 bytes)
-    // +1.0 = current player won, -1.0 = current player lost, 0.0 = draw
+    // Actual game outcomes from this position (from current player's perspective)
+    // These are the training targets - actual wins/losses from games through this node
+    uint32_t wins;    // Games won by current player from this position
+    uint32_t losses;  // Games lost by current player from this position
+    
+    // For backward compatibility and convenience
+    // This is computed as (wins - losses) / (wins + losses) when loading
+    // During save, if wins+losses > 0, value is computed; otherwise uses legacy value
     float value;
+    
+    // Padding to maintain alignment
+    uint32_t reserved{0};
 };
 
-static_assert(sizeof(TrainingSample) == 864, "TrainingSample should be 864 bytes");
+static_assert(sizeof(TrainingSample) == 880, "TrainingSample should be 880 bytes");
 
 /// Extract compact state from a StateNode
-/// this one doesn't flip the gamestate, we need to flip it to make it so the model learns from the perspective of the player whose turn it is.
-// [[nodiscard]] inline CompactState extract_compact_state(const StateNode& node) noexcept {
-//     CompactState state;
-//     state.p1_row = node.p1.row;
-//     state.p1_col = node.p1.col;
-//     state.p2_row = node.p2.row;
-//     state.p2_col = node.p2.col;
-//     state.p1_fences = node.p1.fences;
-//     state.p2_fences = node.p2.fences;
-//     state.flags = static_cast<uint8_t>(node.flags);
-//     state.reserved = 0;
-//     state.fences_horizontal = node.fences.horizontal;
-//     state.fences_vertical = node.fences.vertical;
-//     return state;
-// }
-//
-
+/// Flips board for P2's perspective so model always sees from "current player" view
 [[nodiscard]] inline CompactState extract_compact_state(const StateNode& node) noexcept {
     CompactState state;
 
     // Relative Perspective:
-    // If P1 to move (P1 at row 0): Keep as is (P1 at 0, P2 at 8)
-    // If P2 to move (P2 at row 8): Flip board 180 degrees so P2 is at 0 (or 8 depending on convention)
-    // NOTE: Standard relative convention is "Current Player starts at 0, Goal at 8" or vice versa.
-    // Given your viewer expects P1 (0) at Bottom (8), let's align so Current Player is always at 0 (Top) 
-    // effectively, or 8 (Bottom).
-    // Let's assume RELATIVE means "Current Player is P1-like (starts at 0)".
+    // If P1 to move: Keep as is (P1 at their position, P2 at theirs)
+    // If P2 to move: Flip board 180 degrees so current player is at "P1 position"
+    // This ensures the NN always sees the board from current player's perspective
 
     if (node.is_p1_to_move()) {
         state.p1_row = node.p1.row;
@@ -157,7 +154,6 @@ static_assert(sizeof(TrainingSample) == 864, "TrainingSample should be 864 bytes
         state.p2_col = 8 - node.p2.col;
 
         // Flip fences (bit reversal of the 64-bit grid maps index i to 63-i)
-        // (r*8 + c) -> (7-r)*8 + (7-c)
         state.fences_horizontal = reverse_bits(node.fences.horizontal);
         state.fences_vertical = reverse_bits(node.fences.vertical);
     }

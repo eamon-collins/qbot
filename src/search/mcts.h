@@ -55,8 +55,6 @@ inline constexpr bool is_inference_server_v = is_inference_server<T>::value;
 template<typename T>
 concept InferenceProvider = std::same_as<T, ModelInference> || std::same_as<T, InferenceServer>;
 
-#endif
-
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -759,6 +757,7 @@ private:
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
 
+    void backpropagate_game_outcome(NodePool& pool, const std::vector<uint32_t>& game_path, int winner);
     /// Worker thread main loop for multi-game self-play
     void worker_loop(
         std::stop_token stop_token,

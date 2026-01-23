@@ -147,10 +147,6 @@ struct FenceGrid {
         if (c < 7 && has_h_fence(r, c + 1)) return true;
         // Blocked if a vertical fence passes through intersection (r, c)
         if (has_v_fence(r, c)) return true;
-        // if (r > 0 && has_v_fence(r - 1, c)) return true;
-        // // Blocked if a vertical fence passes through intersection (r, c+1)
-        // if (c < 7 && has_v_fence(r, c + 1)) return true;
-        // if (r > 0 && c < 7 && has_v_fence(r - 1, c + 1)) return true;
         return false;
     }
 
@@ -170,10 +166,6 @@ struct FenceGrid {
         if (r < 7 && has_v_fence(r + 1, c)) return true;
         // Blocked if a horizontal fence passes through intersection (r, c)
         if (has_h_fence(r, c)) return true;
-        // if (c > 0 && has_h_fence(r, c - 1)) return true;
-        // // Blocked if a horizontal fence passes through intersection (r+1, c)
-        // if (r < 7 && has_h_fence(r + 1, c)) return true;
-        // if (r < 7 && c > 0 && has_h_fence(r + 1, c - 1)) return true;
         return false;
     }
 
@@ -226,13 +218,23 @@ static_assert(sizeof(FenceGrid) == 16, "FenceGrid should be 16 bytes");
 ///   W(s,a) = total action value
 ///   Q(s,a) = mean action value = W/N
 ///   P(s,a) = prior probability (from policy network or uniform)
+///
+/// SEPARATION OF CONCERNS:
+///   - total_value/visits: Used for MCTS Q calculation during search (NN evals + terminal values)
+///   - wins/losses: Actual game outcomes from games that passed through this node
+///                  These are the training targets for the value head
 struct EdgeStats {
-    std::atomic<uint32_t> visits{0};       // N(s,a): visit count
-    std::atomic<float> total_value{0.0f};  // W(s,a): sum of values from backpropagation
+    std::atomic<uint32_t> visits{0};       // N(s,a): visit count (for MCTS search)
+    std::atomic<float> total_value{0.0f};  // W(s,a): sum of values from backpropagation (for Q)
     std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
     float prior{0.0f};                     // P(s,a): policy prior (set once, read-only after)
     float nn_value{0.0f};                  // Cached NN value (avoids re-evaluation)
     std::atomic<bool> nn_evaluated{false}; // True if nn_value is valid (atomic for thread safety)
+
+    // Actual game outcome counters (for training targets)
+    // These track real wins/losses from games that traversed this edge
+    std::atomic<uint32_t> wins{0};         // Games won from current player's perspective
+    std::atomic<uint32_t> losses{0};       // Games lost from current player's perspective
 
     EdgeStats() = default;
 
@@ -247,7 +249,9 @@ struct EdgeStats {
         , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
         , prior(other.prior)
         , nn_value(other.nn_value)
-        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed)) {}
+        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed))
+        , wins(other.wins.load(std::memory_order_relaxed))
+        , losses(other.losses.load(std::memory_order_relaxed)) {}
 
     /// Set cached NN value (thread-safe, only first setter wins)
     void set_nn_value(float value) noexcept {
@@ -264,6 +268,8 @@ struct EdgeStats {
         nn_evaluated.store(false, std::memory_order_relaxed);
         prior = 0.0f;
         nn_value = 0.0f;
+        wins.store(0, std::memory_order_relaxed);
+        losses.store(0, std::memory_order_relaxed);
     }
 
     /// Check if we have a cached NN value
@@ -277,6 +283,7 @@ struct EdgeStats {
     }
 
     /// Get Q(s,a) = W(s,a) / N(s,a) with first-play urgency
+    /// Used during MCTS search
     [[nodiscard]] float Q(float fpu = 0.0f) const noexcept {
         uint32_t n = visits.load(std::memory_order_relaxed);
         if (n == 0) return fpu;
@@ -300,6 +307,7 @@ struct EdgeStats {
     }
 
     /// Update statistics during backpropagation (atomic)
+    /// Used for MCTS Q values during search
     void update(float value) noexcept {
         visits.fetch_add(1, std::memory_order_relaxed);
         // Atomic float addition via CAS loop
@@ -309,6 +317,32 @@ struct EdgeStats {
             std::memory_order_relaxed, std::memory_order_relaxed)) {
             // expected is updated on failure
         }
+    }
+
+    /// Record an actual game outcome (called when game finishes)
+    /// value: +1.0 = current player won, -1.0 = current player lost
+    void record_game_outcome(float value) noexcept {
+        if (value > 0.0f) {
+            wins.fetch_add(1, std::memory_order_relaxed);
+        } else if (value < 0.0f) {
+            losses.fetch_add(1, std::memory_order_relaxed);
+        }
+        // draws (value == 0) don't increment either counter
+    }
+
+    /// Get the empirical value from actual game outcomes
+    /// Returns value in [-1, +1] from current player's perspective
+    [[nodiscard]] float game_outcome_value() const noexcept {
+        uint32_t w = wins.load(std::memory_order_relaxed);
+        uint32_t l = losses.load(std::memory_order_relaxed);
+        uint32_t total = w + l;
+        if (total == 0) return 0.0f;
+        return (static_cast<float>(w) - static_cast<float>(l)) / static_cast<float>(total);
+    }
+
+    /// Get total games that passed through this node
+    [[nodiscard]] uint32_t total_games() const noexcept {
+        return wins.load(std::memory_order_relaxed) + losses.load(std::memory_order_relaxed);
     }
 };
 
@@ -385,6 +419,8 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+        stats.wins.store(0, std::memory_order_relaxed);
+        stats.losses.store(0, std::memory_order_relaxed);
 
         inserting_child.store(false, std::memory_order_relaxed);
     }
@@ -440,6 +476,8 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+        stats.wins.store(0, std::memory_order_relaxed);
+        stats.losses.store(0, std::memory_order_relaxed);
 
         inserting_child.store(false, std::memory_order_relaxed);
     }
@@ -458,6 +496,8 @@ struct alignas(64) StateNode {
         stats.total_value.store(0.0f, std::memory_order_relaxed);
         stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
+        stats.wins.store(0, std::memory_order_relaxed);
+        stats.losses.store(0, std::memory_order_relaxed);
         inserting_child.store(false, std::memory_order_relaxed);
     }
 
