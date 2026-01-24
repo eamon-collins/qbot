@@ -211,7 +211,7 @@ void SelfPlayEngine::backpropagate_game_outcome(NodePool& pool, const std::vecto
         // Draw - don't record wins or losses
         return;
     }
-    
+
     for (uint32_t idx : game_path) {
         StateNode& node = pool[idx];
         // Convert absolute winner to relative (from current player's perspective)
@@ -221,7 +221,7 @@ void SelfPlayEngine::backpropagate_game_outcome(NodePool& pool, const std::vecto
         float relative_value = node.is_p1_to_move() 
             ? static_cast<float>(winner) 
             : static_cast<float>(-winner);
-        
+
         node.stats.record_game_outcome(relative_value);
     }
 }
@@ -528,7 +528,7 @@ void SelfPlayEngine::run_multi_game_worker(
     //     active_games--;
     //     sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
     // };
-    
+
     auto finish_game = [&](GameContext& g, SelfPlayResult result) {
         // Backpropagate actual game outcome for training targets
         if (result.winner != 0 && !result.error) {
@@ -794,6 +794,13 @@ void SelfPlayEngine::run_multi_game_worker(
                 break;
             }
 
+            std::vector<const StateNode*> batch_nodes;
+            std::vector<int> batch_game_indices;
+            std::vector<std::vector<uint32_t>> batch_paths;
+            std::vector<uint32_t> batch_eval_indices;
+
+            batch_nodes.reserve(games_per_worker); 
+            batch_game_indices.reserve(games_per_worker);
             // Collect one iteration from each game that needs it
             for (int gi = 0; gi < games_per_worker; ++gi) {
                 GameContext& g = games[gi];
@@ -847,9 +854,33 @@ void SelfPlayEngine::run_multi_game_worker(
                     backpropagate(pool, path, eval_node.stats.get_nn_value());
                     g.mcts_iterations_done++;
                 } else {
+                    // if constexpr (is_inference_server_v<Inference>) {
+                    //     auto future = inference.submit(&eval_node);
+                    //     pending_evals.push_back({gi, std::move(path), eval_node_idx, std::move(future)});
+                    // }
                     if constexpr (is_inference_server_v<Inference>) {
-                        auto future = inference.submit(&eval_node);
-                        pending_evals.push_back({gi, std::move(path), eval_node_idx, std::move(future)});
+                        batch_nodes.push_back(&eval_node);
+                        batch_game_indices.push_back(gi);
+                        batch_paths.push_back(std::move(path));
+                        batch_eval_indices.push_back(eval_node_idx);
+                    }
+                }
+            }
+            if (!batch_nodes.empty()) {
+                if constexpr (is_inference_server_v<Inference>) {
+                    // One lock for N requests!
+                    auto future = inference.submit_batch(batch_nodes);
+
+                    // Block here. With a fast model, the latency cost of blocking 
+                    // is lower than the overhead cost of managing futures queues.
+                    std::vector<float> results = future.get();
+
+                    for(size_t i=0; i<results.size(); ++i) {
+                        float val = results[i];
+                        uint32_t node_idx = batch_eval_indices[i];
+                        pool[node_idx].stats.set_nn_value(val);
+                        backpropagate(pool, batch_paths[i], val);
+                        games[batch_game_indices[i]].mcts_iterations_done++;
                     }
                 }
             }
@@ -1228,7 +1259,212 @@ void SelfPlayEngine::run_multi_arena(
               << games_per_sec << " games/s)\n";
 }
 
-// Explicit template instantiations for both inference types
+// ============================================================================
+// CompEngine Implementation
+// ============================================================================
+
+template<InferenceProvider Inference>
+void CompEngine::expand_with_priors(NodePool& pool, uint32_t node_idx, Inference& inference) {
+    StateNode& node = pool[node_idx];
+
+    size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
+    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+
+    if (node.is_expanded()) return;
+
+    EvalResult eval;
+    if constexpr (is_inference_server_v<Inference>) {
+        eval = inference.submit_full(&node).get();
+    } else {
+        eval = inference.evaluate_node(&node);
+    }
+
+    node.stats.set_nn_value(eval.value);
+    node.generate_valid_children();
+
+    if (!node.has_children()) return;
+
+    // Collect policy logits for legal moves
+    std::vector<std::pair<uint32_t, int>> child_actions;
+    float max_logit = -std::numeric_limits<float>::infinity();
+    bool flip = !node.is_p1_to_move();
+
+    for (uint32_t c = node.first_child; c != NULL_NODE; c = pool[c].next_sibling) {
+        int idx = move_to_action_index(pool[c].move);
+        idx = flip ? flip_action_index(idx) : idx;
+        if (idx >= 0 && idx < NUM_ACTIONS) {
+            child_actions.emplace_back(c, idx);
+            max_logit = std::max(max_logit, eval.policy[idx]);
+        }
+    }
+
+    if (child_actions.empty()) return;
+
+    // Softmax over legal moves only
+    float sum = 0.0f;
+    std::vector<float> exps(child_actions.size());
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        exps[i] = std::exp(eval.policy[child_actions[i].second] - max_logit);
+        sum += exps[i];
+    }
+    for (size_t i = 0; i < child_actions.size(); ++i) {
+        pool[child_actions[i].first].stats.prior = exps[i] / sum;
+    }
+}
+
+void CompEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value) {
+    for (auto it = path.rbegin(); it != path.rend(); ++it) {
+        pool[*it].stats.update(value);
+        value = -value;
+    }
+}
+
+template<InferenceProvider Inference>
+void CompEngine::run_iterations(NodePool& pool, uint32_t root_idx, 
+                                 Inference& inference, int iterations) {
+    MCTSConfig mcts_config;
+    mcts_config.c_puct = config_.c_puct;
+    mcts_config.fpu = config_.fpu;
+
+    const int batch_size = config_.eval_batch_size;
+
+    struct Pending {
+        std::vector<uint32_t> path;
+        uint32_t node_idx;
+        std::conditional_t<is_inference_server_v<Inference>, std::future<float>, char> future{};
+    };
+    std::vector<Pending> pending;
+    pending.reserve(batch_size);
+
+    auto flush = [&]() {
+        if (pending.empty()) return;
+
+        if constexpr (is_inference_server_v<Inference>) {
+            for (auto& p : pending) {
+                float v = p.future.get();
+                pool[p.node_idx].stats.set_nn_value(v);
+                backpropagate(pool, p.path, v);
+            }
+        } else {
+            std::vector<const StateNode*> to_eval;
+            std::vector<size_t> indices;
+
+            for (size_t i = 0; i < pending.size(); ++i) {
+                StateNode& n = pool[pending[i].node_idx];
+                if (n.stats.has_nn_value()) {
+                    backpropagate(pool, pending[i].path, n.stats.get_nn_value());
+                } else {
+                    to_eval.push_back(&n);
+                    indices.push_back(i);
+                }
+            }
+
+            if (!to_eval.empty()) {
+                auto vals = inference.evaluate_batch_values(to_eval);
+                for (size_t j = 0; j < indices.size(); ++j) {
+                    auto& p = pending[indices[j]];
+                    pool[p.node_idx].stats.set_nn_value(vals[j]);
+                    backpropagate(pool, p.path, vals[j]);
+                }
+            }
+        }
+        pending.clear();
+    };
+
+    for (int i = 0; i < iterations; ++i) {
+        std::vector<uint32_t> path;
+        path.reserve(64);
+        uint32_t cur = root_idx;
+
+        // Selection: descend tree via PUCT
+        while (cur != NULL_NODE) {
+            path.push_back(cur);
+            StateNode& n = pool[cur];
+            if (n.is_terminal() || !n.has_children()) break;
+            cur = select_child_puct(pool, cur, mcts_config);
+        }
+
+        if (path.empty()) continue;
+
+        uint32_t leaf = path.back();
+        StateNode& leaf_node = pool[leaf];
+
+        // Terminal: backprop known value
+        if (leaf_node.is_terminal()) {
+            backpropagate(pool, path, leaf_node.terminal_value);
+            continue;
+        }
+
+        // Expansion
+        if (!leaf_node.is_expanded()) {
+            expand_with_priors(pool, leaf, inference);
+        }
+
+        // Select child for evaluation
+        uint32_t eval_idx = leaf;
+        if (leaf_node.has_children()) {
+            uint32_t child = select_child_puct(pool, leaf, mcts_config);
+            if (child != NULL_NODE) {
+                path.push_back(child);
+                eval_idx = child;
+            }
+        }
+
+        // Queue or immediate backprop
+        StateNode& eval_node = pool[eval_idx];
+        if (eval_node.stats.has_nn_value()) {
+            backpropagate(pool, path, eval_node.stats.get_nn_value());
+        } else {
+            if constexpr (is_inference_server_v<Inference>) {
+                pending.push_back({std::move(path), eval_idx, inference.submit(&eval_node)});
+            } else {
+                pending.push_back({std::move(path), eval_idx, {}});
+            }
+            if (static_cast<int>(pending.size()) >= batch_size) {
+                flush();
+            }
+        }
+    }
+
+    flush();
+}
+
+template<InferenceProvider Inference>
+Move CompEngine::search(NodePool& pool, uint32_t root_idx, Inference& inference) {
+    return search(pool, root_idx, inference, config_.num_simulations);
+}
+
+template<InferenceProvider Inference>
+Move CompEngine::search(NodePool& pool, uint32_t root_idx, Inference& inference, 
+                        int num_simulations) {
+    if (root_idx == NULL_NODE) return Move{};
+
+    StateNode& root = pool[root_idx];
+    if (root.is_terminal()) return Move{};
+
+    // Ensure root is expanded with priors
+    expand_with_priors(pool, root_idx, inference);
+    if (!root.has_children()) return Move{};
+
+    // Run MCTS (future: split across num_threads)
+    run_iterations(pool, root_idx, inference, num_simulations);
+
+    // Select move with highest visit count (temperature = 0, deterministic)
+    return select_move_from_policy(compute_policy_from_visits(pool, root_idx, 0.0f), false);
+}
+
+// Explicit instantiations
+// competitive engine
+template void CompEngine::expand_with_priors<ModelInference>(NodePool&, uint32_t, ModelInference&);
+template void CompEngine::expand_with_priors<InferenceServer>(NodePool&, uint32_t, InferenceServer&);
+template void CompEngine::run_iterations<ModelInference>(NodePool&, uint32_t, ModelInference&, int);
+template void CompEngine::run_iterations<InferenceServer>(NodePool&, uint32_t, InferenceServer&, int);
+template Move CompEngine::search<ModelInference>(NodePool&, uint32_t, ModelInference&);
+template Move CompEngine::search<InferenceServer>(NodePool&, uint32_t, InferenceServer&);
+template Move CompEngine::search<ModelInference>(NodePool&, uint32_t, ModelInference&, int);
+template Move CompEngine::search<InferenceServer>(NodePool&, uint32_t, InferenceServer&, int);
+
+//selfplay engine
 template void SelfPlayEngine::run_mcts_iterations<ModelInference>(
     NodePool&, uint32_t, ModelInference&, int);
 template void SelfPlayEngine::run_mcts_iterations<InferenceServer>(

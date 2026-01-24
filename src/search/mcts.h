@@ -793,5 +793,65 @@ private:
     std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
 };
 
+// ============================================================================
+// Competitive Play Engine
+// ============================================================================
+
+/// Configuration for competitive play (human vs bot, bot vs bot evaluation)
+struct CompEngineConfig {
+    int num_simulations = 800;      // MCTS iterations per move
+    float c_puct = 1.5f;            // PUCT exploration constant
+    float fpu = 0.0f;               // First play urgency
+    int num_threads = 1;            // Worker threads (future: parallel search)
+    int eval_batch_size = 64;       // Batch size for NN evaluation
+};
+
+/// Performs fixed-simulation search from current position and returns
+/// plans for adding extra chunks of search during opponent's turn
+/// also should add pruning
+/// the strongest move (highest visit count, temperature=0).
+/// 
+class CompEngine {
+public:
+    explicit CompEngine(CompEngineConfig config = CompEngineConfig{})
+        : config_(std::move(config)) {}
+
+    /// Search for best move using MCTS with NN evaluation
+    /// 
+    /// @param pool Node pool containing the game tree
+    /// @param root_idx Current position to search from
+    /// @param inference NN inference provider
+    /// @return Best move by visit count, or invalid Move if terminal/no legal moves
+    template<InferenceProvider Inference>
+    [[nodiscard]] Move search(NodePool& pool, uint32_t root_idx, Inference& inference);
+
+    /// Search with explicit simulation count override
+    template<InferenceProvider Inference>
+    [[nodiscard]] Move search(NodePool& pool, uint32_t root_idx, Inference& inference, 
+                              int num_simulations);
+
+    /// Get/set configuration
+    [[nodiscard]] const CompEngineConfig& config() const noexcept { return config_; }
+    [[nodiscard]] CompEngineConfig& config() noexcept { return config_; }
+
+private:
+    /// Expand node and set NN-derived priors on children
+    template<InferenceProvider Inference>
+    void expand_with_priors(NodePool& pool, uint32_t node_idx, Inference& inference);
+
+    /// Backpropagate value up selection path (alternating perspective)
+    static void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
+
+    /// Run single-threaded MCTS iterations
+    template<InferenceProvider Inference>
+    void run_iterations(NodePool& pool, uint32_t root_idx, Inference& inference, int iterations);
+
+    CompEngineConfig config_;
+
+    // Striped mutexes for thread-safe expansion (future parallel search)
+    static constexpr size_t NUM_EXPANSION_MUTEXES = 64;
+    std::array<std::mutex, NUM_EXPANSION_MUTEXES> expansion_mutexes_;
+};
+
 
 } // namespace qbot

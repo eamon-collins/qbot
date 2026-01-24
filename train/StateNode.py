@@ -89,7 +89,6 @@ def load_qsamples_raw(file_path: str, max_count: int = None):
         if count == 0:
             return None
 
-        print(f"loading {count} samples of length {QSMP_DTYPE.itemsize}")
         raw_data = np.fromfile(f, dtype=QSMP_DTYPE, count=count)
 
     return raw_data

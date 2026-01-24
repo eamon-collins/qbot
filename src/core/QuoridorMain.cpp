@@ -240,11 +240,14 @@ initialize_tree(const Config& config) {
     }
 
     // Create new tree with root node
-    auto pool = std::make_unique<NodePool>();
+    auto pool_config = NodePool::Config{};
+    if (config.mode == RunMode::SelfPlay) {
+        pool_config.initial_capacity = 240'000'000;
+    }
+    auto pool = std::make_unique<NodePool>(pool_config);
     bool p1_starts = (config.player == 1);
     uint32_t root = pool->allocate(Move{}, NULL_NODE, p1_starts);
 
-    std::cout << "Created new tree (player " << config.player << " to move first)\n";
     return {std::move(pool), root};
 }
 
@@ -327,46 +330,46 @@ bool should_promote(int candidate_wins, int current_wins, double alpha = 0.06) {
 // Game Modes
 // ============================================================================
 
-/// Run interactive game against human
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
                     uint32_t root) {
-    // Create Game instance from the pool
-    Game game(std::move(pool), root);
-
-    // Connect to GUI
     GUIClient gui;
     GUIClient::Config gui_config;
     gui_config.host = "localhost";
     gui_config.port = 8765;
     gui_config.connect_timeout_ms = 5000;
-    gui_config.read_timeout_ms = 60000;  // 60 seconds for human to make a move
+    gui_config.read_timeout_ms = 60000;
 
     if (!gui.connect(gui_config)) {
         std::cerr << "Failed to connect to GUI: " << gui.last_error() << "\n";
-        std::cerr << "Please ensure the GUI server is running.\n";
         return 1;
     }
     std::cout << "Connected to GUI!\n\n";
 
-#ifdef QBOT_ENABLE_INFERENCE
-    // Load model for position evaluation if specified
+    // Load model
     std::unique_ptr<ModelInference> model;
     if (!config.model_file.empty()) {
         std::cout << "Loading model from: " << config.model_file << "\n";
         model = std::make_unique<ModelInference>(config.model_file);
-        if (model->is_ready()) {
-            std::cout << "Model loaded successfully!\n\n";
-            game.set_model(model.get());
-        } else {
-            std::cerr << "Warning: Failed to load model, using Q-values instead\n\n";
-            model.reset();
+        if (!model->is_ready()) {
+            std::cerr << "Failed to load model\n";
+            return 1;
         }
+        std::cout << "Model loaded. Using " << config.simulations_per_move 
+                  << " simulations per move.\n\n";
+    } else {
+        std::cerr << "Error: Model file required for interactive play\n";
+        return 1;
     }
-#endif
 
-    // Initialize the root node with starting game state
-    StateNode& root_node = game.pool()[root];
+    // Configure competitive engine
+    CompEngineConfig engine_config;
+    engine_config.num_simulations = config.simulations_per_move;
+    engine_config.c_puct = 1.5f;
+    engine_config.num_threads = config.num_threads;
+    CompEngine engine(engine_config);
+
+    StateNode& root_node = (*pool)[root];
     root_node.init_root(true);  // P1 (human) starts
 
     gui.send_start("Human", "Bot");
@@ -375,30 +378,22 @@ int run_interactive(const Config& config,
     bool game_over = false;
 
     while (!game_over) {
-        StateNode& current = game.pool()[current_idx];
+        StateNode& current = (*pool)[current_idx];
 
-        // Evaluate current position - use model if available, otherwise Q-value
-        float score = current.stats.Q(0.0f);
-#ifdef QBOT_ENABLE_INFERENCE
-        if (model && model->is_ready()) {
-            score = model->evaluate_node(&current).value;
-        }
-#endif
+        // Evaluate current position for display
+        float score = model->evaluate_node(&current).value;
         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
 
-        // Check for terminal state
         int result = current.game_over();
         if (result != 0) {
             game_over = true;
-            if (result == 1) {
-                std::cout << "\n*** HUMAN WINS! ***\n\n";
-            } else {
-                std::cout << "\n*** BOT WINS! ***\n\n";
-            }
+            std::cout << (result == 1 ? "\n*** HUMAN WINS! ***\n\n" 
+                                      : "\n*** BOT WINS! ***\n\n");
             break;
         }
 
         if (current.is_p1_to_move()) {
+            // Human's turn
             bool valid_move = false;
             while (!valid_move) {
                 auto gui_move_opt = gui.request_move(0);
@@ -415,20 +410,8 @@ int run_interactive(const Config& config,
 
                 Move move = GUIClient::to_engine_move(gui_move);
 
-                // Validate the move
                 if (!current.is_move_valid(move)) {
-                    std::cout << "ILLEGAL MOVE! ";
-                    if (move.is_pawn()) {
-                        std::cout << "Pawn move to (" << static_cast<int>(move.row())
-                                  << ", " << static_cast<int>(move.col()) << ")";
-                    } else {
-                        std::cout << (move.is_horizontal() ? "H" : "V") << " fence at ("
-                                  << static_cast<int>(move.row()) << ", "
-                                  << static_cast<int>(move.col()) << ")";
-                    }
-                    std::cout << " is not legal. Try again.\n";
-
-                    // Re-send gamestate to GUI so it can reset and let user try again
+                    std::cout << "ILLEGAL MOVE! Try again.\n";
                     gui.send_gamestate(current, 0, score);
                     continue;
                 }
@@ -436,7 +419,7 @@ int run_interactive(const Config& config,
                 if (move.is_fence()) {
                     Pathfinder& pf = get_pathfinder();
                     if (!pf.check_paths_with_fence(current, move)) {
-                        std::cout << "ILLEGAL MOVE! Fence would block a player's path to goal. Try again.\n";
+                        std::cout << "ILLEGAL MOVE! Fence would block path. Try again.\n";
                         gui.send_gamestate(current, 0, score);
                         continue;
                     }
@@ -445,17 +428,24 @@ int run_interactive(const Config& config,
                 valid_move = true;
                 move.print("Human");
 
-                // Find or create the child node for this move
                 uint32_t next_idx = current.find_or_create_child(move);
                 if (next_idx == NULL_NODE) {
-                    std::cerr << "Error: Failed to create child node for move\n";
+                    std::cerr << "Error: Failed to create child node\n";
                     return 1;
                 }
                 current_idx = next_idx;
             }
         } else {
-            // Bot's turn - Game::select_best_move handles model if set
-            Move move = game.select_best_move(current_idx);
+            // Bot's turn - MCTS search
+            std::cout << "Thinking (" << config.simulations_per_move << " simulations)...\n";
+            auto start = std::chrono::steady_clock::now();
+
+            Move move = engine.search(*pool, current_idx, *model);
+
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+            std::cout << "Search completed in " << ms << " ms\n";
+
             if (!move.is_valid()) {
                 std::cerr << "Error: Bot has no valid moves\n";
                 return 1;
@@ -465,24 +455,178 @@ int run_interactive(const Config& config,
 
             uint32_t next_idx = current.find_or_create_child(move);
             if (next_idx == NULL_NODE) {
-                std::cerr << "Error: Failed to create child node for bot's move\n";
+                std::cerr << "Error: Failed to create child node\n";
                 return 1;
             }
             current_idx = next_idx;
         }
     }
 
-    // Send final state to GUI
-    StateNode& final_state = game.pool()[current_idx];
+    StateNode& final_state = (*pool)[current_idx];
     gui.send_gamestate(final_state, -1, final_state.terminal_value);
 
-    // Optionally save tree
     if (!config.save_file.empty() && config.verbose) {
-        save_tree(game.pool(), root, config.save_file);
+        save_tree(*pool, root, config.save_file);
     }
 
     return 0;
 }
+// /// Run interactive game against human
+// int run_interactive(const Config& config,
+//                     std::unique_ptr<NodePool> pool,
+//                     uint32_t root) {
+//     // Create Game instance from the pool
+//     Game game(std::move(pool), root);
+//
+//     // Connect to GUI
+//     GUIClient gui;
+//     GUIClient::Config gui_config;
+//     gui_config.host = "localhost";
+//     gui_config.port = 8765;
+//     gui_config.connect_timeout_ms = 5000;
+//     gui_config.read_timeout_ms = 60000;  // 60 seconds for human to make a move
+//
+//     if (!gui.connect(gui_config)) {
+//         std::cerr << "Failed to connect to GUI: " << gui.last_error() << "\n";
+//         std::cerr << "Please ensure the GUI server is running.\n";
+//         return 1;
+//     }
+//     std::cout << "Connected to GUI!\n\n";
+//
+// #ifdef QBOT_ENABLE_INFERENCE
+//     // Load model for position evaluation if specified
+//     std::unique_ptr<ModelInference> model;
+//     if (!config.model_file.empty()) {
+//         std::cout << "Loading model from: " << config.model_file << "\n";
+//         model = std::make_unique<ModelInference>(config.model_file);
+//         if (model->is_ready()) {
+//             std::cout << "Model loaded successfully!\n\n";
+//             game.set_model(model.get());
+//         } else {
+//             std::cerr << "Warning: Failed to load model, using Q-values instead\n\n";
+//             model.reset();
+//         }
+//     }
+// #endif
+//
+//     // Initialize the root node with starting game state
+//     StateNode& root_node = game.pool()[root];
+//     root_node.init_root(true);  // P1 (human) starts
+//
+//     gui.send_start("Human", "Bot");
+//
+//     uint32_t current_idx = root;
+//     bool game_over = false;
+//
+//     while (!game_over) {
+//         StateNode& current = game.pool()[current_idx];
+//
+//         // Evaluate current position - use model if available, otherwise Q-value
+//         float score = current.stats.Q(0.0f);
+// #ifdef QBOT_ENABLE_INFERENCE
+//         if (model && model->is_ready()) {
+//             score = model->evaluate_node(&current).value;
+//         }
+// #endif
+//         gui.send_gamestate(current, current.is_p1_to_move() ? 0 : 1, score);
+//
+//         // Check for terminal state
+//         int result = current.game_over();
+//         if (result != 0) {
+//             game_over = true;
+//             if (result == 1) {
+//                 std::cout << "\n*** HUMAN WINS! ***\n\n";
+//             } else {
+//                 std::cout << "\n*** BOT WINS! ***\n\n";
+//             }
+//             break;
+//         }
+//
+//         if (current.is_p1_to_move()) {
+//             bool valid_move = false;
+//             while (!valid_move) {
+//                 auto gui_move_opt = gui.request_move(0);
+//                 if (!gui_move_opt) {
+//                     std::cerr << "Failed to get move from GUI: " << gui.last_error() << "\n";
+//                     return 1;
+//                 }
+//
+//                 auto gui_move = *gui_move_opt;
+//                 if (gui_move.type == GUIClient::GUIMove::Type::Quit) {
+//                     std::cout << "Quit received from GUI.\n";
+//                     return 0;
+//                 }
+//
+//                 Move move = GUIClient::to_engine_move(gui_move);
+//
+//                 // Validate the move
+//                 if (!current.is_move_valid(move)) {
+//                     std::cout << "ILLEGAL MOVE! ";
+//                     if (move.is_pawn()) {
+//                         std::cout << "Pawn move to (" << static_cast<int>(move.row())
+//                                   << ", " << static_cast<int>(move.col()) << ")";
+//                     } else {
+//                         std::cout << (move.is_horizontal() ? "H" : "V") << " fence at ("
+//                                   << static_cast<int>(move.row()) << ", "
+//                                   << static_cast<int>(move.col()) << ")";
+//                     }
+//                     std::cout << " is not legal. Try again.\n";
+//
+//                     // Re-send gamestate to GUI so it can reset and let user try again
+//                     gui.send_gamestate(current, 0, score);
+//                     continue;
+//                 }
+//
+//                 if (move.is_fence()) {
+//                     Pathfinder& pf = get_pathfinder();
+//                     if (!pf.check_paths_with_fence(current, move)) {
+//                         std::cout << "ILLEGAL MOVE! Fence would block a player's path to goal. Try again.\n";
+//                         gui.send_gamestate(current, 0, score);
+//                         continue;
+//                     }
+//                 }
+//
+//                 valid_move = true;
+//                 move.print("Human");
+//
+//                 // Find or create the child node for this move
+//                 uint32_t next_idx = current.find_or_create_child(move);
+//                 if (next_idx == NULL_NODE) {
+//                     std::cerr << "Error: Failed to create child node for move\n";
+//                     return 1;
+//                 }
+//                 current_idx = next_idx;
+//             }
+//         } else {
+//             // Bot's turn - Game::select_best_move handles model if set
+//             Move move = game.select_best_move(current_idx);
+//             if (!move.is_valid()) {
+//                 std::cerr << "Error: Bot has no valid moves\n";
+//                 return 1;
+//             }
+//
+//             move.print("Bot");
+//
+//             uint32_t next_idx = current.find_or_create_child(move);
+//             if (next_idx == NULL_NODE) {
+//                 std::cerr << "Error: Failed to create child node for bot's move\n";
+//                 return 1;
+//             }
+//             current_idx = next_idx;
+//         }
+//     }
+//
+//     // Send final state to GUI
+//     StateNode& final_state = game.pool()[current_idx];
+//     gui.send_gamestate(final_state, -1, final_state.terminal_value);
+//
+//     // Optionally save tree
+//     if (!config.save_file.empty() && config.verbose) {
+//         save_tree(game.pool(), root, config.save_file);
+//     }
+//
+//     return 0;
+// }
 
 #ifdef QBOT_ENABLE_INFERENCE
 
@@ -674,7 +818,7 @@ int run_arena(const Config& config) {
     // Create inference servers for both models
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
-    server_config.max_wait_ms = 0.1;
+    server_config.max_wait_ms = 2.0;
 
     // Candidate server (will be P1 in even games, tracked as p1_wins)
     InferenceServer candidate_server(config.candidate_model, server_config);
@@ -854,7 +998,7 @@ int run_selfplay(const Config& config,
     // Create inference server for batched GPU access
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
-    server_config.max_wait_ms = 0.5;
+    server_config.max_wait_ms = 2.0;
     InferenceServer server(config.model_file, server_config);
     server.start();
 
@@ -900,10 +1044,10 @@ int run_selfplay(const Config& config,
 
     // Extract final training samples from the last tree (if any remain)
     //
-    auto tree_samples = extract_samples_from_tree(*pool, root);
-    for (auto& sample : tree_samples) {
-        collector.add_sample_direct(std::move(sample));
-    }
+    // auto tree_samples = extract_samples_from_tree(*pool, root);
+    // for (auto& sample : tree_samples) {
+    //     collector.add_sample_direct(std::move(sample));
+    // }
     if (!samples_file.empty() && collector.size() > 0) {
         auto result = TrainingSampleStorage::save(samples_file, collector.samples());
         if (!result) {

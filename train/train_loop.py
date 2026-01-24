@@ -460,7 +460,6 @@ def main():
     # Use GPU if available
     if torch.cuda.is_available():
         model.cuda()
-        logging.info("Using CUDA")
 
     # Export initial model if needed
     if not current_best_pt.exists():
