@@ -573,6 +573,7 @@ struct SelfPlayConfig {
     return NULL_NODE;
 }
 
+inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx);
 inline void apply_policy_to_children(
     NodePool& pool,
     uint32_t node_idx,
@@ -678,15 +679,41 @@ public:
         std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
         int checkpoint_interval_games = 10);
 
-    struct GameContext {
-        uint32_t current_node;
-        std::vector<uint32_t> game_path;
-        std::vector<uint32_t> sample_positions;
+    // struct GameContext {
+    //     uint32_t current_node;
+    //     std::vector<uint32_t> game_path;
+    //     std::vector<uint32_t> sample_positions;
+    //     int num_moves{0};
+    //     bool active{true};
+    //     bool needs_expansion{false};
+    //     bool needs_mcts{false};
+    //     int mcts_iterations_done{0};
+    // };
+    struct PerGameContext {
+        uint32_t root_idx{NULL_NODE};           // This game's tree root (changes each move)
+        uint32_t original_root{NULL_NODE};      // The very first root (for final cleanup)
+        std::vector<uint32_t> game_path;        // Path of played moves for training samples
+        
+        // Store samples as we go (state + policy), outcome added at game end
+        struct PendingSample {
+            CompactState state;
+            std::array<float, NUM_ACTIONS> policy;
+        };
+        std::vector<PendingSample> pending_samples;
+        
         int num_moves{0};
-        bool active{true};
-        bool needs_expansion{false};
-        bool needs_mcts{false};
+        bool active{false};
         int mcts_iterations_done{0};
+        
+        void reset() {
+            root_idx = NULL_NODE;
+            original_root = NULL_NODE;
+            game_path.clear();
+            pending_samples.clear();
+            num_moves = 0;
+            active = false;
+            mcts_iterations_done = 0;
+        }
     };
 
     struct MultiGameWorkerSync {

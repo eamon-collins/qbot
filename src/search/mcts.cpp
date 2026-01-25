@@ -964,11 +964,9 @@ void SelfPlayEngine::run_multi_game_worker(
 {
     auto& timers = get_timers();
 
-    std::vector<GameContext> games(games_per_worker);
+    std::vector<PerGameContext> games(games_per_worker);
     int active_games = 0;
 
-    // check_pause only handles explicit pause_requested (not used in current flow)
-    // The draining logic is handled separately when active_games == 0
     auto check_pause = [&]() -> bool {
         if (stop_token.stop_requested()) return true;
 
@@ -986,17 +984,21 @@ void SelfPlayEngine::run_multi_game_worker(
 
             if (stop_token.stop_requested()) return true;
 
-            // Pool was reset - invalidate all games
+            // Pool was reset - cleanup and invalidate all games
             for (auto& g : games) {
-                if (g.active) active_games--;
-                g.active = false;
+                if (g.active) {
+                    // Tree was already cleared by pool reset, just mark inactive
+                    active_games--;
+                }
+                g.reset();
             }
             return true;
         }
         return false;
     };
 
-    auto try_claim_game = [&](GameContext& g) -> bool {
+    // Create a fresh root for a new game by copying initial state
+    auto create_game_root = [&](PerGameContext& g) -> bool {
         if (sync.draining.load(std::memory_order_acquire)) return false;
 
         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
@@ -1005,37 +1007,69 @@ void SelfPlayEngine::run_multi_game_worker(
             return false;
         }
 
-        uint32_t root = sync.current_root.load(std::memory_order_acquire);
-        g.current_node = root;
+        // Allocate a fresh root for this game
+        uint32_t root = pool.allocate();
+        if (root == NULL_NODE) {
+            games_remaining.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        
+        // Initialize as starting position
+        pool[root].init_root(true);  // P1 starts
+        pool[root].set_on_game_path();
+        
+        g.root_idx = root;
+        g.original_root = root;
         g.game_path.clear();
         g.game_path.push_back(root);
-        g.sample_positions.clear();
         g.num_moves = 0;
         g.active = true;
-        g.needs_expansion = false;
-        g.needs_mcts = false;
         g.mcts_iterations_done = 0;
-        pool[root].set_on_game_path();
 
         sync.total_active_games.fetch_add(1, std::memory_order_relaxed);
         return true;
     };
 
-    auto finish_game = [&](GameContext& g, SelfPlayResult result) {
-        if (result.winner != 0 && !result.error) {
-            backpropagate_game_outcome(pool, g.game_path, result.winner);
-            
-            float value = static_cast<float>(result.winner);
-            for (size_t i = g.game_path.size(); i > 0; --i) {
-                uint32_t idx = g.game_path[i - 1];
-                StateNode& n = pool[idx];
-                float node_value = n.is_p1_to_move() ? value : -value;
-                n.stats.update(node_value);
+    auto finish_game = [&](PerGameContext& g, SelfPlayResult result) {
+        // Finalize training samples with game outcome
+        if (collector && !result.error && result.winner != 0) {
+            for (size_t i = 0; i < g.pending_samples.size(); ++i) {
+                auto& pending = g.pending_samples[i];
+                
+                // Determine outcome from this position's perspective
+                // pending_samples[i] corresponds to game_path[i]
+                // We need to know whose turn it was at that position
+                bool was_p1_turn = (pending.state.flags & StateNode::FLAG_P1_TO_MOVE) != 0;
+                float outcome = was_p1_turn 
+                    ? static_cast<float>(result.winner) 
+                    : static_cast<float>(-result.winner);
+                
+                TrainingSample sample;
+                sample.state = pending.state;
+                sample.policy = pending.policy;
+                
+                // Record as win or loss
+                if (outcome > 0) {
+                    sample.wins = 1;
+                    sample.losses = 0;
+                    sample.value = 1.0f;
+                } else {
+                    sample.wins = 0;
+                    sample.losses = 1;
+                    sample.value = -1.0f;
+                }
+                
+                collector->add_sample_direct(std::move(sample));
             }
         }
 
+        // Deallocate entire game tree
+        if (g.original_root != NULL_NODE) {
+            pool.deallocate_subtree(g.original_root);
+        }
+
         stats.add_result(result);
-        g.active = false;
+        g.reset();
         active_games--;
         sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
     };
@@ -1044,25 +1078,24 @@ void SelfPlayEngine::run_multi_game_worker(
     mcts_config.c_puct = config_.c_puct;
     mcts_config.fpu = config_.fpu;
 
-    // Pending expansion: we hit a leaf during MCTS and need to expand+evaluate it
     struct PendingExpansion {
         int game_idx;
-        std::vector<uint32_t> path;  // Path from game's current_node to the leaf
+        std::vector<uint32_t> path;
         uint32_t leaf_idx;
         std::future<EvalResult> future;
     };
 
     if (check_pause()) return;
 
+    // Initialize games
     for (auto& g : games) {
-        if (try_claim_game(g)) active_games++;
+        if (create_game_root(g)) active_games++;
     }
 
     while (!stop_token.stop_requested()) {
-        // Try to claim more games if we have capacity
+        // Handle no active games
         if (active_games == 0) {
             if (sync.draining.load(std::memory_order_acquire)) {
-                // All our games finished while draining - enter pause state
                 std::cerr << "[Worker] All games finished, entering pause (draining)\n";
                 sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
                 {
@@ -1079,13 +1112,13 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (stop_token.stop_requested()) break;
 
                 for (auto& g : games) {
-                    if (!g.active && try_claim_game(g)) active_games++;
+                    if (!g.active && create_game_root(g)) active_games++;
                 }
                 if (active_games == 0) break;
                 continue;
             } else {
                 for (auto& g : games) {
-                    if (!g.active && try_claim_game(g)) active_games++;
+                    if (!g.active && create_game_root(g)) active_games++;
                 }
                 if (active_games == 0) break;
                 continue;
@@ -1093,15 +1126,15 @@ void SelfPlayEngine::run_multi_game_worker(
         }
 
         // ============================================================
-        // Phase 1: Check for terminal states and expand root if needed
+        // Phase 1: Check terminals and expand roots if needed
         // ============================================================
         std::vector<PendingExpansion> pending_root_expansions;
 
         for (int gi = 0; gi < games_per_worker; ++gi) {
-            GameContext& g = games[gi];
+            PerGameContext& g = games[gi];
             if (!g.active) continue;
 
-            StateNode& node = pool[g.current_node];
+            StateNode& node = pool[g.root_idx];
 
             // Check terminal conditions
             if (node.is_terminal()) {
@@ -1110,7 +1143,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.winner = node.is_p1_to_move() ? rel : -rel;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
@@ -1120,7 +1153,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.winner = 1;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
@@ -1130,7 +1163,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.winner = -1;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
@@ -1141,7 +1174,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.winner = node.is_p1_to_move() ? rel : -rel;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
@@ -1152,30 +1185,18 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.winner = 0;
                 result.draw_score = abs * config_.max_draw_reward;
                 result.num_moves = g.num_moves;
-
-                float game_value = result.draw_score;
-                for (size_t i = g.game_path.size(); i > 0; --i) {
-                    StateNode& n = pool[g.game_path[i - 1]];
-                    float nv = n.is_p1_to_move() ? game_value : -game_value;
-                    n.stats.update(nv);
-                }
-                stats.add_result(result);
-                g.active = false;
-                active_games--;
-                sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
-                if (try_claim_game(g)) active_games++;
+                finish_game(g, result);
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
-            // Expand root (game's current position) if not already expanded
+            // Expand root if needed
             if (!node.is_expanded()) {
                 if constexpr (is_inference_server_v<Inference>) {
                     auto future = inference.submit_full(&node);
-                    pending_root_expansions.push_back({gi, {}, g.current_node, std::move(future)});
+                    pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future)});
                 }
-                g.needs_mcts = false;  // Wait for expansion
             } else {
-                g.needs_mcts = true;
                 g.mcts_iterations_done = 0;
             }
         }
@@ -1187,14 +1208,12 @@ void SelfPlayEngine::run_multi_game_worker(
             }
 
             for (auto& pe : pending_root_expansions) {
-                GameContext& g = games[pe.game_idx];
+                PerGameContext& g = games[pe.game_idx];
                 StateNode& node = pool[pe.leaf_idx];
 
                 EvalResult eval = pe.future.get();
 
-                size_t mutex_idx = pe.leaf_idx % NUM_EXPANSION_MUTEXES;
-                std::lock_guard lock(expansion_mutexes_[mutex_idx]);
-
+                // No mutex needed - this is our private tree
                 if (!node.is_expanded()) {
                     node.stats.set_nn_value(eval.value);
                     node.generate_valid_children();
@@ -1204,7 +1223,6 @@ void SelfPlayEngine::run_multi_game_worker(
                     }
                 }
 
-                g.needs_mcts = node.has_children();
                 g.mcts_iterations_done = 0;
             }
         }
@@ -1212,16 +1230,8 @@ void SelfPlayEngine::run_multi_game_worker(
         if (check_pause()) continue;
 
         // ============================================================
-        // Phase 2: MCTS simulations with batched leaf expansion
+        // Phase 2: MCTS simulations
         // ============================================================
-        // 
-        // Each simulation:
-        //   1. Select from root to leaf using PUCT
-        //   2. If leaf unexpanded: expand and evaluate (get value + policy)
-        //   3. Backup the leaf value
-        //
-        // We batch the leaf evaluations across all games for GPU efficiency.
-
         std::vector<PendingExpansion> pending_leaf_expansions;
         constexpr int MAX_PENDING = 256;
         int iterations_since_pause_check = 0;
@@ -1235,28 +1245,21 @@ void SelfPlayEngine::run_multi_game_worker(
             }
 
             for (auto& pe : pending_leaf_expansions) {
-                GameContext& g = games[pe.game_idx];
+                PerGameContext& g = games[pe.game_idx];
                 StateNode& leaf = pool[pe.leaf_idx];
 
                 EvalResult eval = pe.future.get();
 
-                // Expand the leaf and set priors
-                {
-                    size_t mutex_idx = pe.leaf_idx % NUM_EXPANSION_MUTEXES;
-                    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+                // No mutex needed - this is our private tree
+                if (!leaf.is_expanded()) {
+                    leaf.stats.set_nn_value(eval.value);
+                    leaf.generate_valid_children();
 
-                    if (!leaf.is_expanded()) {
-                        leaf.stats.set_nn_value(eval.value);
-                        leaf.generate_valid_children();
-
-                        if (leaf.has_children()) {
-                            apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
-                        }
+                    if (leaf.has_children()) {
+                        apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
                     }
                 }
 
-                // Backup the leaf's value up the path
-                // Value is from leaf's perspective (current player at leaf)
                 backpropagate(pool, pe.path, eval.value);
                 g.mcts_iterations_done++;
             }
@@ -1269,12 +1272,11 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (check_pause()) break;
             }
 
-            // Check if all games have completed their MCTS
+            // Check if all games have completed MCTS
             bool any_needs_mcts = false;
             for (int gi = 0; gi < games_per_worker; ++gi) {
-                GameContext& g = games[gi];
-                if (g.active && g.needs_mcts &&
-                    g.mcts_iterations_done < config_.simulations_per_move) {
+                PerGameContext& g = games[gi];
+                if (g.active && g.mcts_iterations_done < config_.simulations_per_move) {
                     any_needs_mcts = true;
                     break;
                 }
@@ -1286,22 +1288,22 @@ void SelfPlayEngine::run_multi_game_worker(
 
             // Run one simulation for each active game
             for (int gi = 0; gi < games_per_worker; ++gi) {
-                GameContext& g = games[gi];
-                if (!g.active || !g.needs_mcts) continue;
+                PerGameContext& g = games[gi];
+                if (!g.active) continue;
                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 
-                // SELECT: traverse from current position to a leaf
+                // SELECT: traverse from root to leaf
                 std::vector<uint32_t> path;
                 path.reserve(64);
-                uint32_t current = g.current_node;
+                uint32_t current = g.root_idx;
 
                 while (current != NULL_NODE) {
                     path.push_back(current);
                     StateNode& n = pool[current];
 
                     if (n.is_terminal()) break;
-                    if (!n.is_expanded()) break;  // Leaf: not yet expanded
-                    if (!n.has_children()) break; // Expanded but no valid moves (shouldn't happen)
+                    if (!n.is_expanded()) break;
+                    if (!n.has_children()) break;
 
                     current = select_child_puct(pool, current, mcts_config);
                 }
@@ -1311,32 +1313,27 @@ void SelfPlayEngine::run_multi_game_worker(
                 uint32_t leaf_idx = path.back();
                 StateNode& leaf = pool[leaf_idx];
 
-                // Terminal: backup known value immediately
                 if (leaf.is_terminal()) {
                     backpropagate(pool, path, leaf.terminal_value);
                     g.mcts_iterations_done++;
                     continue;
                 }
 
-                // Already expanded (race with another thread): use cached value
                 if (leaf.is_expanded()) {
                     if (leaf.stats.has_nn_value()) {
                         backpropagate(pool, path, leaf.stats.get_nn_value());
                         g.mcts_iterations_done++;
                     }
-                    // If no cached value, we'll hit it again next iteration
                     continue;
                 }
 
-                // EXPAND + EVALUATE: submit for NN evaluation
-                // The NN will give us both value (for backup) and policy (for priors)
+                // EXPAND + EVALUATE
                 if constexpr (is_inference_server_v<Inference>) {
                     auto future = inference.submit_full(&leaf);
                     pending_leaf_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future)});
                 }
             }
 
-            // Flush when batch is full or we've collected from all active games
             if (pending_leaf_expansions.size() >= MAX_PENDING ||
                 pending_leaf_expansions.size() >= static_cast<size_t>(active_games)) {
                 flush_leaf_expansions();
@@ -1346,38 +1343,42 @@ void SelfPlayEngine::run_multi_game_worker(
         if (check_pause()) continue;
 
         // ============================================================
-        // Phase 3: Select moves and advance games
+        // Phase 3: Select moves, prune siblings, advance games
         // ============================================================
         for (int gi = 0; gi < games_per_worker; ++gi) {
-            GameContext& g = games[gi];
-            if (!g.active || !g.needs_mcts) continue;
+            PerGameContext& g = games[gi];
+            if (!g.active) continue;
             if (g.mcts_iterations_done < config_.simulations_per_move) continue;
 
-            // Record this position for training samples
-            if (collector) {
-                g.sample_positions.push_back(g.current_node);
+            StateNode& root = pool[g.root_idx];
+            
+            // Collect sample BEFORE pruning (we need all children for visit distribution)
+            if (collector && root.has_children()) {
+                PerGameContext::PendingSample pending;
+                pending.state = extract_compact_state(root);
+                pending.policy = extract_visit_distribution(pool, g.root_idx);
+                g.pending_samples.push_back(std::move(pending));
             }
 
-            // Compute move probabilities from visit counts
+            // Compute move from visit counts
             float temp = (g.num_moves < config_.temperature_drop_ply)
                        ? config_.temperature : 0.0f;
-            auto policy = compute_policy_from_visits(pool, g.current_node, temp);
+            auto policy = compute_policy_from_visits(pool, g.root_idx, temp);
 
             if (policy.empty()) {
                 SelfPlayResult result;
                 result.error = true;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
             Move selected = select_move_from_policy(policy, config_.stochastic && temp > 0);
 
-            // Find the child corresponding to the selected move
+            // Find the chosen child
             uint32_t next = NULL_NODE;
-            StateNode& node = pool[g.current_node];
-            uint32_t child = node.first_child;
+            uint32_t child = root.first_child;
             while (child != NULL_NODE) {
                 if (pool[child].move == selected) {
                     next = child;
@@ -1391,18 +1392,51 @@ void SelfPlayEngine::run_multi_game_worker(
                 result.error = true;
                 result.num_moves = g.num_moves;
                 finish_game(g, result);
-                if (try_claim_game(g)) active_games++;
+                if (create_game_root(g)) active_games++;
                 continue;
             }
 
-            // Advance the game
-            g.current_node = next;
+            // PRUNE: Deallocate all siblings of the chosen move
+            // This is safe because no other thread touches this game's tree
+            prune_siblings(pool, g.root_idx, next);
+
+            // Advance: the chosen child becomes the new root
+            // The old root is now a single-child node above the new root
+            // We keep it in game_path for training sample extraction
             g.game_path.push_back(next);
             pool[next].set_on_game_path();
+            g.root_idx = next;
             g.num_moves++;
-            g.needs_mcts = false;
+            g.mcts_iterations_done = 0;
         }
     }
+
+    // Cleanup any remaining game trees
+    for (auto& g : games) {
+        if (g.active && g.original_root != NULL_NODE) {
+            pool.deallocate_subtree(g.original_root);
+            sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx) {
+    StateNode& parent = pool[parent_idx];
+
+    uint32_t child = parent.first_child;
+    while (child != NULL_NODE) {
+        uint32_t next_sib = pool[child].next_sibling;
+
+        if (child != keep_child_idx) {
+            pool.deallocate_subtree(child);
+        }
+
+        child = next_sib;
+    }
+
+    // Update parent to only have the kept child
+    parent.first_child = keep_child_idx;
+    pool[keep_child_idx].next_sibling = NULL_NODE;
 }
 
 inline void apply_policy_to_children(
@@ -1413,7 +1447,6 @@ inline void apply_policy_to_children(
 {
     bool flip_policy = !node.is_p1_to_move();
 
-    // Collect children and find max logit for numerical stability
     std::vector<std::pair<uint32_t, int>> child_actions;
     float max_logit = -std::numeric_limits<float>::infinity();
 
@@ -1432,7 +1465,6 @@ inline void apply_policy_to_children(
 
     if (child_actions.empty()) return;
 
-    // Softmax over valid actions only
     float sum_exp = 0.0f;
     std::vector<float> exp_logits(child_actions.size());
     for (size_t i = 0; i < child_actions.size(); ++i) {
@@ -1441,13 +1473,11 @@ inline void apply_policy_to_children(
         sum_exp += exp_logits[i];
     }
 
-    // Set priors
     for (size_t i = 0; i < child_actions.size(); ++i) {
         uint32_t child_idx = child_actions[i].first;
         pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
     }
 }
-
 // ============================================================================
 // Arena Implementation (two models playing against each other)
 // ============================================================================
