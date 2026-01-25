@@ -574,6 +574,8 @@ struct SelfPlayConfig {
 }
 
 inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx);
+inline void prune_siblings_collect(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx, std::vector<uint32_t>& freed_nodes);
+inline void collect_subtree_nodes(NodePool& pool, uint32_t root_idx, std::vector<uint32_t>& out);
 inline void apply_policy_to_children(
     NodePool& pool,
     uint32_t node_idx,
@@ -693,18 +695,18 @@ public:
         uint32_t root_idx{NULL_NODE};           // This game's tree root (changes each move)
         uint32_t original_root{NULL_NODE};      // The very first root (for final cleanup)
         std::vector<uint32_t> game_path;        // Path of played moves for training samples
-        
+
         // Store samples as we go (state + policy), outcome added at game end
         struct PendingSample {
             CompactState state;
             std::array<float, NUM_ACTIONS> policy;
         };
         std::vector<PendingSample> pending_samples;
-        
+
         int num_moves{0};
         bool active{false};
         int mcts_iterations_done{0};
-        
+
         void reset() {
             root_idx = NULL_NODE;
             original_root = NULL_NODE;
@@ -714,6 +716,11 @@ public:
             active = false;
             mcts_iterations_done = 0;
         }
+    };
+
+    struct DeferredPrune {
+        uint32_t parent_idx;
+        uint32_t keep_child_idx;
     };
 
     struct MultiGameWorkerSync {

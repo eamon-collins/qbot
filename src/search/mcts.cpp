@@ -433,7 +433,6 @@ void SelfPlayEngine::run_multi_game(
     }
     std::cout << "\n";
 }
-// In mcts.cpp:
 
 // template<InferenceProvider Inference>
 // void SelfPlayEngine::run_multi_game_worker(
@@ -447,19 +446,18 @@ void SelfPlayEngine::run_multi_game(
 //     TrainingSampleCollector* collector)
 // {
 //     auto& timers = get_timers();
-//     std::vector<GameContext> games(games_per_worker);
+//
+//     std::vector<PerGameContext> games(games_per_worker);
 //     int active_games = 0;
 //
 //     auto check_pause = [&]() -> bool {
-//         if (stop_token.stop_requested()) {
-//             return true;
-//         }
+//         if (stop_token.stop_requested()) return true;
 //
 //         if (sync.pause_requested.load(std::memory_order_acquire)) {
 //             sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
 //             {
 //                 std::unique_lock lock(sync.pause_mutex);
-//                 sync.pause_cv.notify_all();  // Tell main thread we're paused
+//                 sync.pause_cv.notify_all();
 //                 sync.resume_cv.wait(lock, [&]() {
 //                     return !sync.pause_requested.load(std::memory_order_acquire) ||
 //                            stop_token.stop_requested();
@@ -469,22 +467,22 @@ void SelfPlayEngine::run_multi_game(
 //
 //             if (stop_token.stop_requested()) return true;
 //
-//             // Invalidate all games - pool was reset
-//             std::cerr << "invalidating games\n";
+//             // Pool was reset - cleanup and invalidate all games
 //             for (auto& g : games) {
-//                 if (g.active) active_games--;
-//                 g.active = false;
+//                 if (g.active) {
+//                     // Tree was already cleared by pool reset, just mark inactive
+//                     active_games--;
+//                 }
+//                 g.reset();
 //             }
-//             return true;  // Pause happened, reclaim games
+//             return true;
 //         }
 //         return false;
 //     };
 //
-//     auto try_claim_game = [&](GameContext& g) -> bool {
-//         // Don't claim new games while draining
-//         if (sync.draining.load(std::memory_order_acquire)) {
-//             return false;
-//         }
+//     // Create a fresh root for a new game by copying initial state
+//     auto create_game_root = [&](PerGameContext& g) -> bool {
+//         if (sync.draining.load(std::memory_order_acquire)) return false;
 //
 //         int remaining = games_remaining.fetch_sub(1, std::memory_order_relaxed);
 //         if (remaining <= 0) {
@@ -492,94 +490,96 @@ void SelfPlayEngine::run_multi_game(
 //             return false;
 //         }
 //
-//         uint32_t root = sync.current_root.load(std::memory_order_acquire);
-//         g.current_node = root;
+//         // Allocate a fresh root for this game
+//         uint32_t root = pool.allocate();
+//         if (root == NULL_NODE) {
+//             games_remaining.fetch_add(1, std::memory_order_relaxed);
+//             return false;
+//         }
+//
+//         // Initialize as starting position
+//         pool[root].init_root(true);  // P1 starts
+//         pool[root].set_on_game_path();
+//
+//         g.root_idx = root;
+//         g.original_root = root;
 //         g.game_path.clear();
 //         g.game_path.push_back(root);
-//         g.sample_positions.clear();
 //         g.num_moves = 0;
 //         g.active = true;
-//         g.needs_expansion = false;
-//         g.needs_mcts = false;
 //         g.mcts_iterations_done = 0;
-//         pool[root].set_on_game_path();
 //
 //         sync.total_active_games.fetch_add(1, std::memory_order_relaxed);
 //         return true;
 //     };
 //
-//     // auto finish_game = [&](GameContext& g, SelfPlayResult result) {
-//     //     if (result.winner != 0 && !result.error) {
-//     //         float value = static_cast<float>(result.winner);
-//     //         for (size_t i = g.game_path.size(); i > 0; --i) {
-//     //             uint32_t idx = g.game_path[i - 1];
-//     //             StateNode& n = pool[idx];
-//     //             float node_value = n.is_p1_to_move() ? value : -value;
-//     //             n.stats.update(node_value);
-//     //         }
-//     //     }
-//     //
-//     //     if (collector && result.winner != 0 && !result.error) {
-//     //         float game_outcome = static_cast<float>(result.winner);
-//     //     }
-//     //
-//     //     stats.add_result(result);
-//     //     g.active = false;
-//     //     active_games--;
-//     //     sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
-//     // };
+//     auto finish_game = [&](PerGameContext& g, SelfPlayResult result) {
+//         // Finalize training samples with game outcome
+//         if (collector && !result.error && result.winner != 0) {
+//             for (size_t i = 0; i < g.pending_samples.size(); ++i) {
+//                 auto& pending = g.pending_samples[i];
 //
-//     auto finish_game = [&](GameContext& g, SelfPlayResult result) {
-//         // Backpropagate actual game outcome for training targets
-//         if (result.winner != 0 && !result.error) {
-//             backpropagate_game_outcome(pool, g.game_path, result.winner);
-//         }
+//                 // Determine outcome from this position's perspective
+//                 // pending_samples[i] corresponds to game_path[i]
+//                 // We need to know whose turn it was at that position
+//                 bool was_p1_turn = (pending.state.flags & StateNode::FLAG_P1_TO_MOVE) != 0;
+//                 float outcome = was_p1_turn 
+//                     ? static_cast<float>(result.winner) 
+//                     : static_cast<float>(-result.winner);
 //
-//         if (result.winner != 0 && !result.error) {
-//             float value = static_cast<float>(result.winner);
-//             for (size_t i = g.game_path.size(); i > 0; --i) {
-//                 uint32_t idx = g.game_path[i - 1];
-//                 StateNode& n = pool[idx];
-//                 float node_value = n.is_p1_to_move() ? value : -value;
-//                 n.stats.update(node_value);
+//                 TrainingSample sample;
+//                 sample.state = pending.state;
+//                 sample.policy = pending.policy;
+//
+//                 // Record as win or loss
+//                 if (outcome > 0) {
+//                     sample.wins = 1;
+//                     sample.losses = 0;
+//                     sample.value = 1.0f;
+//                 } else {
+//                     sample.wins = 0;
+//                     sample.losses = 1;
+//                     sample.value = -1.0f;
+//                 }
+//
+//                 collector->add_sample_direct(std::move(sample));
 //             }
 //         }
 //
+//         // Deallocate entire game tree
+//         if (g.original_root != NULL_NODE) {
+//             pool.deallocate_subtree(g.original_root);
+//         }
+//
 //         stats.add_result(result);
-//         g.active = false;
+//         g.reset();
 //         active_games--;
 //         sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
 //     };
 //
-//     if (check_pause()) return;
-//
-//     for (auto& g : games) {
-//         if (try_claim_game(g)) {
-//             active_games++;
-//         }
-//     }
-//
-//     struct PendingEval {
-//         int game_idx;
-//         std::vector<uint32_t> path;
-//         uint32_t eval_node_idx;
-//         std::future<float> future;
-//     };
+//     MCTSConfig mcts_config;
+//     mcts_config.c_puct = config_.c_puct;
+//     mcts_config.fpu = config_.fpu;
 //
 //     struct PendingExpansion {
 //         int game_idx;
-//         uint32_t node_idx;
+//         std::vector<uint32_t> path;
+//         uint32_t leaf_idx;
 //         std::future<EvalResult> future;
 //     };
 //
-//     MCTSConfig mcts_config;
-//     mcts_config.c_puct = 1.5f;
-//     mcts_config.fpu = 0.0f;
+//     if (check_pause()) return;
 //
-//     while (! stop_token.stop_requested()) {
+//     // Initialize games
+//     for (auto& g : games) {
+//         if (create_game_root(g)) active_games++;
+//     }
+//
+//     while (!stop_token.stop_requested()) {
+//         // Handle no active games
 //         if (active_games == 0) {
 //             if (sync.draining.load(std::memory_order_acquire)) {
-//                 // Enter pause state, wait for drain to complete
+//                 std::cerr << "[Worker] All games finished, entering pause (draining)\n";
 //                 sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
 //                 {
 //                     std::unique_lock lock(sync.pause_mutex);
@@ -590,45 +590,43 @@ void SelfPlayEngine::run_multi_game(
 //                     });
 //                 }
 //                 sync.workers_paused.fetch_sub(1, std::memory_order_relaxed);
+//                 std::cerr << "[Worker] Resumed from pause\n";
 //
 //                 if (stop_token.stop_requested()) break;
 //
-//                 // Reclaim games after drain complete
 //                 for (auto& g : games) {
-//                     if (!g.active && try_claim_game(g)) {
-//                         active_games++;
-//                     }
+//                     if (!g.active && create_game_root(g)) active_games++;
 //                 }
-//                 if (active_games == 0) break;  // No more games to claim
+//                 if (active_games == 0) break;
 //                 continue;
 //             } else {
-//                 // Not draining, try to claim more games
 //                 for (auto& g : games) {
-//                     if (!g.active && try_claim_game(g)) {
-//                         active_games++;
-//                     }
+//                     if (!g.active && create_game_root(g)) active_games++;
 //                 }
-//                 if (active_games == 0) break;  // No more games available
+//                 if (active_games == 0) break;
 //                 continue;
 //             }
 //         }
 //
-//         std::vector<PendingExpansion> pending_expansions;
+//         // ============================================================
+//         // Phase 1: Check terminals and expand roots if needed
+//         // ============================================================
+//         std::vector<PendingExpansion> pending_root_expansions;
 //
-//         // Phase 1: Check terminals and submit expansions
 //         for (int gi = 0; gi < games_per_worker; ++gi) {
-//             GameContext& g = games[gi];
+//             PerGameContext& g = games[gi];
 //             if (!g.active) continue;
 //
-//             StateNode& node = pool[g.current_node];
+//             StateNode& node = pool[g.root_idx];
 //
+//             // Check terminal conditions
 //             if (node.is_terminal()) {
 //                 int rel = static_cast<int>(node.terminal_value);
 //                 SelfPlayResult result;
 //                 result.winner = node.is_p1_to_move() ? rel : -rel;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
@@ -638,7 +636,7 @@ void SelfPlayEngine::run_multi_game(
 //                 result.winner = 1;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
@@ -648,7 +646,7 @@ void SelfPlayEngine::run_multi_game(
 //                 result.winner = -1;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
@@ -659,7 +657,7 @@ void SelfPlayEngine::run_multi_game(
 //                 result.winner = node.is_p1_to_move() ? rel : -rel;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
@@ -670,107 +668,85 @@ void SelfPlayEngine::run_multi_game(
 //                 result.winner = 0;
 //                 result.draw_score = abs * config_.max_draw_reward;
 //                 result.num_moves = g.num_moves;
-//
-//                 float game_value = result.draw_score;
-//                 for (size_t i = g.game_path.size(); i > 0; --i) {
-//                     StateNode& n = pool[g.game_path[i - 1]];
-//                     float nv = n.is_p1_to_move() ? game_value : -game_value;
-//                     n.stats.update(nv);
-//                 }
-//                 stats.add_result(result);
-//                 g.active = false;
-//                 active_games--;
-//                 sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
-//                 if (try_claim_game(g)) active_games++;
+//                 finish_game(g, result);
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
+//             // Expand root if needed
 //             if (!node.is_expanded()) {
-//                 g.needs_expansion = true;
 //                 if constexpr (is_inference_server_v<Inference>) {
 //                     auto future = inference.submit_full(&node);
-//                     pending_expansions.push_back({gi, g.current_node, std::move(future)});
+//                     pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future)});
 //                 }
 //             } else {
-//                 g.needs_expansion = false;
-//                 g.needs_mcts = true;
 //                 g.mcts_iterations_done = 0;
 //             }
 //         }
 //
-//         // Force flush for expansions - don't wait for full batch
-//         if (!pending_expansions.empty()) {
+//         // Process root expansions
+//         if (!pending_root_expansions.empty()) {
 //             if constexpr (is_inference_server_v<Inference>) {
 //                 inference.flush();
 //             }
-//         }
 //
-//         for (auto& pe : pending_expansions) {
-//             GameContext& g = games[pe.game_idx];
-//             StateNode& node = pool[pe.node_idx];
+//             for (auto& pe : pending_root_expansions) {
+//                 PerGameContext& g = games[pe.game_idx];
+//                 StateNode& node = pool[pe.leaf_idx];
 //
-//             EvalResult eval = pe.future.get();
+//                 EvalResult eval = pe.future.get();
 //
-//             size_t mutex_idx = pe.node_idx % NUM_EXPANSION_MUTEXES;
-//             std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+//                 // No mutex needed - this is our private tree
+//                 if (!node.is_expanded()) {
+//                     node.stats.set_nn_value(eval.value);
+//                     node.generate_valid_children();
 //
-//             if (!node.is_expanded()) {
-//                 node.stats.set_nn_value(eval.value);
-//                 node.generate_valid_children();
-//
-//                 if (node.has_children()) {
-//                     bool flip = !node.is_p1_to_move();
-//                     std::vector<std::pair<uint32_t, int>> child_actions;
-//                     float max_logit = -std::numeric_limits<float>::infinity();
-//
-//                     uint32_t child = node.first_child;
-//                     while (child != NULL_NODE) {
-//                         int action_idx = move_to_action_index(pool[child].move);
-//                         action_idx = flip ? flip_action_index(action_idx) : action_idx;
-//                         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
-//                             child_actions.emplace_back(child, action_idx);
-//                             max_logit = std::max(max_logit, eval.policy[action_idx]);
-//                         }
-//                         child = pool[child].next_sibling;
-//                     }
-//
-//                     float sum_exp = 0.0f;
-//                     std::vector<float> exp_logits(child_actions.size());
-//                     for (size_t i = 0; i < child_actions.size(); ++i) {
-//                         exp_logits[i] = std::exp(eval.policy[child_actions[i].second] - max_logit);
-//                         sum_exp += exp_logits[i];
-//                     }
-//                     for (size_t i = 0; i < child_actions.size(); ++i) {
-//                         pool[child_actions[i].first].stats.prior = exp_logits[i] / sum_exp;
+//                     if (node.has_children()) {
+//                         apply_policy_to_children(pool, pe.leaf_idx, node, eval.policy);
 //                     }
 //                 }
-//             }
 //
-//             g.needs_expansion = false;
-//             g.needs_mcts = node.has_children();
-//             g.mcts_iterations_done = 0;
+//                 g.mcts_iterations_done = 0;
+//             }
 //         }
 //
-//         // Phase 2: MCTS iterations
-//         std::vector<PendingEval> pending_evals;
+//         if (check_pause()) continue;
+//
+//         // ============================================================
+//         // Phase 2: MCTS simulations
+//         // ============================================================
+//         std::vector<PendingExpansion> pending_leaf_expansions;
+//         constexpr int MAX_PENDING = 256;
 //         int iterations_since_pause_check = 0;
 //         constexpr int PAUSE_CHECK_INTERVAL = 100;
-//         constexpr int MAX_PENDING_PER_FLUSH = 32;  // Flush when we have this many
 //
-//         auto flush_evals = [&]() {
-//             if (pending_evals.empty()) return;
+//         auto flush_leaf_expansions = [&]() {
+//             if (pending_leaf_expansions.empty()) return;
 //
 //             if constexpr (is_inference_server_v<Inference>) {
 //                 inference.flush();
 //             }
 //
-//             for (auto& pe : pending_evals) {
-//                 float value = pe.future.get();
-//                 pool[pe.eval_node_idx].stats.set_nn_value(value);
-//                 backpropagate(pool, pe.path, value);
-//                 games[pe.game_idx].mcts_iterations_done++;
+//             for (auto& pe : pending_leaf_expansions) {
+//                 PerGameContext& g = games[pe.game_idx];
+//                 StateNode& leaf = pool[pe.leaf_idx];
+//
+//                 EvalResult eval = pe.future.get();
+//
+//                 // No mutex needed - this is our private tree
+//                 if (!leaf.is_expanded()) {
+//                     leaf.stats.set_nn_value(eval.value);
+//                     leaf.generate_valid_children();
+//
+//                     if (leaf.has_children()) {
+//                         apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
+//                     }
+//                 }
+//
+//                 backpropagate(pool, pe.path, eval.value);
+//                 g.mcts_iterations_done++;
 //             }
-//             pending_evals.clear();
+//             pending_leaf_expansions.clear();
 //         };
 //
 //         while (true) {
@@ -779,45 +755,39 @@ void SelfPlayEngine::run_multi_game(
 //                 if (check_pause()) break;
 //             }
 //
-//             // Check if all MCTS is done
+//             // Check if all games have completed MCTS
 //             bool any_needs_mcts = false;
 //             for (int gi = 0; gi < games_per_worker; ++gi) {
-//                 GameContext& g = games[gi];
-//                 if (g.active && g.needs_mcts && 
-//                     g.mcts_iterations_done < config_.simulations_per_move) {
+//                 PerGameContext& g = games[gi];
+//                 if (g.active && g.mcts_iterations_done < config_.simulations_per_move) {
 //                     any_needs_mcts = true;
 //                     break;
 //                 }
 //             }
 //             if (!any_needs_mcts) {
-//                 flush_evals();
+//                 flush_leaf_expansions();
 //                 break;
 //             }
 //
-//             std::vector<const StateNode*> batch_nodes;
-//             std::vector<int> batch_game_indices;
-//             std::vector<std::vector<uint32_t>> batch_paths;
-//             std::vector<uint32_t> batch_eval_indices;
-//
-//             batch_nodes.reserve(games_per_worker); 
-//             batch_game_indices.reserve(games_per_worker);
-//             // Collect one iteration from each game that needs it
+//             // Run one simulation for each active game
 //             for (int gi = 0; gi < games_per_worker; ++gi) {
-//                 GameContext& g = games[gi];
-//                 if (!g.active || !g.needs_mcts) continue;
+//                 PerGameContext& g = games[gi];
+//                 if (!g.active) continue;
 //                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 //
-//                 ScopedTimer timer(timers.mcts_core);
-//
+//                 // SELECT: traverse from root to leaf
 //                 std::vector<uint32_t> path;
 //                 path.reserve(64);
-//                 uint32_t current = g.current_node;
+//                 uint32_t current = g.root_idx;
 //
 //                 while (current != NULL_NODE) {
 //                     path.push_back(current);
 //                     StateNode& n = pool[current];
+//
 //                     if (n.is_terminal()) break;
+//                     if (!n.is_expanded()) break;
 //                     if (!n.has_children()) break;
+//
 //                     current = select_child_puct(pool, current, mcts_config);
 //                 }
 //
@@ -832,98 +802,66 @@ void SelfPlayEngine::run_multi_game(
 //                     continue;
 //                 }
 //
-//                 if (!leaf.is_expanded()) {
-//                     size_t mutex_idx = leaf_idx % NUM_EXPANSION_MUTEXES;
-//                     std::lock_guard lock(expansion_mutexes_[mutex_idx]);
-//                     if (!leaf.is_expanded()) {
-//                         leaf.generate_valid_children();
+//                 if (leaf.is_expanded()) {
+//                     if (leaf.stats.has_nn_value()) {
+//                         backpropagate(pool, path, leaf.stats.get_nn_value());
+//                         g.mcts_iterations_done++;
 //                     }
+//                     continue;
 //                 }
 //
-//                 uint32_t eval_node_idx = leaf_idx;
-//                 if (leaf.has_children()) {
-//                     uint32_t child = select_child_puct(pool, leaf_idx, mcts_config);
-//                     if (child != NULL_NODE) {
-//                         path.push_back(child);
-//                         eval_node_idx = child;
-//                     }
-//                 }
-//
-//                 StateNode& eval_node = pool[eval_node_idx];
-//                 if (eval_node.stats.has_nn_value()) {
-//                     backpropagate(pool, path, eval_node.stats.get_nn_value());
-//                     g.mcts_iterations_done++;
-//                 } else {
-//                     // if constexpr (is_inference_server_v<Inference>) {
-//                     //     auto future = inference.submit(&eval_node);
-//                     //     pending_evals.push_back({gi, std::move(path), eval_node_idx, std::move(future)});
-//                     // }
-//                     if constexpr (is_inference_server_v<Inference>) {
-//                         batch_nodes.push_back(&eval_node);
-//                         batch_game_indices.push_back(gi);
-//                         batch_paths.push_back(std::move(path));
-//                         batch_eval_indices.push_back(eval_node_idx);
-//                     }
-//                 }
-//             }
-//             if (!batch_nodes.empty()) {
+//                 // EXPAND + EVALUATE
 //                 if constexpr (is_inference_server_v<Inference>) {
-//                     // One lock for N requests!
-//                     auto future = inference.submit_batch(batch_nodes);
-//
-//                     // Block here. With a fast model, the latency cost of blocking 
-//                     // is lower than the overhead cost of managing futures queues.
-//                     std::vector<float> results = future.get();
-//
-//                     for(size_t i=0; i<results.size(); ++i) {
-//                         float val = results[i];
-//                         uint32_t node_idx = batch_eval_indices[i];
-//                         pool[node_idx].stats.set_nn_value(val);
-//                         backpropagate(pool, batch_paths[i], val);
-//                         games[batch_game_indices[i]].mcts_iterations_done++;
-//                     }
+//                     auto future = inference.submit_full(&leaf);
+//                     pending_leaf_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future)});
 //                 }
 //             }
 //
-//             // Flush if we have enough pending, OR if we collected from all games
-//             if (pending_evals.size() >= MAX_PENDING_PER_FLUSH || 
-//                 pending_evals.size() >= static_cast<size_t>(active_games)) {
-//                 flush_evals();
+//             if (pending_leaf_expansions.size() >= MAX_PENDING ||
+//                 pending_leaf_expansions.size() >= static_cast<size_t>(active_games)) {
+//                 flush_leaf_expansions();
 //             }
 //         }
 //
-//         if (sync.pause_requested.load(std::memory_order_acquire)) {
-//             continue;
-//         }
+//         if (check_pause()) continue;
 //
-//         // Phase 3: Make moves
+//         // ============================================================
+//         // Phase 3: Select moves, prune siblings, advance games
+//         // ============================================================
 //         for (int gi = 0; gi < games_per_worker; ++gi) {
-//             GameContext& g = games[gi];
-//             if (!g.active || !g.needs_mcts) continue;
+//             PerGameContext& g = games[gi];
+//             if (!g.active) continue;
 //             if (g.mcts_iterations_done < config_.simulations_per_move) continue;
 //
-//             if (collector) {
-//                 g.sample_positions.push_back(g.current_node);
+//             StateNode& root = pool[g.root_idx];
+//
+//             // Collect sample BEFORE pruning (we need all children for visit distribution)
+//             if (collector && root.has_children()) {
+//                 PerGameContext::PendingSample pending;
+//                 pending.state = extract_compact_state(root);
+//                 pending.policy = extract_visit_distribution(pool, g.root_idx);
+//                 g.pending_samples.push_back(std::move(pending));
 //             }
 //
-//             float temp = (g.num_moves < config_.temperature_drop_ply) 
+//             // Compute move from visit counts
+//             float temp = (g.num_moves < config_.temperature_drop_ply)
 //                        ? config_.temperature : 0.0f;
-//             auto policy = compute_policy_from_visits(pool, g.current_node, temp);
+//             auto policy = compute_policy_from_visits(pool, g.root_idx, temp);
 //
 //             if (policy.empty()) {
 //                 SelfPlayResult result;
 //                 result.error = true;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
 //             Move selected = select_move_from_policy(policy, config_.stochastic && temp > 0);
 //
+//             // Find the chosen child
 //             uint32_t next = NULL_NODE;
-//             StateNode& node = pool[g.current_node];
-//             uint32_t child = node.first_child;
+//             uint32_t child = root.first_child;
 //             while (child != NULL_NODE) {
 //                 if (pool[child].move == selected) {
 //                     next = child;
@@ -937,20 +875,33 @@ void SelfPlayEngine::run_multi_game(
 //                 result.error = true;
 //                 result.num_moves = g.num_moves;
 //                 finish_game(g, result);
-//                 if (try_claim_game(g)) active_games++;
+//                 if (create_game_root(g)) active_games++;
 //                 continue;
 //             }
 //
-//             g.current_node = next;
+//             // PRUNE: Deallocate all siblings of the chosen move
+//             // This is safe because no other thread touches this game's tree
+//             prune_siblings(pool, g.root_idx, next);
+//
+//             // Advance: the chosen child becomes the new root
+//             // The old root is now a single-child node above the new root
+//             // We keep it in game_path for training sample extraction
 //             g.game_path.push_back(next);
 //             pool[next].set_on_game_path();
+//             g.root_idx = next;
 //             g.num_moves++;
-//             g.needs_mcts = false;
+//             g.mcts_iterations_done = 0;
+//         }
+//     }
+//
+//     // Cleanup any remaining game trees
+//     for (auto& g : games) {
+//         if (g.active && g.original_root != NULL_NODE) {
+//             pool.deallocate_subtree(g.original_root);
+//             sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
 //         }
 //     }
 // }
-//
-
 template<InferenceProvider Inference>
 void SelfPlayEngine::run_multi_game_worker(
     std::stop_token stop_token,
@@ -967,10 +918,64 @@ void SelfPlayEngine::run_multi_game_worker(
     std::vector<PerGameContext> games(games_per_worker);
     int active_games = 0;
 
+    // Deferred work queues
+    std::vector<DeferredPrune> deferred_prunes;
+    std::vector<uint32_t> deferred_tree_roots;  // Trees to fully delete
+    std::vector<uint32_t> nodes_to_free;        // Batch of nodes to return to pool
+
+    deferred_prunes.reserve(64);
+    deferred_tree_roots.reserve(16);
+    nodes_to_free.reserve(4096);
+
+    // Batch return nodes to pool - single CAS to splice free list
+    auto flush_freed_nodes = [&]() {
+        if (nodes_to_free.empty()) return;
+
+        // Build a local free list: nodes_to_free[0] -> [1] -> ... -> [n-1] -> old_head
+        // Then CAS head to point to [0]
+
+        // Clear node state and link into local chain
+        for (size_t i = 0; i < nodes_to_free.size(); ++i) {
+            StateNode& node = pool[nodes_to_free[i]];
+            node.first_child = NULL_NODE;
+            node.parent = NULL_NODE;
+            // Link to next in our batch (or will link to old head)
+            node.next_sibling = (i + 1 < nodes_to_free.size()) ? nodes_to_free[i + 1] : NULL_NODE;
+        }
+
+        // Splice into global free list with single CAS
+        uint32_t batch_head = nodes_to_free[0];
+        uint32_t batch_tail = nodes_to_free.back();
+        size_t count = nodes_to_free.size();
+
+        pool.batch_deallocate(batch_head, batch_tail, count);
+        nodes_to_free.clear();
+    };
+
+    // Execute deferred CPU work
+    auto do_deferred_work = [&]() {
+        // Collect nodes from prunes
+        for (auto& dp : deferred_prunes) {
+            prune_siblings_collect(pool, dp.parent_idx, dp.keep_child_idx, nodes_to_free);
+        }
+        deferred_prunes.clear();
+
+        // Collect nodes from tree deletions
+        for (uint32_t root : deferred_tree_roots) {
+            collect_subtree_nodes(pool, root, nodes_to_free);
+        }
+        deferred_tree_roots.clear();
+
+        // Batch return all collected nodes
+        flush_freed_nodes();
+    };
+
     auto check_pause = [&]() -> bool {
         if (stop_token.stop_requested()) return true;
 
         if (sync.pause_requested.load(std::memory_order_acquire)) {
+            do_deferred_work();
+
             sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
             {
                 std::unique_lock lock(sync.pause_mutex);
@@ -984,12 +989,8 @@ void SelfPlayEngine::run_multi_game_worker(
 
             if (stop_token.stop_requested()) return true;
 
-            // Pool was reset - cleanup and invalidate all games
             for (auto& g : games) {
-                if (g.active) {
-                    // Tree was already cleared by pool reset, just mark inactive
-                    active_games--;
-                }
+                if (g.active) active_games--;
                 g.reset();
             }
             return true;
@@ -997,7 +998,6 @@ void SelfPlayEngine::run_multi_game_worker(
         return false;
     };
 
-    // Create a fresh root for a new game by copying initial state
     auto create_game_root = [&](PerGameContext& g) -> bool {
         if (sync.draining.load(std::memory_order_acquire)) return false;
 
@@ -1007,17 +1007,15 @@ void SelfPlayEngine::run_multi_game_worker(
             return false;
         }
 
-        // Allocate a fresh root for this game
         uint32_t root = pool.allocate();
         if (root == NULL_NODE) {
             games_remaining.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        
-        // Initialize as starting position
-        pool[root].init_root(true);  // P1 starts
+
+        pool[root].init_root(true);
         pool[root].set_on_game_path();
-        
+
         g.root_idx = root;
         g.original_root = root;
         g.game_path.clear();
@@ -1031,24 +1029,19 @@ void SelfPlayEngine::run_multi_game_worker(
     };
 
     auto finish_game = [&](PerGameContext& g, SelfPlayResult result) {
-        // Finalize training samples with game outcome
         if (collector && !result.error && result.winner != 0) {
             for (size_t i = 0; i < g.pending_samples.size(); ++i) {
                 auto& pending = g.pending_samples[i];
-                
-                // Determine outcome from this position's perspective
-                // pending_samples[i] corresponds to game_path[i]
-                // We need to know whose turn it was at that position
+
                 bool was_p1_turn = (pending.state.flags & StateNode::FLAG_P1_TO_MOVE) != 0;
                 float outcome = was_p1_turn 
                     ? static_cast<float>(result.winner) 
                     : static_cast<float>(-result.winner);
-                
+
                 TrainingSample sample;
                 sample.state = pending.state;
                 sample.policy = pending.policy;
-                
-                // Record as win or loss
+
                 if (outcome > 0) {
                     sample.wins = 1;
                     sample.losses = 0;
@@ -1058,14 +1051,13 @@ void SelfPlayEngine::run_multi_game_worker(
                     sample.losses = 1;
                     sample.value = -1.0f;
                 }
-                
+
                 collector->add_sample_direct(std::move(sample));
             }
         }
 
-        // Deallocate entire game tree
         if (g.original_root != NULL_NODE) {
-            pool.deallocate_subtree(g.original_root);
+            deferred_tree_roots.push_back(g.original_root);
         }
 
         stats.add_result(result);
@@ -1083,18 +1075,19 @@ void SelfPlayEngine::run_multi_game_worker(
         std::vector<uint32_t> path;
         uint32_t leaf_idx;
         std::future<EvalResult> future;
+        bool children_generated{false};  // Track if we already generated children
     };
 
     if (check_pause()) return;
 
-    // Initialize games
     for (auto& g : games) {
         if (create_game_root(g)) active_games++;
     }
 
     while (!stop_token.stop_requested()) {
-        // Handle no active games
         if (active_games == 0) {
+            do_deferred_work();
+
             if (sync.draining.load(std::memory_order_acquire)) {
                 std::cerr << "[Worker] All games finished, entering pause (draining)\n";
                 sync.workers_paused.fetch_add(1, std::memory_order_relaxed);
@@ -1136,7 +1129,6 @@ void SelfPlayEngine::run_multi_game_worker(
 
             StateNode& node = pool[g.root_idx];
 
-            // Check terminal conditions
             if (node.is_terminal()) {
                 int rel = static_cast<int>(node.terminal_value);
                 SelfPlayResult result;
@@ -1190,37 +1182,48 @@ void SelfPlayEngine::run_multi_game_worker(
                 continue;
             }
 
-            // Expand root if needed
             if (!node.is_expanded()) {
                 if constexpr (is_inference_server_v<Inference>) {
                     auto future = inference.submit_full(&node);
-                    pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future)});
+                    pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future), false});
                 }
             } else {
                 g.mcts_iterations_done = 0;
             }
         }
 
-        // Process root expansions
         if (!pending_root_expansions.empty()) {
             if constexpr (is_inference_server_v<Inference>) {
                 inference.flush();
             }
 
+            // Generate children while GPU processes - this is the expensive part!
+            for (auto& pe : pending_root_expansions) {
+                StateNode& node = pool[pe.leaf_idx];
+                if (!node.is_expanded()) {
+                    node.generate_valid_children();
+                    pe.children_generated = true;
+                }
+            }
+
+            // Also do deferred prune/delete work
+            do_deferred_work();
+
+            // Now get results and apply priors
             for (auto& pe : pending_root_expansions) {
                 PerGameContext& g = games[pe.game_idx];
                 StateNode& node = pool[pe.leaf_idx];
 
                 EvalResult eval = pe.future.get();
 
-                // No mutex needed - this is our private tree
-                if (!node.is_expanded()) {
-                    node.stats.set_nn_value(eval.value);
+                node.stats.set_nn_value(eval.value);
+                if (!node.is_expanded() && !pe.children_generated) {
                     node.generate_valid_children();
+                }
+                node.set_expanded();
 
-                    if (node.has_children()) {
-                        apply_policy_to_children(pool, pe.leaf_idx, node, eval.policy);
-                    }
+                if (node.has_children()) {
+                    apply_policy_to_children(pool, pe.leaf_idx, node, eval.policy);
                 }
 
                 g.mcts_iterations_done = 0;
@@ -1230,41 +1233,12 @@ void SelfPlayEngine::run_multi_game_worker(
         if (check_pause()) continue;
 
         // ============================================================
-        // Phase 2: MCTS simulations
+        // Phase 2: MCTS simulations with pipelined child generation
         // ============================================================
-        std::vector<PendingExpansion> pending_leaf_expansions;
-        constexpr int MAX_PENDING = 256;
+        std::vector<PendingExpansion> pending_expansions;
+        constexpr int BATCH_TARGET = 128;
         int iterations_since_pause_check = 0;
         constexpr int PAUSE_CHECK_INTERVAL = 100;
-
-        auto flush_leaf_expansions = [&]() {
-            if (pending_leaf_expansions.empty()) return;
-
-            if constexpr (is_inference_server_v<Inference>) {
-                inference.flush();
-            }
-
-            for (auto& pe : pending_leaf_expansions) {
-                PerGameContext& g = games[pe.game_idx];
-                StateNode& leaf = pool[pe.leaf_idx];
-
-                EvalResult eval = pe.future.get();
-
-                // No mutex needed - this is our private tree
-                if (!leaf.is_expanded()) {
-                    leaf.stats.set_nn_value(eval.value);
-                    leaf.generate_valid_children();
-
-                    if (leaf.has_children()) {
-                        apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
-                    }
-                }
-
-                backpropagate(pool, pe.path, eval.value);
-                g.mcts_iterations_done++;
-            }
-            pending_leaf_expansions.clear();
-        };
 
         while (true) {
             if (++iterations_since_pause_check >= PAUSE_CHECK_INTERVAL) {
@@ -1272,7 +1246,6 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (check_pause()) break;
             }
 
-            // Check if all games have completed MCTS
             bool any_needs_mcts = false;
             for (int gi = 0; gi < games_per_worker; ++gi) {
                 PerGameContext& g = games[gi];
@@ -1281,18 +1254,52 @@ void SelfPlayEngine::run_multi_game_worker(
                     break;
                 }
             }
+
             if (!any_needs_mcts) {
-                flush_leaf_expansions();
+                // Flush remaining
+                if (!pending_expansions.empty()) {
+                    if constexpr (is_inference_server_v<Inference>) {
+                        inference.flush();
+                    }
+
+                    // Generate children while waiting
+                    for (auto& pe : pending_expansions) {
+                        StateNode& leaf = pool[pe.leaf_idx];
+                        if (!leaf.is_expanded()) {
+                            leaf.generate_valid_children();
+                            pe.children_generated = true;
+                        }
+                    }
+                    do_deferred_work();
+
+                    for (auto& pe : pending_expansions) {
+                        PerGameContext& g = games[pe.game_idx];
+                        StateNode& leaf = pool[pe.leaf_idx];
+                        EvalResult eval = pe.future.get();
+
+                        leaf.stats.set_nn_value(eval.value);
+                        if (!leaf.is_expanded() && !pe.children_generated) {
+                            leaf.generate_valid_children();
+                        }
+                        leaf.set_expanded();
+
+                        if (leaf.has_children()) {
+                            apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
+                        }
+                        backpropagate(pool, pe.path, eval.value);
+                        g.mcts_iterations_done++;
+                    }
+                    pending_expansions.clear();
+                }
                 break;
             }
 
-            // Run one simulation for each active game
+            // Collect simulations
             for (int gi = 0; gi < games_per_worker; ++gi) {
                 PerGameContext& g = games[gi];
                 if (!g.active) continue;
                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 
-                // SELECT: traverse from root to leaf
                 std::vector<uint32_t> path;
                 path.reserve(64);
                 uint32_t current = g.root_idx;
@@ -1327,23 +1334,61 @@ void SelfPlayEngine::run_multi_game_worker(
                     continue;
                 }
 
-                // EXPAND + EVALUATE
                 if constexpr (is_inference_server_v<Inference>) {
                     auto future = inference.submit_full(&leaf);
-                    pending_leaf_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future)});
+                    pending_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future), false});
                 }
             }
 
-            if (pending_leaf_expansions.size() >= MAX_PENDING ||
-                pending_leaf_expansions.size() >= static_cast<size_t>(active_games)) {
-                flush_leaf_expansions();
+            // Process batch
+            if (pending_expansions.size() >= BATCH_TARGET ||
+                pending_expansions.size() >= static_cast<size_t>(active_games)) {
+
+                if constexpr (is_inference_server_v<Inference>) {
+                    inference.flush();
+                }
+
+                // KEY OPTIMIZATION: Generate children while GPU computes
+                // This overlaps expensive CPU work with GPU inference
+                for (auto& pe : pending_expansions) {
+                    StateNode& leaf = pool[pe.leaf_idx];
+                    if (!leaf.is_expanded()) {
+                        leaf.generate_valid_children();
+                        pe.children_generated = true;
+                    }
+                }
+
+                // Also do deferred cleanup work
+                do_deferred_work();
+
+                // Now collect results - GPU should be done or nearly done
+                for (auto& pe : pending_expansions) {
+                    PerGameContext& g = games[pe.game_idx];
+                    StateNode& leaf = pool[pe.leaf_idx];
+
+                    EvalResult eval = pe.future.get();
+
+                    leaf.stats.set_nn_value(eval.value);
+                    if (!leaf.is_expanded() && !pe.children_generated) {
+                        leaf.generate_valid_children();
+                    }
+                    leaf.set_expanded();
+
+                    if (leaf.has_children()) {
+                        apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
+                    }
+
+                    backpropagate(pool, pe.path, eval.value);
+                    g.mcts_iterations_done++;
+                }
+                pending_expansions.clear();
             }
         }
 
         if (check_pause()) continue;
 
         // ============================================================
-        // Phase 3: Select moves, prune siblings, advance games
+        // Phase 3: Select moves, defer pruning, advance games
         // ============================================================
         for (int gi = 0; gi < games_per_worker; ++gi) {
             PerGameContext& g = games[gi];
@@ -1351,8 +1396,7 @@ void SelfPlayEngine::run_multi_game_worker(
             if (g.mcts_iterations_done < config_.simulations_per_move) continue;
 
             StateNode& root = pool[g.root_idx];
-            
-            // Collect sample BEFORE pruning (we need all children for visit distribution)
+
             if (collector && root.has_children()) {
                 PerGameContext::PendingSample pending;
                 pending.state = extract_compact_state(root);
@@ -1360,7 +1404,6 @@ void SelfPlayEngine::run_multi_game_worker(
                 g.pending_samples.push_back(std::move(pending));
             }
 
-            // Compute move from visit counts
             float temp = (g.num_moves < config_.temperature_drop_ply)
                        ? config_.temperature : 0.0f;
             auto policy = compute_policy_from_visits(pool, g.root_idx, temp);
@@ -1376,7 +1419,6 @@ void SelfPlayEngine::run_multi_game_worker(
 
             Move selected = select_move_from_policy(policy, config_.stochastic && temp > 0);
 
-            // Find the chosen child
             uint32_t next = NULL_NODE;
             uint32_t child = root.first_child;
             while (child != NULL_NODE) {
@@ -1396,13 +1438,9 @@ void SelfPlayEngine::run_multi_game_worker(
                 continue;
             }
 
-            // PRUNE: Deallocate all siblings of the chosen move
-            // This is safe because no other thread touches this game's tree
-            prune_siblings(pool, g.root_idx, next);
+            // Defer pruning
+            deferred_prunes.push_back({g.root_idx, next});
 
-            // Advance: the chosen child becomes the new root
-            // The old root is now a single-child node above the new root
-            // We keep it in game_path for training sample extraction
             g.game_path.push_back(next);
             pool[next].set_on_game_path();
             g.root_idx = next;
@@ -1411,7 +1449,8 @@ void SelfPlayEngine::run_multi_game_worker(
         }
     }
 
-    // Cleanup any remaining game trees
+    // Final cleanup
+    do_deferred_work();
     for (auto& g : games) {
         if (g.active && g.original_root != NULL_NODE) {
             pool.deallocate_subtree(g.original_root);
@@ -1435,6 +1474,41 @@ inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_ch
     }
 
     // Update parent to only have the kept child
+    parent.first_child = keep_child_idx;
+    pool[keep_child_idx].next_sibling = NULL_NODE;
+}
+
+/// Collect nodes to free into a vector without returning to pool yet
+inline void collect_subtree_nodes(NodePool& pool, uint32_t root_idx, std::vector<uint32_t>& out) {
+    if (root_idx == NULL_NODE) return;
+
+    size_t start = out.size();
+    out.push_back(root_idx);
+
+    while (start < out.size()) {
+        uint32_t idx = out[start++];
+        uint32_t child = pool[idx].first_child;
+        while (child != NULL_NODE) {
+            out.push_back(child);
+            child = pool[child].next_sibling;
+        }
+    }
+}
+
+/// Prune siblings, collecting freed nodes instead of deallocating immediately
+inline void prune_siblings_collect(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx, 
+                                    std::vector<uint32_t>& freed_nodes) {
+    StateNode& parent = pool[parent_idx];
+
+    uint32_t child = parent.first_child;
+    while (child != NULL_NODE) {
+        uint32_t next_sib = pool[child].next_sibling;
+        if (child != keep_child_idx) {
+            collect_subtree_nodes(pool, child, freed_nodes);
+        }
+        child = next_sib;
+    }
+
     parent.first_child = keep_child_idx;
     pool[keep_child_idx].next_sibling = NULL_NODE;
 }

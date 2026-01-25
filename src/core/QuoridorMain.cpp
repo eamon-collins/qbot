@@ -1027,7 +1027,7 @@ int run_selfplay(const Config& config,
         config.num_games, config.num_threads, config.games_per_thread,
         stats, bounds, &collector,
         samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
-        checkpoint_callback, 10);
+        checkpoint_callback, config.num_threads*config.games_per_thread);
 
     // Capture server stats before stopping
     size_t total_requests = server.total_requests();
