@@ -242,7 +242,7 @@ initialize_tree(const Config& config) {
     // Create new tree with root node
     auto pool_config = NodePool::Config{};
     if (config.mode == RunMode::SelfPlay) {
-        pool_config.initial_capacity = 240'000'000;
+        pool_config.initial_capacity = 40'000'000;
     }
     auto pool = std::make_unique<NodePool>(pool_config);
     bool p1_starts = (config.player == 1);

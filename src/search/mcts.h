@@ -379,7 +379,7 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-    int max_moves_per_game = 90;           // After this many moves, declare a draw and assign partial points to closer player
+    int max_moves_per_game = 120;           // After this many moves, declare a draw and assign partial points to closer player
     float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player 
 };
 
@@ -572,6 +572,12 @@ struct SelfPlayConfig {
     // Move not found in tree
     return NULL_NODE;
 }
+
+inline void apply_policy_to_children(
+    NodePool& pool,
+    uint32_t node_idx,
+    const StateNode& node,
+    const std::array<float, NUM_ACTIONS>& policy_logits);
 
 /// Result of a single self-play game
 struct SelfPlayResult {
