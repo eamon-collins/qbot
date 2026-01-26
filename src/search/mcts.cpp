@@ -409,6 +409,14 @@ void SelfPlayEngine::run_multi_game(
             completed - last_checkpoint >= checkpoint_interval_games) {
             checkpoint_callback(stats, pool);
             last_checkpoint = completed;
+
+            //save at checkpoints, overwrites each time with no double samples
+            if (!samples_file.empty() && collector->size() > 0) {
+                auto result = TrainingSampleStorage::save(samples_file, collector->samples());
+                if (!result) {
+                    std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
+                }
+            }
         }
     }
 
