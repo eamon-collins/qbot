@@ -20,13 +20,19 @@ import psutil
 import subprocess
 import sys
 import traceback
+import json
 from datetime import datetime
 from pathlib import Path
 
 import torch
 
 from resnet import QuoridorNet, train
-from model_utils import compute_model_hash, find_samples_for_model
+from model_utils import (
+    compute_model_hash,
+    find_samples_for_model,
+    sync_samples_from_remote,
+    push_model_to_remote
+)
 
 
 def setup_logging(log_level: str) -> Path:
@@ -399,6 +405,8 @@ def main():
                         help='does not train or perform evals, only generates samples with existing model')
     parser.add_argument('--all-samples', action='store_true', dest='all_samples',
                         help='use all available samples in the sample file instead of just this model_id')
+    parser.add_argument('--sync-remotes', action='store_true', dest='sync_remotes',
+                        help='Sync samples from remote before training and push promoted models to remote')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
                         action='store_true', default=False)
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -503,7 +511,11 @@ def main():
                 #hit it again baby
                 continue
 
-        # Find all sample files for this model (including the one we just created)
+        # Sync remote samples if requested (before finding matching samples)
+        if args.sync_remotes:
+            sync_samples_from_remote(samples_dir)
+
+        # Find all sample files for this model (including the one we just created and any synced)
         # Pattern: tree_<iter#>_<modelhash>.qsamples
         matching_samples = find_samples_for_model(str(samples_dir), model_hash, args.all_samples)
 
@@ -572,6 +584,10 @@ def main():
             # Copy candidate to current_best
             shutil.copy(str(candidate_pt), str(current_best_pt))
             shutil.copy(str(candidate_weights), str(current_best_weights))
+
+            # Push promoted model to remote if requested
+            if args.sync_remotes:
+                push_model_to_remote(model_dir)
         else:
             rejections += 1
             logging.info(f"Candidate rejected. (total rejections: {rejections})")
