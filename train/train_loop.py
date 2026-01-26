@@ -19,13 +19,20 @@ import shutil
 import psutil
 import subprocess
 import sys
+import traceback
+import json
 from datetime import datetime
 from pathlib import Path
 
 import torch
 
 from resnet import QuoridorNet, train
-from model_utils import compute_model_hash, find_samples_for_model
+from model_utils import (
+    compute_model_hash,
+    find_samples_for_model,
+    sync_samples_from_remote,
+    push_model_to_remote
+)
 
 
 def setup_logging(log_level: str) -> Path:
@@ -187,7 +194,7 @@ def check_tree_has_games(tree_path: str) -> int:
 
 
 def train_model(model: QuoridorNet, training_files: list[str], epochs: int,
-                batch_size: int, stream: bool = False) -> bool:
+                batch_size: int, max_samples: int = 2000000) -> bool:
     """
     Train the model on one or more training files.
 
@@ -199,7 +206,6 @@ def train_model(model: QuoridorNet, training_files: list[str], epochs: int,
         training_files: List of .qsamples files to train on
         epochs: Number of training epochs
         batch_size: Batch size for training
-        stream: If False (default), load all into memory and shuffle.
                 If True, stream from disk (memory efficient, no shuffling).
 
     Returns:
@@ -213,9 +219,10 @@ def train_model(model: QuoridorNet, training_files: list[str], epochs: int,
 
     try:
         # Pass all files to train() - it will concatenate them into a single dataset
-        train(model, training_files, batch_size, epochs, stream)
+        train(model, training_files, batch_size, epochs, max_samples)
         return True
     except Exception as e:
+        traceback.print_exc()
         logging.error(f"Error training model: {e}")
         return False
 
@@ -387,6 +394,8 @@ def main():
                         help='Win rate threshold for model promotion. At 200 games, if 50/50 there is ~5% chance of 56% win rate')
     parser.add_argument('--promote-alpha', type=float, default=0.07,dest='promote_alpha',
                         help='p value threshold for model promotions')
+    parser.add_argument('--max-samples', type=float, default=2000000,dest='max_samples',
+                        help='will load last n samples in sorting datasets')
     # Options
     parser.add_argument('--skip-arena', action='store_true', dest='skip_arena',
                         help='Skip arena evaluation (always promote candidate)')
@@ -396,11 +405,10 @@ def main():
                         help='does not train or perform evals, only generates samples with existing model')
     parser.add_argument('--all-samples', action='store_true', dest='all_samples',
                         help='use all available samples in the sample file instead of just this model_id')
+    parser.add_argument('--sync-remotes', action='store_true', dest='sync_remotes',
+                        help='Sync samples from remote before training and push promoted models to remote')
     parser.add_argument('--big-model', dest="big_model", help='Use model with 6m parameters instead of 500k',
-                        action='store_true', default=True)
-    parser.add_argument('--stream', action='store_true',
-                        help='Stream training data from disk (memory efficient, no shuffling). '
-                             'Default: load all into memory and shuffle.')
+                        action='store_true', default=False)
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         default='INFO', dest='log_level',
                         help='Logging level')
@@ -460,7 +468,6 @@ def main():
     # Use GPU if available
     if torch.cuda.is_available():
         model.cuda()
-        logging.info("Using CUDA")
 
     # Export initial model if needed
     if not current_best_pt.exists():
@@ -504,7 +511,11 @@ def main():
                 #hit it again baby
                 continue
 
-        # Find all sample files for this model (including the one we just created)
+        # Sync remote samples if requested (before finding matching samples)
+        if args.sync_remotes:
+            sync_samples_from_remote(samples_dir)
+
+        # Find all sample files for this model (including the one we just created and any synced)
         # Pattern: tree_<iter#>_<modelhash>.qsamples
         matching_samples = find_samples_for_model(str(samples_dir), model_hash, args.all_samples)
 
@@ -531,7 +542,7 @@ def main():
 
         # Train on all matching samples
         training_files = [str(p) for p in matching_samples]
-        if not train_model(model, training_files, args.epochs, args.batch_size, args.stream):
+        if not train_model(model, training_files, args.epochs, args.batch_size, args.max_samples):
             logging.error("Training failed, skipping iteration...")
             continue
 
@@ -573,6 +584,10 @@ def main():
             # Copy candidate to current_best
             shutil.copy(str(candidate_pt), str(current_best_pt))
             shutil.copy(str(candidate_weights), str(current_best_weights))
+
+            # Push promoted model to remote if requested
+            if args.sync_remotes:
+                push_model_to_remote(model_dir)
         else:
             rejections += 1
             logging.info(f"Candidate rejected. (total rejections: {rejections})")

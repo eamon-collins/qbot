@@ -12,6 +12,7 @@ __pycache__
 *.model
 model/
 small_model/
+big_model/
 core.*
 tree*.out
 tree*.qsamples

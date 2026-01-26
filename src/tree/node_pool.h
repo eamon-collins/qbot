@@ -168,6 +168,23 @@ public:
         }
     }
 
+    /// Batch deallocate a chain of nodes
+    /// The caller has already linked nodes as: head -> ... -> tail -> NULL
+    /// This splices the chain into the free list with a single CAS
+    void batch_deallocate(uint32_t head, uint32_t tail, size_t count) noexcept {
+        if (head == NULL_NODE || count == 0) return;
+
+        // Splice: tail->next = old_head, then CAS head to point to our head
+        uint32_t expected = free_head_.load(std::memory_order_relaxed);
+        do {
+            node_at(tail).next_sibling = expected;
+        } while (!free_head_.compare_exchange_weak(
+            expected, head,
+            std::memory_order_release, std::memory_order_relaxed));
+
+        allocated_count_.fetch_sub(count, std::memory_order_relaxed);
+    }
+
     /// Access a node by index (chunked indexing)
     [[nodiscard]] StateNode& operator[](uint32_t idx) noexcept {
         return node_at(idx);

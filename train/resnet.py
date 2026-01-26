@@ -18,20 +18,49 @@ NUM_PAWN_ACTIONS = 81   # 9x9 board destinations
 NUM_WALL_ACTIONS = 128  # 8x8 * 2 orientations
 NUM_ACTIONS = NUM_PAWN_ACTIONS + NUM_WALL_ACTIONS  # 209 total
 
+class SEBlock(nn.Module):
+    """
+    Squeeze-and-Excitation block (Leela Chess Zero variant: Scale + Bias).
+    """
+    def __init__(self, channels, se_channels=32):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(channels, se_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(se_channels, 2 * channels)
+
+    def forward(self, x):
+        batch, c, _, _ = x.size()
+        # Squeeze: Global Average Pooling
+        y = self.avg_pool(x).view(batch, c)
+        y = self.relu(self.fc1(y))
+        y = self.fc2(y)
+        
+        # Split into scale (w) and bias (bias)
+        # Lc0: output = (sigmoid(w) * x) + bias
+        w, bias = y.split(c, dim=1)
+        
+        # Use 'batch' (int) for view, not the tensor
+        w = torch.sigmoid(w).view(batch, c, 1, 1)
+        bias = bias.view(batch, c, 1, 1)
+        
+        return (x * w) + bias
 
 class ResidualBlock(nn.Module):
-    """Standard residual block: conv -> bn -> relu -> conv -> bn -> skip -> relu"""
+    """Residual block with Squeeze-and-Excitation: conv -> bn -> relu -> conv -> bn -> SE -> skip -> relu"""
     def __init__(self, channels):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
+        self.se = SEBlock(channels)
 
     def forward(self, x):
         identity = x
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
+        out = self.se(out)
         out = out + identity
         return F.relu(out)
 
@@ -73,14 +102,16 @@ class QuoridorNet(nn.Module):
         ])
 
         # Policy head: conv 1x1 -> bn -> relu -> flatten -> fc
+        # (Kept standard AlphaZero style for spatial preservation)
         self.policy_conv = nn.Conv2d(num_channels, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * 9 * 9, NUM_ACTIONS)
 
-        # Value head: conv 1x1 -> bn -> relu -> flatten -> fc -> relu -> fc -> tanh
-        self.value_conv = nn.Conv2d(num_channels, 1, kernel_size=1, bias=False)
-        self.value_bn = nn.BatchNorm2d(1)
-        self.value_fc1 = nn.Linear(9 * 9, 128)
+        # Value head: conv 3x3 (32ch) -> bn -> relu -> GAP -> fc(128) -> relu -> fc(1) -> tanh
+        # Using GAP allows us to drop the massive input layer (9*9*channels)
+        self.value_conv = nn.Conv2d(num_channels, 32, kernel_size=3, padding=1, bias=False)
+        self.value_bn = nn.BatchNorm2d(32)
+        self.value_fc1 = nn.Linear(32, 128)
         self.value_fc2 = nn.Linear(128, 1)
 
     def forward(self, x):
@@ -96,11 +127,11 @@ class QuoridorNet(nn.Module):
         # Policy head
         p = F.relu(self.policy_bn(self.policy_conv(out)))
         p = p.view(p.size(0), -1)  # flatten
-        p = self.policy_fc(p)  # raw logits, no softmax (applied during training/inference)
+        p = self.policy_fc(p)
 
-        # Value head
+        # Value head (GAP)
         v = F.relu(self.value_bn(self.value_conv(out)))
-        v = v.view(v.size(0), -1)  # flatten
+        v = F.adaptive_avg_pool2d(v, 1).view(v.size(0), -1) # GAP: (B, 32, 9, 9) -> (B, 32)
         v = F.relu(self.value_fc1(v))
         v = torch.tanh(self.value_fc2(v))
 
@@ -109,12 +140,6 @@ class QuoridorNet(nn.Module):
 def train_step(model, optimizer, data_batch):
     """
     Single training step with combined policy and value loss.
-
-    Loss = MSE(value, z) + CrossEntropy(policy, pi)
-
-    Where:
-        z = game outcome from current player's perspective
-        pi = MCTS visit distribution (training target for policy)
     """
     model.train()
     states, policy_targets, value_targets = data_batch
@@ -131,11 +156,10 @@ def train_step(model, optimizer, data_batch):
     value_loss = F.mse_loss(values, value_targets)
 
     # Policy loss: Cross-entropy with MCTS visit distribution
-    # policy_targets are visit probabilities (sum to 1), policy_logits are raw logits
     log_probs = F.log_softmax(policy_logits, dim=1)
     policy_loss = -torch.sum(policy_targets * log_probs, dim=1).mean()
 
-    # Combined loss (can add L2 regularization via weight_decay in optimizer)
+    # Combined loss
     loss = value_loss + policy_loss
 
     loss.backward()
@@ -144,26 +168,9 @@ def train_step(model, optimizer, data_batch):
     return loss.item(), value_loss.item(), policy_loss.item()
 
 
-def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, stream: bool = False):
+def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, max_samples: int):
     """
     Train the model on training data.
-
-    Args:
-        model: Neural network model to train
-        data_files: Single file path or list of file paths to train on
-        batch_size: Training batch size
-        num_epochs: Number of training epochs
-        stream: If False (default), load all samples into memory and shuffle.
-                If True, stream from disk (memory efficient, no shuffling).
-
-    Supports two file formats:
-    - .qsamples: Pre-computed training samples with MCTS visit distributions (preferred)
-    - .qbot: Legacy tree format with uniform policy targets (via leopard)
-
-    When multiple .qsamples files are provided, they are concatenated into a single
-    dataset for training, which is useful for accumulated samples from the same model.
-
-    By default, loads all samples into memory and shuffles for better training.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
@@ -178,28 +185,17 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
     # Check if all files are .qsamples
     all_qsamples = all(f.endswith('.qsamples') for f in data_files)
 
-    if all_qsamples and len(data_files) > 1:
-        dataset = MultiFileTrainingSampleDataset(data_files, batch_size)
-    elif all_qsamples:
-        # Single .qsamples file
-        logging.info(f"Loading .qsamples file: {data_files[0]}")
-        dataset = TrainingSampleDataset(data_files[0], batch_size, stream)
+    if all_qsamples:
+        dataset = TrainingSampleDataset(data_files, max_samples)
     else:
-        # Legacy format: tree file processed via leopard
         logging.warning("This method of training samples is deprecated, quitting")
         sys.exit(-1)
-        if len(data_files) > 1:
-            logging.warning("Multiple .qbot files not supported, using first file only")
-        logging.info(f"Loading .qbot tree file: {data_files[0]}")
-        with QuoridorDataset(data_files[0], batch_size) as dataset:
-            for batch in dataset.generate_batches():
-                batches.append(batch)
 
     train_loader = DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=4,
+        num_workers=1,
         persistent_workers=False,
         pin_memory=True
     )
@@ -210,7 +206,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         epoch_policy_loss = 0
         num_batches = 0
 
-        for batch in train_loader: #dataset.generate_batches():
+        for batch in train_loader:
             loss, v_loss, p_loss = train_step(model, optimizer, batch)
             epoch_loss += loss
             epoch_value_loss += v_loss
@@ -228,7 +224,7 @@ def train(model, data_files: str | list[str], batch_size: int, num_epochs: int, 
         current_lr = optimizer.param_groups[0]['lr']
         logging.info(f"Epoch {epoch}, LR: {current_lr:.6f}  Avg Loss: {avg_loss:.4f} (value:{avg_v_loss:.4f} policy:{avg_p_loss:.4f})")
 
-    ##cleanup, annoying but has to be done if using workers
+    ##cleanup
     train_loader._iterator = None
     if hasattr(train_loader, '_workers'):
         for w in train_loader._workers:

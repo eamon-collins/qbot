@@ -24,6 +24,7 @@ std::array<float, NUM_ACTIONS> extract_visit_distribution(
     // If it's P2's turn, the board state in the sample is flipped 180°.
     // The policy indices must also be flipped to match the network's relative perspective.
     const bool flip_perspective = !parent.is_p1_to_move();
+
     // First pass: sum total visits across all children
     uint32_t total_visits = 0;
     uint32_t child = parent.first_child;
@@ -32,7 +33,7 @@ std::array<float, NUM_ACTIONS> extract_visit_distribution(
         child = pool[child].next_sibling;
     }
 
-    //populate policy (visits if available, otherwise priors)
+    // Populate policy (visits if available, otherwise priors)
     const float scale = (total_visits > 0) ? (1.0f / static_cast<float>(total_visits)) : 1.0f;
     const bool use_visits = (total_visits > 0);
 
@@ -171,25 +172,6 @@ void TrainingSampleCollector::reserve(size_t count) {
     samples_.reserve(count);
 }
 
-void TrainingSampleCollector::add_sample(const NodePool& pool, uint32_t node_idx, float game_outcome) {
-    const StateNode& node = pool[node_idx];
-
-    TrainingSample sample;
-
-    // Extract compact state
-    sample.state = extract_compact_state(node);
-
-    // Extract MCTS visit distribution as policy target
-    sample.policy = extract_visit_distribution(pool, node_idx);
-
-    // Value target: game outcome from current player's perspective
-    // game_outcome is from P1's perspective (+1 = P1 wins)
-    // We need it from current player's perspective
-    sample.value = node.is_p1_to_move() ? game_outcome : -game_outcome;
-
-    std::lock_guard lock(mutex_);
-    samples_.push_back(sample);
-}
 
 void TrainingSampleCollector::add_sample_direct(TrainingSample sample) {
     std::lock_guard lock(mutex_);
@@ -209,6 +191,7 @@ namespace {
 
 /// Extract samples from a subtree via DFS
 /// Only extracts from nodes marked as on_game_path (part of a completed game)
+/// Uses the actual wins/losses counters from EdgeStats for value targets
 void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
                          std::vector<TrainingSample>& samples) {
     const StateNode& node = pool[node_idx];
@@ -228,28 +211,36 @@ void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
         return;
     }
 
-    // Check if this node has any visit counts (was used in search)
-    uint32_t total_visits = 0;
-    uint32_t child = node.first_child;
-    while (child != NULL_NODE) {
-        total_visits += pool[child].stats.visits.load(std::memory_order_relaxed);
-        child = pool[child].next_sibling;
-    }
+    // Check if this node has actual game outcomes recorded
+    uint32_t wins = node.stats.wins.load(std::memory_order_relaxed);
+    uint32_t losses = node.stats.losses.load(std::memory_order_relaxed);
+    uint32_t total_games = wins + losses;
 
-    // Only extract sample if the node was actually searched
-    if (total_visits > 0) {
+    // Only extract sample if we have actual game outcomes
+    // This ensures we only train on positions with known results
+    if (total_games > 0) {
         TrainingSample sample;
         sample.state = extract_compact_state(node);
         sample.policy = extract_visit_distribution(pool, node_idx);
 
-        //should already be from current player's perspective and backpropagated sum of lower game path nodes.
-        sample.value = node.stats.Q();
+        // Use actual game outcomes as value target
+        // These are already from current player's perspective (recorded during backprop)
+        sample.wins = wins;
+        sample.losses = losses;
+        
+        // Compute scalar value for convenience/compatibility
+        sample.value = (wins + losses > 0)
+            ? static_cast<float>(static_cast<int>(wins) - static_cast<int>(losses)) / static_cast<float>(total_games)
+            : 0.0f;
+        // if (sample.state.p1_row > 8) std::cout << "error p1 row is " << sample.state.p1_row << std::endl;
+        // if (sample.wins > 16) std::cout << "error wins is " << sample.wins << std::endl;
+        // if (sample.value > 10.0f || sample.value < -10.0f) std::cout << "error value is " << sample.value << std::endl;
 
         samples.push_back(sample);
     }
 
     // Recurse to children that are on the game path
-    child = node.first_child;
+    uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         if (pool[child].is_on_game_path()) {
             extract_samples_dfs(pool, child, samples);
@@ -264,7 +255,6 @@ std::vector<TrainingSample> extract_samples_from_tree(
     const NodePool& pool, uint32_t root_idx)
 {
     std::vector<TrainingSample> samples;
-    // samples.reserve(pool.allocated() / 200);  // Rough estimate
 
     extract_samples_dfs(pool, root_idx, samples);
 
