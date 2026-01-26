@@ -255,15 +255,16 @@ def sync_samples_from_remote(samples_dir: Path) -> bool:
     temp_files = []  # Track files we're about to create in this batch
 
     for remote_file in remote_files:
-        # Skip if already synced
+        # Check if we already have a mapping for this remote file
         if remote_file in sync_state:
             local_file = sync_state[remote_file]
-            if (samples_dir / local_file).exists():
-                continue
-            else:
+            if not (samples_dir / local_file).exists():
                 logging.warning(f"State file has {remote_file} but local file {local_file} missing")
+            # Always add to sync list (rsync -u will skip if local is up to date)
+            files_to_sync.append((remote_file, local_file))
+            continue
 
-        # Parse remote filename
+        # Parse remote filename for new files
         parsed = parse_sample_filename(remote_file)
         if not parsed:
             logging.warning(f"Skipping invalid remote filename: {remote_file}")
@@ -315,7 +316,7 @@ def sync_samples_from_remote(samples_dir: Path) -> bool:
         logging.info(f"Syncing {remote_file} -> {local_file}")
         try:
             result = subprocess.run(
-                ["rsync", "-az", "--progress", remote_path, str(local_path)],
+                ["rsync", "-azu", "--progress", remote_path, str(local_path)],
                 capture_output=True,
                 text=True,
                 timeout=600
