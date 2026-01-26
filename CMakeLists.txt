@@ -27,7 +27,7 @@ if(ENABLE_INFERENCE)
 
         # Set include directories
         set(TORCH_INCLUDE_DIRS
-            ${LIBTORCH_PREFIX}/include
+	    #${LIBTORCH_PREFIX}/include
             # ${LIBTORCH_PREFIX}/include/torch/csrc/api/include)
             ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include
             ${LIBTORCH_PREFIX}/lib/python3.12/site-packages/torch/include/torch/csrc/api/include)
