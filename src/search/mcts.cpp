@@ -306,7 +306,7 @@ void SelfPlayEngine::run_multi_game(
     int pool_reset_count = 0;
 
     //220000 is approx constant for # bytes per game per simulationpermove.
-    size_t soft_limit_bytes = bounds.max_bytes - (60000ULL * num_workers * games_per_worker * config_.simulations_per_move);
+    size_t soft_limit_bytes = bounds.max_bytes - (30000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
