@@ -63,7 +63,8 @@ public:
     [[nodiscard]] size_t queue_size() const noexcept { return evaluation_queue_.size(); }
 
 private:
-    void fill_input_tensor(at::Half* tensor_ptr, size_t tensor_stride,
+    template <typename T>
+    void fill_input_tensor(T* tensor_ptr, size_t tensor_stride,
                            int batch_idx, const StateNode* node) const;
     void process_batch(const EvalCallback& callback);
     void ensure_buffer_capacity(int size);
@@ -72,6 +73,7 @@ private:
     torch::Device device_;
     int batch_size_;
     bool model_loaded_{false};
+    bool use_fp16_{false};
 
     std::deque<std::pair<const StateNode*, uint32_t>> evaluation_queue_;
 

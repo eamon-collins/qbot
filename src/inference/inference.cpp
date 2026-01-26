@@ -2,6 +2,9 @@
 #include "../tree/StateNode.h"
 #include "../util/timer.h"
 
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAFunctions.h>
+
 #include <iostream>
 
 namespace qbot {
@@ -48,8 +51,33 @@ ModelInference::ModelInference(const std::string& model_path, int batch_size, bo
         model_.eval();
 
         if (device_.is_cuda()) {
-            model_ = torch::jit::freeze(model_);
-            model_ = torch::jit::optimize_for_inference(model_);
+            cudaDeviceProp* prop = at::cuda::getDeviceProperties(device_.index());
+            int major = prop->major;
+
+            // Ampere (8.x) and newer handle optimized FP16 inference reliably.
+            // Turing (7.5) like the T1000 is safer with FP32.
+            if (major >= 8) {
+                use_fp16_ = true;
+                std::cout << "[Inference] Ampere+ GPU detected (CC " << major 
+                          << "." << prop->minor << "). Using FP16 & Optimization." << std::endl;
+            } else {
+                use_fp16_ = false;
+                std::cout << "[Inference] Older GPU detected (CC " << major 
+                          << "." << prop->minor << "). Fallback to FP32 for stability." << std::endl;
+            }
+
+            if (use_fp16_) {
+                model_.to(torch::kHalf);
+                model_ = torch::jit::freeze(model_);
+                model_ = torch::jit::optimize_for_inference(model_);
+            } else {
+                model_.to(torch::kFloat);
+                model_ = torch::jit::freeze(model_); 
+            }
+        } else {
+            //cpu
+            use_fp16_ = false;
+            model_.to(torch::kFloat);
         }
 
         model_loaded_ = true;
@@ -65,9 +93,11 @@ ModelInference::ModelInference()
     , model_loaded_(false)
 {}
 
-void ModelInference::fill_input_tensor(at::Half* tensor_ptr, size_t tensor_stride,
+//template param for either Float or at::Half for fp16
+template <typename T>
+void ModelInference::fill_input_tensor(T* tensor_ptr, size_t tensor_stride,
                                         int batch_idx, const StateNode* node) const {
-    at::Half* base = tensor_ptr + batch_idx * tensor_stride;
+    T* base = tensor_ptr + batch_idx * tensor_stride;
 
     bool is_p1_turn = node->is_p1_to_move();
     uint8_t my_row, my_col, my_fences;
@@ -94,20 +124,20 @@ void ModelInference::fill_input_tensor(at::Half* tensor_ptr, size_t tensor_strid
         v_fences = reverse_bits(node->fences.vertical);
     }
 
-    base[0 * 81 + my_row * 9 + my_col] = at::Half(1.0f);
-    base[1 * 81 + opp_row * 9 + opp_col] = at::Half(1.0f);
+    base[0 * 81 + my_row * 9 + my_col] = T(1.0f);
+    base[1 * 81 + opp_row * 9 + opp_col] = T(1.0f);
 
     for (int r = 0; r < 8; ++r) {
         uint64_t h_row = (h_fences >> (r * 8)) & 0xFF;
         uint64_t v_row = (v_fences >> (r * 8)) & 0xFF;
         for (int c = 0; c < 8; ++c) {
-            if ((h_row >> c) & 1) base[2 * 81 + r * 9 + c] = at::Half(1.0f);
-            if ((v_row >> c) & 1) base[3 * 81 + r * 9 + c] = at::Half(1.0f);
+            if ((h_row >> c) & 1) base[2 * 81 + r * 9 + c] = T(1.0f);
+            if ((v_row >> c) & 1) base[3 * 81 + r * 9 + c] = T(1.0f);
         }
     }
 
-    at::Half my_fences_norm = at::Half(static_cast<float>(my_fences) * 0.1f);
-    at::Half opp_fences_norm = at::Half(static_cast<float>(opp_fences) * 0.1f);
+    T my_fences_norm = T(static_cast<float>(my_fences) * 0.1f);
+    T opp_fences_norm = T(static_cast<float>(opp_fences) * 0.1f);
     std::fill_n(base + 4 * 81, 81, my_fences_norm);
     std::fill_n(base + 5 * 81, 81, opp_fences_norm);
 }
@@ -200,8 +230,11 @@ void ModelInference::ensure_buffer_capacity(int size) {
     int new_capacity = 256;
     while (new_capacity < size) new_capacity *= 2;
 
+    auto dtype = use_fp16_ ? torch::kHalf : torch::kFloat;
+
     unified_buffer_ = torch::zeros({new_capacity, 6, 9, 9}, 
-        torch::TensorOptions().dtype(torch::kHalf).pinned_memory(device_.is_cuda()));
+        torch::TensorOptions().dtype(dtype).pinned_memory(device_.is_cuda()));
+
     value_output_buffer_ = torch::empty({new_capacity}, 
         torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(device_.is_cuda()));
     policy_output_buffer_ = torch::empty({new_capacity, NUM_ACTIONS}, 
@@ -223,14 +256,20 @@ std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const S
     }
 
     {
-
-        at::Half* tensor_ptr = unified_buffer_.data_ptr<at::Half>();
         constexpr size_t tensor_stride = 6 * 9 * 9;
 
-        std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(at::Half));
-
-        for (int i = 0; i < batch_size; ++i) {
-            fill_input_tensor(tensor_ptr, tensor_stride, i, nodes[i]);
+        if (use_fp16_) {
+            at::Half* tensor_ptr = unified_buffer_.data_ptr<at::Half>();
+            std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(at::Half));
+            for (int i = 0; i < batch_size; ++i) {
+                fill_input_tensor<at::Half>(tensor_ptr, 6 * 9 * 9, i, nodes[i]);
+            }
+        } else {
+            float* tensor_ptr = unified_buffer_.data_ptr<float>();
+            std::memset(tensor_ptr, 0, batch_size * tensor_stride * sizeof(float));
+            for (int i = 0; i < batch_size; ++i) {
+                fill_input_tensor<float>(tensor_ptr, 6 * 9 * 9, i, nodes[i]);
+            }
         }
     }
 
