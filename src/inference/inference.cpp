@@ -58,12 +58,8 @@ ModelInference::ModelInference(const std::string& model_path, int batch_size, bo
             // Turing (7.5) like the T1000 is safer with FP32.
             if (major >= 8) {
                 use_fp16_ = true;
-                std::cout << "[Inference] Ampere+ GPU detected (CC " << major 
-                          << "." << prop->minor << "). Using FP16 & Optimization." << std::endl;
             } else {
                 use_fp16_ = false;
-                std::cout << "[Inference] Older GPU detected (CC " << major 
-                          << "." << prop->minor << "). Fallback to FP32 for stability." << std::endl;
             }
 
             if (use_fp16_) {
