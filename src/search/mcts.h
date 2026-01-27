@@ -444,6 +444,51 @@ struct SelfPlayConfig {
     return policy;
 }
 
+//adds dirichlet noise as in AGZ
+//only add to the root node of a search tree in selfplay to ensure we see a wide variety of games
+//in this context root node of a search tree is the node we are deciding on the move for rn, not the absolute root ie starting pos
+static void add_dirichlet_noise(NodePool& pool, uint32_t node_idx, float alpha, float epsilon) {
+    StateNode& node = pool[node_idx];
+    if (!node.has_children()) return;
+
+    std::vector<uint32_t> children;
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        children.push_back(child);
+        child = pool[child].next_sibling;
+    }
+
+    if (children.empty()) return;
+
+    // 2. Generate Dirichlet noise
+    // We use Gamma(alpha, 1) and normalize to get Dirichlet distribution
+    static thread_local std::mt19937 gen(std::random_device{}());
+    std::gamma_distribution<float> d(alpha, 1.0f);
+
+    std::vector<float> noise;
+    noise.reserve(children.size());
+    float sum_noise = 0.0f;
+
+    for (size_t i = 0; i < children.size(); ++i) {
+        float n = d(gen);
+        // Avoid extremely small values for numerical stability
+        if (n < 1e-6f) n = 1e-6f; 
+        noise.push_back(n);
+        sum_noise += n;
+    }
+
+    // 3. Apply mixed priors: P(a) = (1 - epsilon) * policy(a) + epsilon * noise(a)
+    for (size_t i = 0; i < children.size(); ++i) {
+        StateNode& c = pool[children[i]];
+        float noise_prob = noise[i] / sum_noise;
+
+        // stats.prior holds the NN policy probability
+        // We modify it in-place. This is safe because this is the root of a 
+        // new search and we are the only thread accessing it (in self-play worker).
+        c.stats.prior = (1.0f - epsilon) * c.stats.prior + epsilon * noise_prob;
+    }
+}
+
 [[nodiscard]] inline std::vector<std::pair<Move, float>> compute_policy_from_visits(
     NodePool& pool,
     uint32_t parent_idx,

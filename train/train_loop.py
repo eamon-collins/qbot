@@ -447,7 +447,6 @@ def main():
     logging.info(f"Threads:         {args.threads}")
     logging.info(f"Arena games:     {args.arena_games}")
     logging.info(f"Arena temp:      {args.arena_temperature} (drops at ply {args.arena_temp_drop})")
-    logging.info(f"Win threshold:   {args.win_threshold * 100}%")
     logging.info("=" * 60)
 
     # Initialize model
