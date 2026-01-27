@@ -140,8 +140,8 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     auto& timers = get_timers();
     StateNode& node = pool[node_idx];
 
-    size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
-    std::lock_guard lock(expansion_mutexes_[mutex_idx]);
+    // size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
+    // std::lock_guard lock(expansion_mutexes_[mutex_idx]);
 
     if (node.is_expanded()) return;
 
@@ -1538,7 +1538,11 @@ inline void apply_policy_to_children(
 {
     bool flip_policy = !node.is_p1_to_move();
 
-    std::vector<std::pair<uint32_t, int>> child_actions;
+    constexpr int MAX_MOVES = 256;
+    uint32_t child_indices[MAX_MOVES];
+    float child_logits[MAX_MOVES]; 
+    int count = 0;
+
     float max_logit = -std::numeric_limits<float>::infinity();
 
     uint32_t child = node.first_child;
@@ -1547,26 +1551,35 @@ inline void apply_policy_to_children(
         if (flip_policy) {
             action_idx = flip_action_index(action_idx);
         }
+
         if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
-            child_actions.emplace_back(child, action_idx);
-            max_logit = std::max(max_logit, policy_logits[action_idx]);
+            float val = policy_logits[action_idx];
+            if (count < MAX_MOVES) {
+                child_indices[count] = child;
+                child_logits[count] = val;
+                count++;
+            }
+
+            max_logit = std::max(max_logit, val);
         }
         child = pool[child].next_sibling;
     }
 
-    if (child_actions.empty()) return;
+    if (count == 0) return;
 
     float sum_exp = 0.0f;
-    std::vector<float> exp_logits(child_actions.size());
-    for (size_t i = 0; i < child_actions.size(); ++i) {
-        int action_idx = child_actions[i].second;
-        exp_logits[i] = std::exp(policy_logits[action_idx] - max_logit);
-        sum_exp += exp_logits[i];
+
+    // Reuse child_logits array to store the exponentiated values
+    // to avoid a third array or second pass re-calculation.
+    for (int i = 0; i < count; ++i) {
+        float e = std::exp(child_logits[i] - max_logit);
+        child_logits[i] = e; // Store exp value back in place
+        sum_exp += e;
     }
 
-    for (size_t i = 0; i < child_actions.size(); ++i) {
-        uint32_t child_idx = child_actions[i].first;
-        pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
+    float scale = 1.0f / sum_exp;
+    for (int i = 0; i < count; ++i) {
+        pool[child_indices[i]].stats.prior = child_logits[i] * scale;
     }
 }
 // ============================================================================

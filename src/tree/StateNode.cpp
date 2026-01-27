@@ -257,6 +257,70 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
     return moves;
 }
 
+[[nodiscard]] inline bool path_intersects_fence(const std::vector<Coord>& path, Move fence) noexcept {
+    // A path of 0 or 1 node has no edges to cut
+    if (path.size() < 2) return false;
+
+    // Unpack fence data once to avoid repeated bit-shifting accessors in the loop
+    const uint8_t f_r = fence.row();
+    const uint8_t f_c = fence.col();
+
+    if (fence.is_horizontal()) {
+        // CASE: Horizontal Fence at (f_r, f_c)
+        // Blocks: VERTICAL movement between rows [f_r] and [f_r+1]
+        // Spans:  Columns [f_c] and [f_c+1]
+
+        for (size_t i = 0; i < path.size() - 1; ++i) {
+            // Optimization: Filter by Column first (cheapest check)
+            // The fence only exists at columns f_c and f_c+1.
+            // If the path step isn't on these columns, it can't be blocked.
+            const uint8_t u_c = path[i].col;
+            if (u_c != f_c && u_c != f_c + 1) continue;
+
+            // Filter by Movement Type
+            // Horizontal fence only blocks vertical moves (col must not change)
+            if (u_c != path[i+1].col) continue;
+
+            // Exact Crossing Check
+            // We are blocked if we step from f_r to f_r+1 (or vice versa).
+            // min(row1, row2) must equal f_r.
+            const uint8_t u_r = path[i].row;
+            const uint8_t v_r = path[i+1].row;
+
+            if (std::min(u_r, v_r) == f_r) {
+                return true; 
+            }
+        }
+    } else {
+        // CASE: Vertical Fence at (f_r, f_c)
+        // Blocks: HORIZONTAL movement between cols [f_c] and [f_c+1]
+        // Spans:  Rows [f_r] and [f_r+1]
+
+        for (size_t i = 0; i < path.size() - 1; ++i) {
+            // Optimization: Filter by Row first
+            // The fence only exists at rows f_r and f_r+1.
+            const uint8_t u_r = path[i].row;
+            if (u_r != f_r && u_r != f_r + 1) continue;
+
+            // Filter by Movement Type
+            // Vertical fence only blocks horizontal moves (row must not change)
+            if (u_r != path[i+1].row) continue;
+
+            // Exact Crossing Check
+            // We are blocked if we step from f_c to f_c+1 (or vice versa).
+            // min(col1, col2) must equal f_c.
+            const uint8_t u_c = path[i].col;
+            const uint8_t v_c = path[i+1].col;
+
+            if (std::min(u_c, v_c) == f_c) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 size_t StateNode::generate_valid_children() noexcept {
     if (is_terminal() || is_expanded()) {
         return 0;
@@ -273,16 +337,26 @@ size_t StateNode::generate_valid_children() noexcept {
     std::vector<uint32_t> child_indices;
     child_indices.reserve(moves.size());
 
+    //get both paths up front, then only do pathfinding on child paths if the potential fence intersects the path.
     Pathfinder& pf = get_pathfinder();
+    std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
+    std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
     auto& timers = get_timers();
 
     for (const Move& m : moves) {
         // For fence moves, validate that it doesn't block either player
         if (m.is_fence()) {
             ScopedTimer timer(timers.pathfinding);
-            if (!pf.check_paths_with_fence(*this, m)) {
+            bool p1_safe = !path_intersects_fence(p1_path, m);
+            bool p2_safe = !path_intersects_fence(p2_path, m);
+            if (!p1_safe && !p2_safe && !pf.check_paths_with_fence(*this, m)) {
+                continue; //actually, no joke blocked
+            } else if (!p1_safe && !pf.check_player_path_with_fence(*this, m, true)) {
+                continue;
+            } else if (!p2_safe && !pf.check_player_path_with_fence(*this, m, false)) {
                 continue;
             }
+            //if we made it here, move does not block
         }
 
         uint32_t child_idx = p.allocate();

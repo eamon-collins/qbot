@@ -23,30 +23,6 @@ void Pathfinder::reset() noexcept {
     open_count_ = 0;
 }
 
-int Pathfinder::get_neighbors(const FenceGrid& fences, uint8_t row, uint8_t col,
-                              std::array<Coord, 4>& neighbors) const noexcept {
-    int count = 0;
-
-    // Up
-    if (!fences.blocked_up(row, col)) {
-        neighbors[count++] = {static_cast<uint8_t>(row - 1), col};
-    }
-    // Down
-    if (!fences.blocked_down(row, col)) {
-        neighbors[count++] = {static_cast<uint8_t>(row + 1), col};
-    }
-    // Left
-    if (!fences.blocked_left(row, col)) {
-        neighbors[count++] = {row, static_cast<uint8_t>(col - 1)};
-    }
-    // Right
-    if (!fences.blocked_right(row, col)) {
-        neighbors[count++] = {row, static_cast<uint8_t>(col + 1)};
-    }
-
-    return count;
-}
-
 bool Pathfinder::can_reach(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
     reset();
 
@@ -139,6 +115,22 @@ bool Pathfinder::check_paths_with_fence(const StateNode& state, Move fence_move)
     }
 
     return can_reach(temp_fences, state.p1, 8) && can_reach(temp_fences, state.p2, 0);
+}
+
+bool Pathfinder::check_player_path_with_fence(const StateNode& state, Move fence_move, bool player1) noexcept {
+    // Copy fence grid and apply the move
+    FenceGrid temp_fences = state.fences;
+
+    if (fence_move.is_horizontal()) {
+        temp_fences.place_h_fence(fence_move.row(), fence_move.col());
+    } else {
+        temp_fences.place_v_fence(fence_move.row(), fence_move.col());
+    }
+    if (player1) {
+        return can_reach(temp_fences, state.p1, 8);
+    } else {
+        return can_reach(temp_fences, state.p2, 0);
+    }
 }
 
 std::vector<Coord> Pathfinder::find_path(const StateNode& state) noexcept {

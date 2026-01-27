@@ -36,6 +36,7 @@ public:
     /// @param fence_move Fence move to test (must be a fence move)
     /// @return true if neither player would be blocked
     [[nodiscard]] bool check_paths_with_fence(const StateNode& state, Move fence_move) noexcept;
+    [[nodiscard]] bool check_player_path_with_fence(const StateNode& state, Move fence_move, bool player1) noexcept;
 
     /// Check if a specific player can reach their goal
     /// @param fences Fence grid to use
@@ -70,6 +71,7 @@ private:
         uint8_t parent_col;
         bool in_open;
         bool in_closed;
+        // uint32_t generated_id{0};
     };
 
     /// Heuristic: Manhattan distance to goal row (admissible for grid)
@@ -82,8 +84,29 @@ private:
 
     /// Get neighbors of a cell respecting fences
     /// Returns count of valid neighbors, fills neighbors array
-    [[nodiscard]] int get_neighbors(const FenceGrid& fences, uint8_t row, uint8_t col,
-                                    std::array<Coord, 4>& neighbors) const noexcept;
+    [[nodiscard]] inline int get_neighbors(const FenceGrid fences, uint8_t row, uint8_t col,
+                                  std::array<Coord, 4>& neighbors) const noexcept {
+        int count = 0;
+
+        // Up
+        if (!fences.blocked_up(row, col)) {
+            neighbors[count++] = {static_cast<uint8_t>(row - 1), col};
+        }
+        // Down
+        if (!fences.blocked_down(row, col)) {
+            neighbors[count++] = {static_cast<uint8_t>(row + 1), col};
+        }
+        // Left
+        if (!fences.blocked_left(row, col)) {
+            neighbors[count++] = {row, static_cast<uint8_t>(col - 1)};
+        }
+        // Right
+        if (!fences.blocked_right(row, col)) {
+            neighbors[count++] = {row, static_cast<uint8_t>(col + 1)};
+        }
+
+        return count;
+    }
 
     // Reusable buffers
     std::array<std::array<Node, BOARD_SIZE>, BOARD_SIZE> nodes_;
@@ -92,6 +115,7 @@ private:
     // For 9x9 board, linear scan is competitive with heap
     std::array<Coord, BOARD_SIZE * BOARD_SIZE> open_set_;
     size_t open_count_;
+    uint32_t search_id_{0};
 };
 
 /// Thread-local pathfinder instance for convenient access
