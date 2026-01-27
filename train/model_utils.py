@@ -313,7 +313,6 @@ def sync_samples_from_remote(samples_dir: Path) -> bool:
         remote_path = f"{REMOTE_HOST}:{REMOTE_SAMPLES_PATH}/{remote_file}"
         local_path = samples_dir / local_file
 
-        logging.info(f"Syncing {remote_file} -> {local_file}")
         try:
             result = subprocess.run(
                 ["rsync", "-azu", "--progress", remote_path, str(local_path)],
@@ -321,6 +320,8 @@ def sync_samples_from_remote(samples_dir: Path) -> bool:
                 text=True,
                 timeout=600
             )
+            if "qsamples" in result.stdout:
+                logging.info(f"Syncing {remote_file} -> {local_file}")
 
             if result.returncode == 0:
                 sync_state[remote_file] = local_file

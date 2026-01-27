@@ -306,7 +306,7 @@ void SelfPlayEngine::run_multi_game(
     int pool_reset_count = 0;
 
     //220000 is approx constant for # bytes per game per simulationpermove.
-    size_t soft_limit_bytes = bounds.max_bytes - (30000ULL * num_workers * games_per_worker * config_.simulations_per_move);
+    size_t soft_limit_bytes = bounds.max_bytes - (10000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
@@ -1197,6 +1197,10 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
             } else {
                 g.mcts_iterations_done = 0;
+                //only apply to root of search, and only when this player has fences left
+                if (node.is_p1_to_move() ? node.p1.fences > 0 : node.p2.fences > 0) {
+                    add_dirichlet_noise(pool, node.self_index, 0.08f, 0.25f);
+                }
             }
         }
 
@@ -1207,6 +1211,7 @@ void SelfPlayEngine::run_multi_game_worker(
 
             // Generate children while GPU processes - this is the expensive part!
             for (auto& pe : pending_root_expansions) {
+                //says leaf_idx but is root of search here
                 StateNode& node = pool[pe.leaf_idx];
                 if (!node.is_expanded()) {
                     node.generate_valid_children();
@@ -1232,6 +1237,10 @@ void SelfPlayEngine::run_multi_game_worker(
 
                 if (node.has_children()) {
                     apply_policy_to_children(pool, pe.leaf_idx, node, eval.policy);
+                }
+                //only apply to root of search, and only when this player has fences left
+                if (node.is_p1_to_move() ? node.p1.fences > 0 : node.p2.fences > 0) {
+                    add_dirichlet_noise(pool, pe.leaf_idx, 0.08f, 0.25f);
                 }
 
                 g.mcts_iterations_done = 0;
