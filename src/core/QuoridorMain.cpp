@@ -77,6 +77,9 @@ struct Config {
     float win_threshold = 0.55f;                 // Threshold to replace best model
     float promote_alpha = 0.06f;                 // Threshold to replace best model as a p value, ie if models 50/50 this result has promote_alpha prob of happening
 
+    //Inference
+    float max_wait = 1.0f;
+
     // Model tracking
     std::string model_id;                        // Model hash/identifier for sample file naming
 
@@ -136,6 +139,8 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Use progressive expansion (on-demand child creation)")
         ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
             "Max memory for node pool in GB (resets pool at 80%)")
+        ("max-wait", po::value<float>(&config.max_wait)->default_value(1.0f),
+            "Max wait for inference server in ms")
         ("model-id", po::value<std::string>(&config.model_id)->default_value(""),
             "Model identifier/hash for sample file naming (tree_X_<model_id>.qsamples)");
 
@@ -998,7 +1003,7 @@ int run_selfplay(const Config& config,
     // Create inference server for batched GPU access
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
-    server_config.max_wait_ms = 0.8; //selfplay
+    server_config.max_wait_ms = config.max_wait; //selfplay
     InferenceServer server(config.model_file, server_config);
     server.start();
 

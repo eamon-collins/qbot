@@ -100,7 +100,7 @@ def get_next_iteration(samples_dir: str) -> int:
 def run_selfplay(tree_path: str, model_path: str, num_games: int,
                  simulations: int, num_threads: int, games_per_thread: int,
                  temperature: float = 1.0, temp_drop_ply: int = 30,
-                 max_memory: int = 30, model_id: str = "") -> bool:
+                 max_memory: int = 30, batch_size: int = 256, max_wait: float = 1.0, model_id: str = "") -> bool:
     """Run self-play games using NN-only MCTS evaluation."""
     qbot_path = get_project_root() / "build" / "qbot"
 
@@ -124,7 +124,8 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         "-n", str(simulations),
         "-t", str(num_threads),
         "-s", tree_path,
-        "--batch-size", "256",
+        "--batch-size", str(batch_size),
+        "--max-wait", str(max_wait),
         "--temperature", str(temperature),
         "--temp-drop", str(temp_drop_ply),
         "--max-memory", str(max_memory),
@@ -368,6 +369,10 @@ def main():
                         help='Training epochs per iteration')
     parser.add_argument('--batch-size', type=int, default=1024, dest='batch_size',
                         help='Training batch size')
+    parser.add_argument('--inference-batch-size', type=int, default=256, dest='inference_batch_size',
+                        help='Inference batch size')
+    parser.add_argument('--max-wait', type=float, default=1.0, dest='max_wait',
+                        help='Inference batch size')
     parser.add_argument('--threads', type=int, default=20,
                         help='Number of threads for self-play')
     parser.add_argument('--games-per-thread', type=int, default=16,
@@ -502,7 +507,8 @@ def main():
             logging.info(f"[Phase 1] Self-play ({args.games} games)...")
             if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
                                 args.simulations, args.threads, args.games_per_thread,
-                                args.temperature, args.temp_drop, args.max_memory, model_hash):
+                                args.temperature, args.temp_drop, args.max_memory,
+                                args.inference_batch_size, args.max_wait, model_hash):
                 logging.error("Self-play failed, retrying iteration...")
                 continue
 
