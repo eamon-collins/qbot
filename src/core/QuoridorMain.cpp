@@ -122,7 +122,7 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Enable verbose output")
         ("games,g", po::value<int>(&config.num_games)->default_value(1000),
             "Number of self-play games")
-        ("batch-size,B", po::value<int>(&config.batch_size)->default_value(256),
+        ("batch-size,B", po::value<int>(&config.batch_size)->default_value(512),
             "Inference batch size for GPU (higher = better GPU utilization)")
         ("iterations,i", po::value<int>(&config.training_iterations)->default_value(10000),
             "Training iterations (tree-building mode)")
@@ -242,7 +242,7 @@ initialize_tree(const Config& config) {
     // Create new tree with root node
     auto pool_config = NodePool::Config{};
     if (config.mode == RunMode::SelfPlay) {
-        pool_config.initial_capacity = 240'000'000;
+        pool_config.initial_capacity = 180'000'000;
     }
     auto pool = std::make_unique<NodePool>(pool_config);
     bool p1_starts = (config.player == 1);
@@ -818,7 +818,7 @@ int run_arena(const Config& config) {
     // Create inference servers for both models
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
-    server_config.max_wait_ms = 2.0;
+    server_config.max_wait_ms = 2.0; //arena
 
     // Candidate server (will be P1 in even games, tracked as p1_wins)
     InferenceServer candidate_server(config.candidate_model, server_config);
@@ -998,7 +998,7 @@ int run_selfplay(const Config& config,
     // Create inference server for batched GPU access
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
-    server_config.max_wait_ms = 2.0;
+    server_config.max_wait_ms = 0.8; //selfplay
     InferenceServer server(config.model_file, server_config);
     server.start();
 

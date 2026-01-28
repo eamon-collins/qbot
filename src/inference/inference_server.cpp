@@ -119,9 +119,11 @@ void InferenceServer::inference_loop() {
                            std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
 
             queue_cv_.wait_until(lock, deadline, [this] {
-                return !single_queue_.empty() ||
-                       !full_eval_queue_.empty() ||
-                       !batch_queue_.empty() ||
+                size_t total_pending = single_queue_.size() + 
+                                      full_eval_queue_.size() + 
+                                      (batch_queue_.size() * 100);//dont actually submit_batch anymore, should remove
+
+                return total_pending >= config_.batch_size || 
                        stop_requested_.load(std::memory_order_acquire);
             });
         }
