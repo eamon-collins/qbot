@@ -355,7 +355,8 @@ class NodePool;
 ///
 /// Contains the full game state for fast move generation and evaluation
 /// from any node without tree traversal.
-struct alignas(64) StateNode {
+// struct alignas(64) StateNode {
+struct StateNode {
     // === Static pool reference (single pool instance) ===
     static NodePool* pool_;
     static void set_pool(NodePool* pool) noexcept { pool_ = pool; }
