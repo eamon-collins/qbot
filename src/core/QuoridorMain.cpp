@@ -915,27 +915,10 @@ int run_arena(const Config& config) {
         std::cout << "\nCandidate wins! (";
 		if (p_value <= config.promote_alpha) {
 			std::cout << std::fixed << std::setprecision(2)
-                      << (p_value*100) << "%  <= " << (config.promote_alpha * 100) << "%)\n";
+                      << (p_value*100) << "%  <= " << (config.promote_alpha * 100) << "%)" << std::endl;
 		} else {
-			std::cout << "Avg draw score " << avg_draw_score << " >= " << draw_promo_thresh << ")\n"; 
+			std::cout << "Avg draw score " << avg_draw_score << " >= " << draw_promo_thresh << ")" << std::endl; 
 		}
-        std::cout << "Promoting candidate to: " << config.best_model_path << "\n";
-
-        // Create directory if needed
-        std::filesystem::path best_path(config.best_model_path);
-        if (best_path.has_parent_path()) {
-            std::filesystem::create_directories(best_path.parent_path());
-        }
-
-        // Copy candidate to best model path
-        try {
-            std::filesystem::copy_file(config.candidate_model, config.best_model_path,
-                                       std::filesystem::copy_options::overwrite_existing);
-            std::cout << "Model promoted successfully!\n";
-        } catch (const std::filesystem::filesystem_error& e) {
-            std::cerr << "Error copying model: " << e.what() << "\n";
-            return 1;
-        }
     } else {
         std::cout << std::fixed << std::setprecision(2)
                   << "\nCurrent model retained. (" << (p_value * 100)
@@ -949,7 +932,7 @@ int run_arena(const Config& config) {
 int run_selfplay(const Config& config,
                  std::unique_ptr<NodePool> pool,
                  uint32_t root) {
-    std::cout << "\n=== Self-Play Mode (NN-only) ===\n";
+    std::cout << "\n=== Self-Play Mode ===\n";
 
     // Model is required for self-play
     if (config.model_file.empty()) {

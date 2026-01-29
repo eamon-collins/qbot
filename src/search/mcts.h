@@ -131,74 +131,6 @@ struct TrainingStats {
     }
 };
 
-// ============================================================================
-// Expansion Policy
-// ============================================================================
-
-/// Determine whether a node should be expanded based on memory pressure
-/// Returns true if expansion is allowed, false if should use NN evaluation instead
-///
-/// Policy:
-/// - Below soft limit: always expand
-/// - Between soft and hard limit: expand only if visit count exceeds threshold
-/// - Above hard limit: never expand (use NN evaluation)
-///
-/// The visit threshold scales linearly with memory pressure, making expansion
-/// progressively more selective as the tree approaches capacity.
-[[nodiscard]] inline bool should_expand(
-    const NodePool& pool,
-    const StateNode& node,
-    const TreeBoundsConfig& bounds) noexcept
-{
-    return true;
-    size_t current_bytes = pool.memory_usage_bytes();
-    float utilization = static_cast<float>(current_bytes) / static_cast<float>(bounds.max_bytes);
-
-    // Below soft limit: always expand
-    if (utilization < bounds.soft_limit_ratio) {
-        return true;
-    }
-
-    // Above hard limit: never expand
-    if (utilization >= bounds.hard_limit_ratio) {
-        return false;
-    }
-
-    // In the soft-to-hard zone: scale threshold based on pressure
-    // pressure goes from 0.0 (at soft limit) to 1.0 (at hard limit)
-    float pressure = (utilization - bounds.soft_limit_ratio) /
-                     (bounds.hard_limit_ratio - bounds.soft_limit_ratio);
-
-    // Threshold increases as we approach hard limit
-    // At soft limit: threshold = min_visits_to_expand
-    // At hard limit: threshold = min_visits_to_expand * 5
-    uint32_t threshold = static_cast<uint32_t>(
-        bounds.min_visits_to_expand * (1.0f + pressure * 4.0f));
-
-    uint32_t visits = node.stats.visits.load(std::memory_order_relaxed);
-    return visits >= threshold;
-}
-
-/// Decide what to do with a leaf node
-[[nodiscard]] inline ExpansionDecision decide_expansion(
-    const NodePool& pool,
-    const StateNode& node,
-    const TreeBoundsConfig& bounds) noexcept
-{
-    if (node.is_terminal()) {
-        return ExpansionDecision::Terminal;
-    }
-
-    if (node.is_expanded()) {
-        return ExpansionDecision::AlreadyExpanded;
-    }
-
-    if (should_expand(pool, node, bounds)) {
-        return ExpansionDecision::Expand;
-    }
-
-    return ExpansionDecision::UseNNEvaluation;
-}
 
 // ============================================================================
 // Selection Functions
@@ -238,59 +170,6 @@ struct TrainingStats {
     return best_child;
 }
 
-/// Traverse from root to leaf, applying virtual loss along the path
-/// Virtual loss discourages other threads from selecting the same path
-/// Also determines whether the leaf should be expanded based on memory bounds
-/// @param pool Node pool
-/// @param root_idx Starting node
-/// @param config MCTS configuration
-/// @return Selection result with path, leaf info, and expansion decision
-[[nodiscard]] inline SelectionResult select_to_leaf(
-    NodePool& pool,
-    uint32_t root_idx,
-    const MCTSConfig& config) noexcept
-{
-    SelectionResult result;
-    result.reached_terminal = false;
-    result.expansion = ExpansionDecision::Expand;
-
-    uint32_t current = root_idx;
-    while (current != NULL_NODE) {
-        result.path.push_back(current);
-        StateNode& node = pool[current];
-
-        // Apply virtual loss as we descend
-        node.stats.add_virtual_loss(config.virtual_loss_amount);
-
-        if (node.is_terminal()) {
-            result.reached_terminal = true;
-            result.expansion = ExpansionDecision::Terminal;
-            break;
-        }
-
-        if (!node.has_children()) {
-            // Leaf node - decide whether to expand based on memory pressure
-            result.expansion = decide_expansion(pool, node, config.bounds);
-            break;
-        }
-
-        current = select_child_puct(pool, current, config);
-    }
-
-    result.leaf_idx = result.path.empty() ? NULL_NODE : result.path.back();
-    return result;
-}
-
-/// Remove virtual loss from all nodes in a path
-inline void remove_virtual_loss(
-    NodePool& pool,
-    const std::vector<uint32_t>& path,
-    int32_t amount) noexcept
-{
-    for (uint32_t idx : path) {
-        pool[idx].stats.remove_virtual_loss(amount);
-    }
-}
 
 // ============================================================================
 // Evaluation Functions
@@ -328,43 +207,6 @@ inline void remove_virtual_loss(
     return (curr_dist <= opp_dist) ? 1 : -1;
 }
 
-/// Evaluate a leaf node
-/// @param node Node to evaluate
-/// @param stats Training stats (updated with evaluation count)
-/// @param inference Optional NN inference engine
-/// @return Value in relative perspective (+1 = current player winning, -1 = losing)
-[[nodiscard]] inline float evaluate_leaf(
-    const StateNode& node,
-    TrainingStats& stats,
-    [[maybe_unused]] void* inference = nullptr) noexcept
-{
-    // Terminal nodes have known values
-    if (node.is_terminal()) {
-        return node.terminal_value;
-    }
-
-    // DISABLED for training: Early termination when fences exhausted distorts
-    // incentives by encouraging players to spend all fences quickly.
-    // We want the model to learn full endgame dynamics.
-    // Kept for reference - may re-enable for arena/inference mode.
-    //
-    // if (node.p1.fences == 0 && node.p2.fences == 0) {
-    //     return early_terminate_no_fences(node);
-    // }
-
-    // Use neural network evaluation if available
-    if (inference != nullptr) {
-        auto* model = static_cast<ModelInference*>(inference);
-        if (model->is_ready()) {
-            stats.nn_evaluations.fetch_add(1, std::memory_order_relaxed);
-            return model->evaluate_node(&node).value;
-        }
-    }
-
-    // No NN available - use path distance heuristic
-    // this now returns just +/- 1, so this doesn't make sense, but should always have inference
-    return std::clamp(early_terminate_no_fences(node), -10, 10) / 10.0 * .8;
-}
 
 // ============================================================================
 // Self-Play Support

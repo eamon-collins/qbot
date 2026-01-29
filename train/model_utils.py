@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import subprocess
+import os
 from pathlib import Path
 
 # Remote sync configuration
@@ -15,10 +16,7 @@ REMOTE_MODEL_PATH = "~/repos/qbot/model"
 def compute_model_hash(model_path: str, hash_length: int = 8) -> str:
     """
     Compute a short hash identifier for a model file.
-
-    Uses SHA256 of the file contents and returns the first hash_length characters.
-    This provides a stable identifier for tracking which samples were generated
-    with which model version.
+    Resolves symlinks to hash the actual file content.
 
     Args:
         model_path: Path to the .pt model file
@@ -27,16 +25,38 @@ def compute_model_hash(model_path: str, hash_length: int = 8) -> str:
     Returns:
         Hex string hash of the model file
     """
-    if not Path(model_path).exists():
+    path = Path(model_path).resolve()
+    if not path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
     sha256 = hashlib.sha256()
-    with open(model_path, 'rb') as f:
+    with open(path, 'rb') as f:
         # Read in chunks to handle large files
         while chunk := f.read(8192):
             sha256.update(chunk)
 
     return sha256.hexdigest()[:hash_length]
+
+
+def update_symlink(link_path: Path, target_path: Path):
+    """
+    Safely update a symlink to point to target_path.
+    Uses relative paths if possible for portability.
+    """
+    link_path = Path(link_path)
+    target_path = Path(target_path)
+
+    # Calculate relative path from link dir to target
+    try:
+        relative_target = target_path.relative_to(link_path.parent)
+    except ValueError:
+        # Not in same tree, use absolute
+        relative_target = target_path.resolve()
+
+    if link_path.is_symlink() or link_path.exists():
+        link_path.unlink()
+
+    link_path.symlink_to(relative_target)
 
 
 def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool = False) -> list[Path]:
@@ -92,12 +112,6 @@ def find_samples_for_model(samples_dir: str, model_hash: str, all_samples: bool 
 def find_all_model_hashes(samples_dir: str) -> dict[str, list[Path]]:
     """
     Group all sample files by model hash.
-
-    Args:
-        samples_dir: Directory containing sample files
-
-    Returns:
-        Dictionary mapping model_hash -> list of sample file paths
     """
     samples_path = Path(samples_dir)
     if not samples_path.exists():
@@ -228,16 +242,6 @@ def get_next_alpha_suffix(samples_dir: Path, local_num: int, hash_val: str) -> s
 def sync_samples_from_remote(samples_dir: Path) -> bool:
     """
     Sync sample files from remote server to local directory.
-
-    Remote files are renamed to match the most recent local file number with the same hash,
-    appending alphabetic suffixes. For example:
-    - If local has tree_79_abc.qsamples
-    - Remote tree_1_abc.qsamples becomes tree_79a_abc.qsamples
-    - Remote tree_2_abc.qsamples becomes tree_79b_abc.qsamples
-
-    If no local files exist with that hash, a new number is assigned.
-
-    Returns True if any new files were synced.
     """
 
     sync_state = load_sync_state(samples_dir)
@@ -340,21 +344,29 @@ def sync_samples_from_remote(samples_dir: Path) -> bool:
 
 
 def push_model_to_remote(model_dir: Path) -> bool:
-    """Push current_best model to remote server."""
+    """
+    Push current_best model to remote server.
+    Resolves symlinks to push the actual file content to the remote's static filename.
+    """
     logging.info("Pushing promoted model to remote server...")
 
-    local_model_pt = model_dir / "current_best.pt"
-    local_model_weights = model_dir / "current_best.model"
+    # We use the symlink but resolve it to get the real file path
+    local_model_pt_link = model_dir / "current_best.pt"
+    local_model_weights_link = model_dir / "current_best.model"
 
-    if not local_model_pt.exists():
+    if not local_model_pt_link.exists():
         logging.error("Cannot push model: current_best.pt not found")
         return False
 
+    # Resolve to actual file: best_<hash>...pt
+    real_pt_path = local_model_pt_link.resolve()
+
     try:
         # Push TorchScript model
+        # Source is the unique file, Dest is the generic "current_best.pt" on remote
         remote_path_pt = f"{REMOTE_HOST}:{REMOTE_MODEL_PATH}/current_best.pt"
         result = subprocess.run(
-            ["rsync", "-az", "--progress", str(local_model_pt), remote_path_pt],
+            ["rsync", "-az", "--progress", str(real_pt_path), remote_path_pt],
             capture_output=True,
             text=True,
             timeout=120
@@ -367,10 +379,11 @@ def push_model_to_remote(model_dir: Path) -> bool:
         logging.info("  Pushed current_best.pt")
 
         # Push weights if they exist
-        if local_model_weights.exists():
+        if local_model_weights_link.exists():
+            real_weights_path = local_model_weights_link.resolve()
             remote_path_weights = f"{REMOTE_HOST}:{REMOTE_MODEL_PATH}/current_best.model"
             result = subprocess.run(
-                ["rsync", "-az", "--progress", str(local_model_weights), remote_path_weights],
+                ["rsync", "-az", "--progress", str(real_weights_path), remote_path_weights],
                 capture_output=True,
                 text=True,
                 timeout=120

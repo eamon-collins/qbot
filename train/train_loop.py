@@ -31,7 +31,8 @@ from model_utils import (
     compute_model_hash,
     find_samples_for_model,
     sync_samples_from_remote,
-    push_model_to_remote
+    push_model_to_remote,
+    update_symlink
 )
 
 
@@ -108,8 +109,10 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         logging.error(f"qbot not found at {qbot_path}")
         return False
 
-    if not model_path or not os.path.exists(model_path):
-        logging.error(f"Model file required for self-play: {model_path}")
+    # Check if model_path is a valid file (resolve symlink if needed)
+    resolved_model_path = Path(model_path).resolve()
+    if not resolved_model_path.exists():
+        logging.error(f"Model file required for self-play: {model_path} (resolved: {resolved_model_path})")
         return False
 
     # Ensure output directory exists
@@ -119,7 +122,7 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
     cmd = [
         str(qbot_path),
         "--selfplay",
-        "-m", model_path,
+        "-m", str(resolved_model_path),
         "-g", str(num_games),
         "-n", str(simulations),
         "-t", str(num_threads),
@@ -167,51 +170,10 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         return False
 
 
-def check_tree_has_games(tree_path: str) -> int:
-    """Check if tree has completed games using leopard. Returns count."""
-    leopard_path = get_project_root() / "build" / "leopard"
-
-    if not leopard_path.exists():
-        logging.error(f"leopard not found at {leopard_path}")
-        return 0
-
-    try:
-        result = subprocess.run(
-            [str(leopard_path), tree_path],
-            capture_output=True,
-            timeout=60
-        )
-
-        stderr = result.stderr.decode()
-        for line in stderr.split('\n'):
-            if "terminal nodes" in line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    return int(parts[1])
-        return 0
-
-    except Exception as e:
-        logging.error(f"Error checking tree: {e}")
-        return 0
-
-
 def train_model(model: QuoridorNet, training_files: list[str], epochs: int,
                 batch_size: int, max_samples: int = 2000000) -> bool:
     """
     Train the model on one or more training files.
-
-    All files are concatenated into a single dataset for training,
-    ensuring the model sees samples from all files mixed together.
-
-    Args:
-        model: Model to train
-        training_files: List of .qsamples files to train on
-        epochs: Number of training epochs
-        batch_size: Batch size for training
-                If True, stream from disk (memory efficient, no shuffling).
-
-    Returns:
-        True if training succeeded
     """
     if not training_files:
         logging.error("No training files provided")
@@ -242,8 +204,6 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
         model.cpu()
 
         # New 6-channel input format: (batch, 6, 9, 9)
-        # Channels: my_pawn, opp_pawn, h_walls, v_walls, my_fences, opp_fences
-        # half the model to fp16 for inference
         export_model = copy.deepcopy(model)
         export_model.eval()
         export_model.half()
@@ -288,11 +248,15 @@ def run_arena(current_model: str, candidate_model: str, num_threads: int, num_ga
         logging.error(f"qbot not found at {qbot_path}")
         return False, False
 
+    # Resolve symlinks for qbot
+    current_resolved = Path(current_model).resolve()
+    candidate_resolved = Path(candidate_model).resolve()
+
     cmd = [
         str(qbot_path),
         "--arena",
-        "-m", current_model,
-        "--candidate", candidate_model,
+        "-m", str(current_resolved),
+        "--candidate", str(candidate_resolved),
         #10x as arena doesn't have multiple games per worker and also frees memory as it goes
         "-t", str(10*num_threads),
         "--arena-games", str(num_games),
@@ -397,7 +361,7 @@ def main():
                         help='Ply at which arena drops temperature to 0')
     parser.add_argument('--win-threshold', type=float, default=0.55,
                         dest='win_threshold',
-                        help='Win rate threshold for model promotion. At 200 games, if 50/50 there is ~5% chance of 56% win rate')
+                        help='Win rate threshold for model promotion')
     parser.add_argument('--promote-alpha', type=float, default=0.07,dest='promote_alpha',
                         help='p value threshold for model promotions')
     parser.add_argument('--max-samples', type=float, default=2000000,dest='max_samples',
@@ -428,14 +392,24 @@ def main():
     samples_dir = project_root / args.samples_dir
     model_dir = project_root / args.model_dir
 
-    current_best_pt = model_dir / "current_best.pt"
-    candidate_pt = model_dir / "candidate.pt"
-    current_best_weights = model_dir / "current_best.model"
-    candidate_weights = model_dir / "candidate.model"
+    # Symlink paths
+    current_best_pt_link = model_dir / "current_best.pt"
+    current_best_weights_link = model_dir / "current_best.model"
+    candidate_pt_link = model_dir / "candidate.pt"
+    candidate_weights_link = model_dir / "candidate.model"
 
     # Ensure directories exist
     samples_dir.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize model parameters
+    if args.big_model:
+        num_channels = 128
+        num_blocks = 15
+    else:
+        # Default QuoridorNet params
+        num_channels = 64
+        num_blocks = 6
 
     logging.info("=" * 60)
     logging.info("Quoridor AlphaZero Training Loop")
@@ -443,29 +417,19 @@ def main():
     logging.info(f"Log file:        {log_file}")
     logging.info(f"Samples dir:     {samples_dir}")
     logging.info(f"Model dir:       {model_dir}")
-    logging.info(f"Current best:    {current_best_pt}")
-    logging.info(f"Candidate:       {candidate_pt}")
-    logging.info(f"Iterations:      {args.iterations}")
-    logging.info(f"Games/iter:      {args.games}")
-    logging.info(f"Sims/move:       {args.simulations}")
-    logging.info(f"Temperature:     {args.temperature} (drops at ply {args.temp_drop})")
-    logging.info(f"Epochs:          {args.epochs} per iteration")
-    logging.info(f"Threads:         {args.threads}")
-    logging.info(f"Arena games:     {args.arena_games}")
-    logging.info(f"Arena temp:      {args.arena_temperature} (drops at ply {args.arena_temp_drop})")
+    logging.info(f"Model config:    {num_blocks} blocks, {num_channels} channels")
+    logging.info(f"Current best:    {current_best_pt_link}")
+    logging.info(f"Candidate:       {candidate_pt_link}")
     logging.info("=" * 60)
 
     # Initialize model
-    if args.big_model:
-        model = QuoridorNet(num_channels = 128, num_blocks = 15)
-    else:
-        model = QuoridorNet()
+    model = QuoridorNet(num_channels=num_channels, num_blocks=num_blocks)
 
     # Load existing best model weights if available
-    if current_best_weights.exists():
-        logging.info(f"Loading existing model from {current_best_weights}")
-        model.load_state_dict(torch.load(current_best_weights))
-    elif current_best_pt.exists():
+    if current_best_weights_link.exists():
+        logging.info(f"Loading existing model from {current_best_weights_link}")
+        model.load_state_dict(torch.load(current_best_weights_link))
+    elif current_best_pt_link.exists():
         logging.info("No weights file found, will use existing TorchScript model")
     else:
         logging.info("Starting with fresh random model")
@@ -475,12 +439,34 @@ def main():
         model.cuda()
 
     # Export initial model if needed
-    if not current_best_pt.exists():
+    if not current_best_pt_link.exists():
         logging.info("Exporting initial model as current_best...")
-        if not export_model(model, str(current_best_pt)):
+
+        # Save to temp files first
+        temp_pt = model_dir / "initial_temp.pt"
+        temp_weights = model_dir / "initial_temp.model"
+
+        if not export_model(model, str(temp_pt)):
             logging.error("Failed to export initial model")
             return
-        save_checkpoint(model, str(current_best_weights))
+        save_checkpoint(model, str(temp_weights))
+
+        # Compute hash and rename
+        initial_hash = compute_model_hash(str(temp_pt))
+
+        best_pt_name = f"best_{initial_hash}_{num_blocks}x{num_channels}.pt"
+        best_weights_name = f"best_{initial_hash}_{num_blocks}x{num_channels}.model"
+
+        final_pt_path = model_dir / best_pt_name
+        final_weights_path = model_dir / best_weights_name
+
+        shutil.move(temp_pt, final_pt_path)
+        shutil.move(temp_weights, final_weights_path)
+
+        # Create symlinks
+        update_symlink(current_best_pt_link, final_pt_path)
+        update_symlink(current_best_weights_link, final_weights_path)
+        logging.info(f"Initialized {best_pt_name}")
 
     ## see what sample numbering we're starting on
     sample_num = get_next_iteration(str(samples_dir))
@@ -492,9 +478,10 @@ def main():
         logging.info("")
         logging.info(f"{'=' * 20} ITERATION {iteration} {'=' * 20}")
 
-        # Compute model hash for current_best model
+        # Compute model hash for current_best model (resolve symlink to get actual file)
         try:
-            model_hash = compute_model_hash(str(current_best_pt))
+            # We compute hash from the file pointed to by current_best_pt_link
+            model_hash = compute_model_hash(str(current_best_pt_link))
             logging.info(f"Current model hash: {model_hash}")
         except Exception as e:
             logging.error(f"Failed to compute model hash: {e}")
@@ -505,7 +492,8 @@ def main():
         # Phase 1: Self-play
         if not args.skip_selfplay:
             logging.info(f"[Phase 1] Self-play ({args.games} games)...")
-            if not run_selfplay(str(tree_path), str(current_best_pt), args.games,
+            # Pass the symlink path; run_selfplay resolves it
+            if not run_selfplay(str(tree_path), str(current_best_pt_link), args.games,
                                 args.simulations, args.threads, args.games_per_thread,
                                 args.temperature, args.temp_drop, args.max_memory,
                                 args.inference_batch_size, args.max_wait, model_hash):
@@ -517,12 +505,11 @@ def main():
                 #hit it again baby
                 continue
 
-        # Sync remote samples if requested (before finding matching samples)
+        # Sync remote samples if requested
         if args.sync_remotes:
             sync_samples_from_remote(samples_dir)
 
-        # Find all sample files for this model (including the one we just created and any synced)
-        # Pattern: tree_<iter#>_<modelhash>.qsamples
+        # Find matching samples
         matching_samples = find_samples_for_model(str(samples_dir), model_hash, args.all_samples)
 
         if not matching_samples:
@@ -534,34 +521,55 @@ def main():
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
 
-        # Reload current best weights before training on first iteration, on next we keep using candidate where we left off last iter
+        # Reload current best weights if needed
         if iteration == 0:
-            if current_best_weights.exists():
-                model.load_state_dict(torch.load(current_best_weights))
+            if current_best_weights_link.exists():
+                model.load_state_dict(torch.load(current_best_weights_link))
                 if torch.cuda.is_available():
                     model.cuda()
         else:
-            if candidate_weights.exists():
-                model.load_state_dict(torch.load(candidate_weights))
+            if candidate_weights_link.exists():
+                model.load_state_dict(torch.load(candidate_weights_link))
                 if torch.cuda.is_available():
                     model.cuda()
 
-        # Train on all matching samples
+        # Train
         training_files = [str(p) for p in matching_samples]
         if not train_model(model, training_files, args.epochs, args.batch_size, args.max_samples):
             logging.error("Training failed, skipping iteration...")
             continue
 
-        # Export candidate
-        save_checkpoint(model, str(candidate_weights))
-        export_model(model, str(candidate_pt))
+        # Save candidate to temp files first
+        temp_cand_pt = model_dir / "temp_candidate.pt"
+        temp_cand_weights = model_dir / "temp_candidate.model"
+
+        save_checkpoint(model, str(temp_cand_weights))
+        export_model(model, str(temp_cand_pt))
+
+        # Compute hash and rename to candidate_<hash>...
+        cand_hash = compute_model_hash(str(temp_cand_pt))
+
+        cand_pt_name = f"candidate_{cand_hash}_{num_blocks}x{num_channels}.pt"
+        cand_weights_name = f"candidate_{cand_hash}_{num_blocks}x{num_channels}.model"
+
+        cand_pt_path = model_dir / cand_pt_name
+        cand_weights_path = model_dir / cand_weights_name
+
+        # Move temp to formatted candidate name (overwriting if exists from previous run)
+        shutil.move(temp_cand_pt, cand_pt_path)
+        shutil.move(temp_cand_weights, cand_weights_path)
+
+        # Update candidate symlinks
+        update_symlink(candidate_pt_link, cand_pt_path)
+        update_symlink(candidate_weights_link, cand_weights_path)
+
+        logging.info(f"Saved candidate: {cand_pt_name}")
 
         gc.collect()
         try:
             libc = ctypes.CDLL("libc.so.6")
             libc.malloc_trim(0)
-        except Exception as e:
-            print(f'uhoh ctypes err {e}')
+        except Exception:
             pass
 
 
@@ -572,8 +580,9 @@ def main():
             arena_success = True
         else:
             logging.info(f"[Phase 3] Arena evaluation ({args.arena_games} games)...")
+            # Pass symlinks
             arena_success, candidate_won = run_arena(
-                str(current_best_pt), str(candidate_pt), args.threads,
+                str(current_best_pt_link), str(candidate_pt_link), args.threads,
                 args.arena_games, args.arena_sims, args.promote_alpha,
                 args.arena_temperature, args.arena_temp_drop, args.max_memory
             )
@@ -587,9 +596,39 @@ def main():
         if candidate_won:
             promotions += 1
             logging.info(f"Candidate PROMOTED! (total promotions: {promotions})")
-            # Copy candidate to current_best
-            shutil.copy(str(candidate_pt), str(current_best_pt))
-            shutil.copy(str(candidate_weights), str(current_best_weights))
+
+            # Construct best filename
+            best_pt_name = f"best_{cand_hash}_{num_blocks}x{num_channels}.pt"
+            best_weights_name = f"best_{cand_hash}_{num_blocks}x{num_channels}.model"
+
+            best_pt_path = model_dir / best_pt_name
+            best_weights_path = model_dir / best_weights_name
+
+            # Rename candidate files to best files
+            # Note: We move the files that the candidate symlink currently points to
+            try:
+                # We can just move the paths we established earlier
+                shutil.move(cand_pt_path, best_pt_path)
+                shutil.move(cand_weights_path, best_weights_path)
+
+                # Update current_best symlinks
+                update_symlink(current_best_pt_link, best_pt_path)
+                update_symlink(current_best_weights_link, best_weights_path)
+
+                # Re-point candidate symlinks to the new best file (so they aren't broken)? 
+                # Or leave them broken until next training? 
+                # Better to remove them so we don't accidentally use old candidate
+                if candidate_pt_link.exists():
+                    candidate_pt_link.unlink()
+                if candidate_weights_link.exists():
+                    candidate_weights_link.unlink()
+
+            except Exception as e:
+                logging.error(f"Error during promotion file operations: {e}")
+                # Try to recover by reloading old best
+                if current_best_weights_link.exists():
+                    model.load_state_dict(torch.load(current_best_weights_link))
+                continue
 
             # Push promoted model to remote if requested
             if args.sync_remotes:
@@ -598,8 +637,8 @@ def main():
             rejections += 1
             logging.info(f"Candidate rejected. (total rejections: {rejections})")
             # Reload current best weights for next iteration
-            if current_best_weights.exists():
-                model.load_state_dict(torch.load(current_best_weights))
+            if current_best_weights_link.exists():
+                model.load_state_dict(torch.load(current_best_weights_link))
                 if torch.cuda.is_available():
                     model.cuda()
 
@@ -612,7 +651,7 @@ def main():
     logging.info("Training complete!")
     logging.info(f"  Total promotions: {promotions}")
     logging.info(f"  Total rejections: {rejections}")
-    logging.info(f"  Final model: {current_best_pt}")
+    logging.info(f"  Final model: {current_best_pt_link.resolve().name}")
     logging.info("=" * 60)
 
 
