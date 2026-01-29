@@ -147,8 +147,6 @@ void InferenceServer::inference_loop() {
 }
 
 void InferenceServer::process_pending() {
-    auto& timers = get_timers();
-
     // use a local deque and swap it with the member queue to reduce lock contention
     std::deque<EvalRequest> local_requests;
     {
@@ -160,6 +158,7 @@ void InferenceServer::process_pending() {
         local_requests.swap(eval_queue_);
     }
 
+    auto& timers = get_timers();
     std::vector<const StateNode*> nodes;
     nodes.reserve(local_requests.size());
 
@@ -185,7 +184,7 @@ void InferenceServer::process_pending() {
 
     if (config_.verbose) {
         size_t batches = total_batches_.load(std::memory_order_relaxed);
-        constexpr size_t STATS_INTERVAL = 100000; // Print every N GPU evaluations
+        constexpr size_t STATS_INTERVAL = 5000; // Print every N GPU evaluations
         if (batches > 0 && batches % STATS_INTERVAL == 0) {
             print_stats();
         }

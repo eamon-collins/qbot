@@ -522,7 +522,7 @@ void SelfPlayEngine::run_multi_game_worker(
 
     struct PendingExpansion {
         int game_idx;
-        std::vector<uint32_t> path;
+        // std::vector<uint32_t> path;
         uint32_t leaf_idx;
         std::future<EvalResult> future;
         bool children_generated{false};  // Track if we already generated children
@@ -635,7 +635,7 @@ void SelfPlayEngine::run_multi_game_worker(
             if (!node.is_expanded()) {
                 if constexpr (is_inference_server_v<Inference>) {
                     auto future = inference.submit(&node);
-                    pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future), false});
+                    pending_root_expansions.push_back({gi, g.root_idx, std::move(future), false});
                 }
             } else {
                 g.mcts_iterations_done = 0;
@@ -698,7 +698,16 @@ void SelfPlayEngine::run_multi_game_worker(
         constexpr int BATCH_TARGET = 256;
         // int BATCH_TARGET = games_per_worker * 0.8f;
         int iterations_since_pause_check = 0;
-        constexpr int PAUSE_CHECK_INTERVAL = 100;
+        constexpr int PAUSE_CHECK_INTERVAL = 1000;
+
+        //heap stuff here so it isn't in tight loop
+        //path_pool keeps the path each simulation takes, cleared at the start of the sim.
+        //these paths aren't that long, don't reserve the inner vector as it will grow to natural length quickly
+        std::vector<std::vector<uint32_t>> path_pool;
+        path_pool.reserve(games_per_worker);
+        for (int gi = 0; gi < games_per_worker; ++gi) {
+            path_pool.push_back(std::vector<uint32_t>());
+        }
 
         while (true) {
             if (++iterations_since_pause_check >= PAUSE_CHECK_INTERVAL) {
@@ -746,7 +755,7 @@ void SelfPlayEngine::run_multi_game_worker(
                         if (leaf.has_children()) {
                             apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
                         }
-                        backpropagate(pool, pe.path, eval.value);
+                        backpropagate(pool, path_pool[pe.game_idx], eval.value);
                         g.mcts_iterations_done++;
                     }
                     pending_expansions.clear();
@@ -760,8 +769,9 @@ void SelfPlayEngine::run_multi_game_worker(
                 if (!g.active) continue;
                 if (g.mcts_iterations_done >= config_.simulations_per_move) continue;
 
-                std::vector<uint32_t> path;
-                path.reserve(64);
+                std::vector<uint32_t>& path = path_pool[gi];
+                path.clear();
+                // path.reserve(64);
                 uint32_t current = g.root_idx;
 
                 while (current != NULL_NODE) {
@@ -796,9 +806,9 @@ void SelfPlayEngine::run_multi_game_worker(
 
                 if constexpr (is_inference_server_v<Inference>) {
                     // auto future = inference.submit(&leaf);
-                    // pending_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future), false});
+                    // pending_expansions.push_back({gi, leaf_idx, std::move(future), false});
                     //fill the future field when submit as batch
-                    pending_expansions.push_back({gi, std::move(path), leaf_idx, {}, false});
+                    pending_expansions.push_back({gi, leaf_idx, {}, false});
                 }
             }
 
@@ -851,7 +861,8 @@ void SelfPlayEngine::run_multi_game_worker(
                         apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
                     }
 
-                    backpropagate(pool, pe.path, eval.value);
+                    backpropagate(pool, path_pool[pe.game_idx], eval.value);
+                    // path_pool[pe.game_idx].clear();
                     g.mcts_iterations_done++;
                 }
                 pending_expansions.clear();
