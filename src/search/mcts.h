@@ -922,7 +922,7 @@ public:
 private:
     /// Expand node and set NN-derived priors on children
     template<InferenceProvider Inference>
-    void expand_with_priors(NodePool& pool, uint32_t node_idx, Inference& inference);
+    void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Inference& inference);
 
     /// Backpropagate value up selection path (alternating perspective)
     static void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
