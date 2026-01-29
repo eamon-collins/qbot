@@ -88,7 +88,7 @@ void SelfPlayEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, In
     // Get policy from NN - method differs by inference type
     EvalResult parent_eval;
     if constexpr (is_inference_server_v<Inference>) {
-        auto future = inference.submit_full(&node);
+        auto future = inference.submit(&node);
         node.generate_valid_children();
         parent_eval = future.get();
     } else {
@@ -142,7 +142,7 @@ void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, Inference
     if (!node.has_children()) return;
 
     // Evaluate the node to get fresh policy logits
-    auto future = server.submit_full(&node);
+    auto future = server.submit(&node);
     EvalResult eval = future.get();
 
     // Collect policy logits for valid moves and apply softmax
@@ -220,7 +220,7 @@ void SelfPlayEngine::run_multi_game(
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
-              << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB\n";
+              << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB" << std::endl;
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -634,7 +634,7 @@ void SelfPlayEngine::run_multi_game_worker(
 
             if (!node.is_expanded()) {
                 if constexpr (is_inference_server_v<Inference>) {
-                    auto future = inference.submit_full(&node);
+                    auto future = inference.submit(&node);
                     pending_root_expansions.push_back({gi, {}, g.root_idx, std::move(future), false});
                 }
             } else {
@@ -696,6 +696,7 @@ void SelfPlayEngine::run_multi_game_worker(
         // ============================================================
         std::vector<PendingExpansion> pending_expansions;
         constexpr int BATCH_TARGET = 256;
+        // int BATCH_TARGET = games_per_worker * 0.8f;
         int iterations_since_pause_check = 0;
         constexpr int PAUSE_CHECK_INTERVAL = 100;
 
@@ -794,21 +795,34 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
 
                 if constexpr (is_inference_server_v<Inference>) {
-                    auto future = inference.submit_full(&leaf);
-                    pending_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future), false});
+                    // auto future = inference.submit(&leaf);
+                    // pending_expansions.push_back({gi, std::move(path), leaf_idx, std::move(future), false});
+                    //fill the future field when submit as batch
+                    pending_expansions.push_back({gi, std::move(path), leaf_idx, {}, false});
                 }
             }
 
             // Process batch
-            if (pending_expansions.size() >= BATCH_TARGET ||
-                pending_expansions.size() >= static_cast<size_t>(active_games)) {
+            // if (pending_expansions.size() >= BATCH_TARGET ||
+            //     pending_expansions.size() >= static_cast<size_t>(active_games)) {
+            if (pending_expansions.size() > 0) {
+            //consider other possible submit triggers
+            
+            //comment this out to remove batch submission
+                //get list of node references from pending expansions. bit annoying
+                std::vector<const StateNode*> batch_nodes(pending_expansions.size());
+                std::transform(pending_expansions.begin(), pending_expansions.end(), batch_nodes.begin(),
+                   [&](const auto& pe) { return &pool[pe.leaf_idx]; });
 
-                if constexpr (is_inference_server_v<Inference>) {
-                    // inference.flush();
+                //submit for inference, pass futures back, should be same order
+                auto futures = inference.submit_batch(batch_nodes);
+                for (size_t i = 0; i < futures.size(); ++i) {
+                    pending_expansions[i].future = std::move(futures[i]);
                 }
+            //to here
 
-                // Generate children while GPU computes
-                // This overlaps expensive CPU work with GPU inference
+                // generate children while GPU computes
+                // overlaps expensive CPU work with GPU inference
                 for (auto& pe : pending_expansions) {
                     StateNode& leaf = pool[pe.leaf_idx];
                     if (!leaf.is_expanded()) {
@@ -1246,54 +1260,6 @@ void SelfPlayEngine::run_multi_arena(
 // CompEngine Implementation
 // ============================================================================
 
-// template<InferenceProvider Inference>
-// void CompEngine::expand_with_priors(NodePool& pool, uint32_t node_idx, Inference& inference) {
-//     StateNode& node = pool[node_idx];
-//
-//     size_t mutex_idx = node_idx % NUM_EXPANSION_MUTEXES;
-//     std::lock_guard lock(expansion_mutexes_[mutex_idx]);
-//
-//     if (node.is_expanded()) return;
-//
-//     EvalResult eval;
-//     if constexpr (is_inference_server_v<Inference>) {
-//         eval = inference.submit_full(&node).get();
-//     } else {
-//         eval = inference.evaluate_node(&node);
-//     }
-//
-//     node.stats.set_nn_value(eval.value);
-//     node.generate_valid_children();
-//
-//     if (!node.has_children()) return;
-//
-//     // Collect policy logits for legal moves
-//     std::vector<std::pair<uint32_t, int>> child_actions;
-//     float max_logit = -std::numeric_limits<float>::infinity();
-//     bool flip = !node.is_p1_to_move();
-//
-//     for (uint32_t c = node.first_child; c != NULL_NODE; c = pool[c].next_sibling) {
-//         int idx = move_to_action_index(pool[c].move);
-//         idx = flip ? flip_action_index(idx) : idx;
-//         if (idx >= 0 && idx < NUM_ACTIONS) {
-//             child_actions.emplace_back(c, idx);
-//             max_logit = std::max(max_logit, eval.policy[idx]);
-//         }
-//     }
-//
-//     if (child_actions.empty()) return;
-//
-//     // Softmax over legal moves only
-//     float sum = 0.0f;
-//     std::vector<float> exps(child_actions.size());
-//     for (size_t i = 0; i < child_actions.size(); ++i) {
-//         exps[i] = std::exp(eval.policy[child_actions[i].second] - max_logit);
-//         sum += exps[i];
-//     }
-//     for (size_t i = 0; i < child_actions.size(); ++i) {
-//         pool[child_actions[i].first].stats.prior = exps[i] / sum;
-//     }
-// }
 template<InferenceProvider Inference>
 void CompEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Inference& inference) {
     StateNode& node = pool[node_idx];
@@ -1305,7 +1271,7 @@ void CompEngine::expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Infere
 
     EvalResult eval;
     if constexpr (is_inference_server_v<Inference>) {
-        eval = inference.submit_full(&node).get();
+        eval = inference.submit(&node).get();
     } else {
         eval = inference.evaluate_node(&node);
     }
@@ -1377,115 +1343,6 @@ void CompEngine::run_iterations(NodePool& pool, uint32_t root_idx,
         }
     }
 }
-// template<InferenceProvider Inference>
-// void CompEngine::run_iterations(NodePool& pool, uint32_t root_idx, 
-//                                  Inference& inference, int iterations) {
-//     MCTSConfig mcts_config;
-//     mcts_config.c_puct = config_.c_puct;
-//     mcts_config.fpu = config_.fpu;
-//
-//     const int batch_size = config_.eval_batch_size;
-//
-//     struct Pending {
-//         std::vector<uint32_t> path;
-//         uint32_t node_idx;
-//         std::conditional_t<is_inference_server_v<Inference>, std::future<float>, char> future{};
-//     };
-//     std::vector<Pending> pending;
-//     pending.reserve(batch_size);
-//
-//     auto flush = [&]() {
-//         if (pending.empty()) return;
-//
-//         if constexpr (is_inference_server_v<Inference>) {
-//             for (auto& p : pending) {
-//                 float v = p.future.get();
-//                 pool[p.node_idx].stats.set_nn_value(v);
-//                 backpropagate(pool, p.path, v);
-//             }
-//         } else {
-//             std::vector<const StateNode*> to_eval;
-//             std::vector<size_t> indices;
-//
-//             for (size_t i = 0; i < pending.size(); ++i) {
-//                 StateNode& n = pool[pending[i].node_idx];
-//                 if (n.stats.has_nn_value()) {
-//                     backpropagate(pool, pending[i].path, n.stats.get_nn_value());
-//                 } else {
-//                     to_eval.push_back(&n);
-//                     indices.push_back(i);
-//                 }
-//             }
-//
-//             if (!to_eval.empty()) {
-//                 auto vals = inference.evaluate_batch_values(to_eval);
-//                 for (size_t j = 0; j < indices.size(); ++j) {
-//                     auto& p = pending[indices[j]];
-//                     pool[p.node_idx].stats.set_nn_value(vals[j]);
-//                     backpropagate(pool, p.path, vals[j]);
-//                 }
-//             }
-//         }
-//         pending.clear();
-//     };
-//
-//     for (int i = 0; i < iterations; ++i) {
-//         std::vector<uint32_t> path;
-//         path.reserve(64);
-//         uint32_t cur = root_idx;
-//
-//         // Selection: descend tree via PUCT
-//         while (cur != NULL_NODE) {
-//             path.push_back(cur);
-//             StateNode& n = pool[cur];
-//             if (n.is_terminal() || !n.has_children()) break;
-//             cur = select_child_puct(pool, cur, mcts_config);
-//         }
-//
-//         if (path.empty()) continue;
-//
-//         uint32_t leaf = path.back();
-//         StateNode& leaf_node = pool[leaf];
-//
-//         // Terminal: backprop known value
-//         if (leaf_node.is_terminal()) {
-//             backpropagate(pool, path, leaf_node.terminal_value);
-//             continue;
-//         }
-//
-//         // Expansion
-//         if (!leaf_node.is_expanded()) {
-//             expand_with_priors(pool, leaf, inference);
-//         }
-//
-//         // Select child for evaluation
-//         uint32_t eval_idx = leaf;
-//         if (leaf_node.has_children()) {
-//             uint32_t child = select_child_puct(pool, leaf, mcts_config);
-//             if (child != NULL_NODE) {
-//                 path.push_back(child);
-//                 eval_idx = child;
-//             }
-//         }
-//
-//         // Queue or immediate backprop
-//         StateNode& eval_node = pool[eval_idx];
-//         if (eval_node.stats.has_nn_value()) {
-//             backpropagate(pool, path, eval_node.stats.get_nn_value());
-//         } else {
-//             if constexpr (is_inference_server_v<Inference>) {
-//                 pending.push_back({std::move(path), eval_idx, inference.submit(&eval_node)});
-//             } else {
-//                 pending.push_back({std::move(path), eval_idx, {}});
-//             }
-//             if (static_cast<int>(pending.size()) >= batch_size) {
-//                 flush();
-//             }
-//         }
-//     }
-//
-//     flush();
-// }
 
 template<InferenceProvider Inference>
 Move CompEngine::search(NodePool& pool, uint32_t root_idx, Inference& inference) {

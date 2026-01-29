@@ -110,8 +110,8 @@ def main():
                         help='Paths to .pt models to test. If empty, uses 3 most recent best_ models.')
     parser.add_argument('--games', type=int, default=100, help='Games per match')
     parser.add_argument('--sims', type=int, default=500, help='MCTS simulations per move')
-    parser.add_argument('--threads', type=int, default=20, help='Number of threads')
-    parser.add_argument('--temp', type=float, default=0.1, help='Temperature')
+    parser.add_argument('--threads', type=int, default=100, help='Number of threads')
+    parser.add_argument('--temp', type=float, default=0.0, help='Temperature')
     parser.add_argument('--temp-drop', type=int, default=10, help='Ply to drop temperature')
     parser.add_argument('--max-memory', type=int, default=30, help='Max memory in GB')
 

@@ -23,6 +23,7 @@ void InferenceServer::start() {
     if (running_.exchange(true, std::memory_order_acq_rel)) {
         return;  // Already running
     }
+    start_time_ = std::chrono::steady_clock::now();
 
     stop_requested_.store(false, std::memory_order_release);
     inference_thread_ = std::thread([this] { inference_loop(); });
@@ -50,69 +51,76 @@ void InferenceServer::stop() {
     running_.store(false, std::memory_order_release);
 
     size_t requests = total_requests_.load();
+    size_t batch_requests = batch_requests_.load();
     size_t batches = total_batches_.load();
     double avg_batch = batches > 0 ? static_cast<double>(requests) / batches : 0.0;
     std::cout << "[InferenceServer] Stopped. Total requests: " << requests
-              << ", batches: " << batches
-              << ", avg batch size: " << std::fixed << std::setprecision(1) << avg_batch << "\n";
+              << ", batched requests: " << batch_requests
+              << ", GPU batches: " << batches
+              << ", avg batch size: " << std::fixed << std::setprecision(1) << avg_batch << std::endl;
 }
 
 void InferenceServer::flush() {
     queue_cv_.notify_all();
 }
 
-std::future<float> InferenceServer::submit(const StateNode* node) {
-    std::promise<float> promise;
-    auto future = promise.get_future();
-
-    {
-        std::lock_guard lock(queue_mutex_);
-        single_queue_.push_back({node, std::move(promise)});
-    }
-
-    total_requests_.fetch_add(1, std::memory_order_relaxed);
-    queue_cv_.notify_one();
-
-    return future;
-}
-
-std::future<EvalResult> InferenceServer::submit_full(const StateNode* node) {
+std::future<EvalResult> InferenceServer::submit(const StateNode* node) {
     std::promise<EvalResult> promise;
     auto future = promise.get_future();
 
     {
         std::lock_guard lock(queue_mutex_);
-        full_eval_queue_.push_back({node, std::move(promise)});
+        eval_queue_.push_back({node, std::move(promise)});
     }
 
     total_requests_.fetch_add(1, std::memory_order_relaxed);
+    single_requests_.fetch_add(1, std::memory_order_relaxed);
     queue_cv_.notify_one();
 
     return future;
 }
 
-std::future<std::vector<float>> InferenceServer::submit_batch(
-    std::vector<const StateNode*> nodes)
+std::vector<std::future<EvalResult>> InferenceServer::submit_batch(
+    const std::vector<const StateNode*>& nodes) 
 {
-    std::promise<std::vector<float>> promise;
-    auto future = promise.get_future();
+    if (nodes.empty()) return {};
 
-    size_t count = nodes.size();
+    // prepare everything OUTSIDE the lock
+    // should not block inference thread
+    std::vector<std::future<EvalResult>> futures;
+    futures.reserve(nodes.size());
 
-    {
-        std::lock_guard lock(queue_mutex_);
-        batch_queue_.push_back({std::move(nodes), std::move(promise)});
+    std::vector<EvalRequest> requests;
+    requests.reserve(nodes.size());
+
+    for (const auto* node : nodes) {
+        std::promise<EvalResult> p;
+        futures.push_back(p.get_future());
+        requests.push_back({node, std::move(p)});
     }
 
-    total_requests_.fetch_add(count, std::memory_order_relaxed);
-    queue_cv_.notify_one();
+    // lock once and move data
+    {
+        std::lock_guard lock(queue_mutex_);
 
-    return future;
+        // Move all requests to the main queue
+        // std::deque::insert with move iterators is efficient
+        eval_queue_.insert(
+            eval_queue_.end(),
+            std::make_move_iterator(requests.begin()),
+            std::make_move_iterator(requests.end())
+        );
+    }
+
+    total_requests_.fetch_add(nodes.size(), std::memory_order_relaxed);
+    batch_requests_.fetch_add(1, std::memory_order_relaxed);
+    queue_cv_.notify_one(); 
+
+    return futures;
 }
 
 void InferenceServer::inference_loop() {
     auto& timers = get_timers();
-
     while (!stop_requested_.load(std::memory_order_acquire)) {
         // Wait for requests or timeout
         {
@@ -121,14 +129,13 @@ void InferenceServer::inference_loop() {
             auto deadline = std::chrono::steady_clock::now() +
                            std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
 
-            queue_cv_.wait_until(lock, deadline, [this] {
-                size_t total_pending = single_queue_.size() + 
-                                      full_eval_queue_.size() + 
-                                      (batch_queue_.size() * 100);//dont actually submit_batch anymore, should remove
-
-                return total_pending >= config_.batch_size || 
+            bool batch_trigger = queue_cv_.wait_until(lock, deadline, [this] {
+                return eval_queue_.size() >= config_.batch_size || 
                        stop_requested_.load(std::memory_order_acquire);
             });
+            if (!batch_trigger) {
+                total_time_triggers_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         // Process pending requests
@@ -142,104 +149,76 @@ void InferenceServer::inference_loop() {
 void InferenceServer::process_pending() {
     auto& timers = get_timers();
 
-    // Collect all pending requests
-    std::vector<EvalRequest> singles;
-    std::vector<FullEvalRequest> full_evals;
-    std::vector<BatchEvalRequest> batches;
-
+    // use a local deque and swap it with the member queue to reduce lock contention
+    std::deque<EvalRequest> local_requests;
     {
         std::lock_guard lock(queue_mutex_);
 
-        // Take all single requests (up to batch size)
-        while (!single_queue_.empty() &&
-               singles.size() < static_cast<size_t>(config_.batch_size)) {
-            singles.push_back(std::move(single_queue_.front()));
-            single_queue_.pop_front();
+        if (eval_queue_.empty()) {
+            return;
         }
-
-        // Take all full eval requests (up to batch size)
-        while (!full_eval_queue_.empty() &&
-               full_evals.size() < static_cast<size_t>(config_.batch_size)) {
-            full_evals.push_back(std::move(full_eval_queue_.front()));
-            full_eval_queue_.pop_front();
-        }
-
-        // Take all batch requests
-        while (!batch_queue_.empty()) {
-            batches.push_back(std::move(batch_queue_.front()));
-            batch_queue_.pop_front();
-        }
+        local_requests.swap(eval_queue_);
     }
 
-    // Process full eval requests first (they need complete EvalResult with policy)
-    if (!full_evals.empty()) {
-        std::vector<const StateNode*> full_nodes;
-        full_nodes.reserve(full_evals.size());
-        for (const auto& req : full_evals) {
-            full_nodes.push_back(req.node);
-        }
+    std::vector<const StateNode*> nodes;
+    nodes.reserve(local_requests.size());
 
-        std::vector<EvalResult> full_results;
-        {
-            ScopedTimer t(timers.nn_inference);
-            full_results = model_.evaluate_batch(full_nodes);
-        }
-
-        for (size_t i = 0; i < full_evals.size(); ++i) {
-            full_evals[i].promise.set_value(std::move(full_results[i]));
-        }
-
-        total_batches_.fetch_add(1, std::memory_order_relaxed);
-        total_batch_size_sum_.fetch_add(full_evals.size(), std::memory_order_relaxed);
+    for (const auto& req : local_requests) {
+        nodes.push_back(req.node);
     }
 
-    // Process value-only requests (singles and batches)
-    // Combine singles and batches into one mega-batch for better GPU utilization
-    std::vector<const StateNode*> all_nodes;
-    size_t singles_count = 0;
-
-    if (!singles.empty()) {
-        singles_count = singles.size();
-        all_nodes.reserve(singles.size() + batches.size() * 100);  // estimate
-        for (const auto& req : singles) {
-            all_nodes.push_back(req.node);
-        }
-    }
-
-    // Track where each batch's results start
-    std::vector<size_t> batch_offsets;
-    for (auto& batch_req : batches) {
-        batch_offsets.push_back(all_nodes.size());
-        for (const auto* node : batch_req.nodes) {
-            all_nodes.push_back(node);
-        }
-    }
-
-    if (all_nodes.empty()) return;
-
-    // Single GPU call for everything
-    std::vector<float> all_values;
+    //run inference
+    std::vector<EvalResult> results;
     {
         ScopedTimer t(timers.nn_inference);
-        all_values = model_.evaluate_batch_values(all_nodes);
+        // Process the entire accumulated batch at once
+        results = model_.evaluate_batch(nodes);
     }
 
-    // Distribute results to singles
-    for (size_t i = 0; i < singles_count; ++i) {
-        singles[i].promise.set_value(all_values[i]);
-    }
-
-    // Distribute results to batches
-    for (size_t b = 0; b < batches.size(); ++b) {
-        size_t start = batch_offsets[b];
-        size_t count = batches[b].nodes.size();
-        std::vector<float> batch_values(all_values.begin() + start,
-                                         all_values.begin() + start + count);
-        batches[b].promise.set_value(std::move(batch_values));
+    // distribute results
+    for (size_t i = 0; i < local_requests.size(); ++i) {
+        local_requests[i].promise.set_value(std::move(results[i]));
     }
 
     total_batches_.fetch_add(1, std::memory_order_relaxed);
-    total_batch_size_sum_.fetch_add(all_nodes.size(), std::memory_order_relaxed);
+    total_batch_size_sum_.fetch_add(local_requests.size(), std::memory_order_relaxed);
+
+    if (config_.verbose) {
+        size_t batches = total_batches_.load(std::memory_order_relaxed);
+        constexpr size_t STATS_INTERVAL = 100000; // Print every N GPU evaluations
+        if (batches > 0 && batches % STATS_INTERVAL == 0) {
+            print_stats();
+        }
+    }
+}
+
+void InferenceServer::print_stats() {
+    auto now = std::chrono::steady_clock::now();
+    std::chrono::duration<double> diff = now - start_time_;
+    double elapsed = diff.count();
+
+    if (elapsed > 0) {
+        size_t requests = total_requests_.load(std::memory_order_relaxed);
+        size_t batches = total_batches_.load(std::memory_order_relaxed);
+        size_t client_submissions = batch_requests_.load(std::memory_order_relaxed);
+        size_t single_submissions = single_requests_.load(std::memory_order_relaxed);
+        
+        double nodes_per_sec = static_cast<double>(requests) / elapsed;
+        double gpu_batches_per_sec = static_cast<double>(batches) / elapsed;
+        double avg_batch_size = static_cast<double>(requests) / batches;
+        float nodes_per_submit = client_submissions > 0 ? ((requests - single_submissions) / static_cast<float>(client_submissions) ) : 0.0f; //submit_batch() avg size
+        float time_trig = 100 * total_time_triggers_.load(std::memory_order_relaxed) / static_cast<float>(batches);
+
+        std::cout << "[InferenceServer] " << std::fixed << std::setprecision(1)
+                  << "Nodes/s_b(): " << nodes_per_submit << " | "
+                  << "submit_batch(): " << client_submissions << " | "
+                  << "GPU Batches: " << batches << " | "
+                  << "Time trig: " << time_trig << "% | "
+                  << "Avg Batch: " << avg_batch_size << " | "
+                  << "Tput: " << std::setprecision(0) << nodes_per_sec << " nodes/s | "
+                  << "GPU: " << std::setprecision(1) << gpu_batches_per_sec << " batches/s" 
+                  << std::endl;
+    }
 }
 
 } // namespace qbot
