@@ -25,22 +25,10 @@
 
 namespace qbot {
 
-/// Single evaluation request (value only, for backwards compatibility)
+/// Single evaluation request with full result (policy + value)
 struct EvalRequest {
     const StateNode* node;
-    std::promise<float> promise;
-};
-
-/// Single evaluation request with full result (policy + value)
-struct FullEvalRequest {
-    const StateNode* node;
     std::promise<EvalResult> promise;
-};
-
-/// Batch evaluation request (for computing priors on children)
-struct BatchEvalRequest {
-    std::vector<const StateNode*> nodes;
-    std::promise<std::vector<float>> promise;
 };
 
 /// Configuration for inference server
@@ -48,6 +36,7 @@ struct InferenceServerConfig {
     int batch_size = 128;           // Target batch size before processing
     double max_wait_ms = 1.0;            // Max time to wait for batch to fill
     bool enable_batching = true;    // If false, process requests immediately
+    bool verbose = true;    // If true, talk about the inferences we're doing
 };
 
 /// Thread-safe inference server
@@ -86,18 +75,12 @@ public:
         return running_.load(std::memory_order_acquire);
     }
 
-    /// Submit a single node for evaluation (value only)
-    /// Returns a future that will contain the value estimate
-    [[nodiscard]] std::future<float> submit(const StateNode* node);
-
     /// Submit a single node for full evaluation (policy + value)
     /// Returns a future that will contain the complete EvalResult
-    [[nodiscard]] std::future<EvalResult> submit_full(const StateNode* node);
+    [[nodiscard]] std::future<EvalResult> submit(const StateNode* node);
 
-    /// Submit a batch of nodes for evaluation (e.g., all children for priors)
-    /// Returns a future that will contain all value estimates
-    [[nodiscard]] std::future<std::vector<float>> submit_batch(
-        std::vector<const StateNode*> nodes);
+    [[nodiscard]] std::vector<std::future<EvalResult>> submit_batch(
+        const std::vector<const StateNode*>& nodes);
 
     /// Get statistics
     [[nodiscard]] size_t total_requests() const noexcept {
@@ -108,7 +91,7 @@ public:
     }
     [[nodiscard]] size_t current_queue_size() const noexcept {
         std::lock_guard lock(queue_mutex_);
-        return single_queue_.size() + batch_queue_.size();
+        return eval_queue_.size();
     }
 
 private:
@@ -129,17 +112,19 @@ private:
     // Request queues (protected by queue_mutex_)
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
-    std::deque<EvalRequest> single_queue_;
-    std::deque<FullEvalRequest> full_eval_queue_;  // For policy + value requests
-    std::deque<BatchEvalRequest> batch_queue_;
+    std::deque<EvalRequest> eval_queue_;  // For policy + value requests
 
     // Statistics
-    std::atomic<size_t> total_requests_{0};
-    std::atomic<size_t> total_batches_{0};
+    void print_stats();
+    std::atomic<size_t> total_requests_{0}; //actually counts total nodes requested
+    std::atomic<size_t> batch_requests_{0}; //counts each submit_batch as 1
+    std::atomic<size_t> single_requests_{0};//counts each submit as 1
+    std::atomic<size_t> total_batches_{0}; //counts actual gpu submissions
     std::atomic<size_t> total_batch_size_sum_{0};  // Sum of all batch sizes for averaging
     std::atomic<size_t> total_flushes_{0};
     std::atomic<size_t> total_batch_triggers_{0};
-    std::atomic<size_t> total_total_time_triggers_{0};
+    std::atomic<size_t> total_time_triggers_{0};
+    std::chrono::steady_clock::time_point start_time_;
 
 public:
     /// Get average batch size
