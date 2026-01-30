@@ -192,61 +192,63 @@ namespace {
 /// Extract samples from a subtree via DFS
 /// Only extracts from nodes marked as on_game_path (part of a completed game)
 /// Uses the actual wins/losses counters from EdgeStats for value targets
+// NOTE: I BROKE THE WINS/LOSSES COUNT, IF WE WANT TO USE THIS fix it and remove the initial return;
 void extract_samples_dfs(const NodePool& pool, uint32_t node_idx,
                          std::vector<TrainingSample>& samples) {
-    const StateNode& node = pool[node_idx];
-
-    // Only extract from nodes that were on an actual game path (had win/loss backpropagated)
-    if (!node.is_on_game_path()) {
-        return;
-    }
-
-    // Skip terminal nodes (no policy target - they have no children to form a distribution)
-    if (node.is_terminal()) {
-        return;
-    }
-
-    // Skip nodes without children (no policy target)
-    if (!node.has_children()) {
-        return;
-    }
-
-    // Check if this node has actual game outcomes recorded
-    uint32_t wins = node.stats.wins.load(std::memory_order_relaxed);
-    uint32_t losses = node.stats.losses.load(std::memory_order_relaxed);
-    uint32_t total_games = wins + losses;
-
-    // Only extract sample if we have actual game outcomes
-    // This ensures we only train on positions with known results
-    if (total_games > 0) {
-        TrainingSample sample;
-        sample.state = extract_compact_state(node);
-        sample.policy = extract_visit_distribution(pool, node_idx);
-
-        // Use actual game outcomes as value target
-        // These are already from current player's perspective (recorded during backprop)
-        sample.wins = wins;
-        sample.losses = losses;
-        
-        // Compute scalar value for convenience/compatibility
-        sample.value = (wins + losses > 0)
-            ? static_cast<float>(static_cast<int>(wins) - static_cast<int>(losses)) / static_cast<float>(total_games)
-            : 0.0f;
-        // if (sample.state.p1_row > 8) std::cout << "error p1 row is " << sample.state.p1_row << std::endl;
-        // if (sample.wins > 16) std::cout << "error wins is " << sample.wins << std::endl;
-        // if (sample.value > 10.0f || sample.value < -10.0f) std::cout << "error value is " << sample.value << std::endl;
-
-        samples.push_back(sample);
-    }
-
-    // Recurse to children that are on the game path
-    uint32_t child = node.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].is_on_game_path()) {
-            extract_samples_dfs(pool, child, samples);
-        }
-        child = pool[child].next_sibling;
-    }
+    return;
+    // const StateNode& node = pool[node_idx];
+    //
+    // // Only extract from nodes that were on an actual game path (had win/loss backpropagated)
+    // if (!node.is_on_game_path()) {
+    //     return;
+    // }
+    //
+    // // Skip terminal nodes (no policy target - they have no children to form a distribution)
+    // if (node.is_terminal()) {
+    //     return;
+    // }
+    //
+    // // Skip nodes without children (no policy target)
+    // if (!node.has_children()) {
+    //     return;
+    // }
+    //
+    // // Check if this node has actual game outcomes recorded
+    // uint32_t wins = node.stats.wins.load(std::memory_order_relaxed);
+    // uint32_t losses = node.stats.losses.load(std::memory_order_relaxed);
+    // uint32_t total_games = wins + losses;
+    //
+    // // Only extract sample if we have actual game outcomes
+    // // This ensures we only train on positions with known results
+    // if (total_games > 0) {
+    //     TrainingSample sample;
+    //     sample.state = extract_compact_state(node);
+    //     sample.policy = extract_visit_distribution(pool, node_idx);
+    //
+    //     // Use actual game outcomes as value target
+    //     // These are already from current player's perspective (recorded during backprop)
+    //     sample.wins = wins;
+    //     sample.losses = losses;
+    //     
+    //     // Compute scalar value for convenience/compatibility
+    //     sample.value = (wins + losses > 0)
+    //         ? static_cast<float>(static_cast<int>(wins) - static_cast<int>(losses)) / static_cast<float>(total_games)
+    //         : 0.0f;
+    //     // if (sample.state.p1_row > 8) std::cout << "error p1 row is " << sample.state.p1_row << std::endl;
+    //     // if (sample.wins > 16) std::cout << "error wins is " << sample.wins << std::endl;
+    //     // if (sample.value > 10.0f || sample.value < -10.0f) std::cout << "error value is " << sample.value << std::endl;
+    //
+    //     samples.push_back(sample);
+    // }
+    //
+    // // Recurse to children that are on the game path
+    // uint32_t child = node.first_child;
+    // while (child != NULL_NODE) {
+    //     if (pool[child].is_on_game_path()) {
+    //         extract_samples_dfs(pool, child, samples);
+    //     }
+    //     child = pool[child].next_sibling;
+    // }
 }
 
 } // anonymous namespace

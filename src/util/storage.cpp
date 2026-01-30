@@ -31,7 +31,7 @@ SerializedNode TreeStorage::serialize_node(const StateNode& node) noexcept {
     sn.move_data = node.move.data;
     sn.flags = node.flags;
     sn.reserved = 0;
-    sn.ply = node.ply;
+    // sn.ply = node.ply;
 
     // Fence grid
     sn.fences_horizontal = node.fences.horizontal;
@@ -62,7 +62,7 @@ void TreeStorage::deserialize_node(const SerializedNode& src, StateNode& dst) no
     // Move and flags
     dst.move.data = src.move_data;
     dst.flags = src.flags;
-    dst.ply = src.ply;
+    // dst.ply = src.ply;
 
     // Fence grid
     dst.fences.horizontal = src.fences_horizontal;
@@ -72,7 +72,7 @@ void TreeStorage::deserialize_node(const SerializedNode& src, StateNode& dst) no
     dst.terminal_value = src.terminal_value;
     dst.stats.visits.store(src.visits, std::memory_order_relaxed);
     dst.stats.total_value.store(src.total_value, std::memory_order_relaxed);
-    dst.stats.virtual_loss.store(0, std::memory_order_relaxed);
+    // dst.stats.virtual_loss.store(0, std::memory_order_relaxed); //this may break deserialization of old nodes?
     dst.stats.prior = src.prior;
 }
 
@@ -184,7 +184,7 @@ std::expected<void, StorageError> TreeStorage::save(
         sn.move_data = node.move.data;
         sn.flags = node.flags;
         sn.reserved = 0;
-        sn.ply = node.ply;
+        // sn.ply = node.ply;
         sn.fences_horizontal = node.fences.horizontal;
         sn.fences_vertical = node.fences.vertical;
         sn.visits = node.stats.visits.load(std::memory_order_relaxed);
@@ -341,7 +341,7 @@ std::expected<size_t, StorageError> TreeStorage::save_pruned(
         sn.move_data = node.move.data;
         sn.flags = node.flags;
         sn.reserved = 0;
-        sn.ply = node.ply;
+        // sn.ply = node.ply;
         sn.fences_horizontal = node.fences.horizontal;
         sn.fences_vertical = node.fences.vertical;
         sn.visits = node.stats.visits.load(std::memory_order_relaxed);
