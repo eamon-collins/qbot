@@ -126,16 +126,19 @@ void InferenceServer::inference_loop() {
         {
             std::unique_lock lock(queue_mutex_);
 
-            auto deadline = std::chrono::steady_clock::now() +
-                           std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
-
-            bool batch_trigger = queue_cv_.wait_until(lock, deadline, [this] {
-                return eval_queue_.size() >= config_.batch_size || 
-                       stop_requested_.load(std::memory_order_acquire);
+            // auto deadline = std::chrono::steady_clock::now() +
+            //                std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
+            //
+            // bool batch_trigger = queue_cv_.wait_until(lock, deadline, [this] {
+            //     return eval_queue_.size() >= config_.batch_size || 
+            //            stop_requested_.load(std::memory_order_acquire);
+            // });
+            // if (!batch_trigger) {
+            //     total_time_triggers_.fetch_add(1, std::memory_order_relaxed);
+            // }
+            queue_cv_.wait(lock, [this] {
+                return !eval_queue_.empty() || stop_requested_.load(std::memory_order_acquire);
             });
-            if (!batch_trigger) {
-                total_time_triggers_.fetch_add(1, std::memory_order_relaxed);
-            }
         }
 
         // Process pending requests
@@ -184,7 +187,7 @@ void InferenceServer::process_pending() {
 
     if (config_.verbose) {
         size_t batches = total_batches_.load(std::memory_order_relaxed);
-        constexpr size_t STATS_INTERVAL = 5000; // Print every N GPU evaluations
+        constexpr size_t STATS_INTERVAL = 100000; // Print every N GPU evaluations
         if (batches > 0 && batches % STATS_INTERVAL == 0) {
             print_stats();
         }

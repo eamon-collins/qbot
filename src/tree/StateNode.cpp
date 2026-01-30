@@ -1,7 +1,6 @@
 #include "StateNode.h"
 #include "node_pool.h"
 #include "../util/pathfinding.h"
-#include "../util/timer.h"
 
 #include <iostream>
 #include <sstream>
@@ -336,8 +335,11 @@ size_t StateNode::generate_valid_children() noexcept {
     NodePool& p = pool();
 
     // Track children indices for linking
-    std::vector<uint32_t> child_indices;
-    child_indices.reserve(moves.size());
+    // keeping child_indices on stack even though I suspect it doesn't matter at all.
+    size_t child_count = 0;
+    uint32_t child_indices[140];
+    // std::vector<uint32_t> child_indices;
+    // child_indices.reserve(moves.size());
 
     //get both paths up front, then only do pathfinding on child paths if the potential fence intersects the path.
     {
@@ -359,9 +361,8 @@ size_t StateNode::generate_valid_children() noexcept {
                 } else if (!p2_safe && !pf.check_player_path_with_fence(*this, m, false)) {
                     continue;
                 }
-                //if we made it here, move does not block
             }
-
+                //if we made it here, move does not block
             uint32_t child_idx = p.allocate();
             if (child_idx == NULL_NODE) {
                 // Allocation failed - rollback all allocated children
@@ -373,28 +374,30 @@ size_t StateNode::generate_valid_children() noexcept {
 
             // Initialize child from this parent's state with move applied
             p[child_idx].init_from_parent(*this, m, self_index);
-            child_indices.push_back(child_idx);
+            // child_indices.push_back(child_idx);
+            child_indices[child_count++] = child_idx;
         }
     }
 
-    if (child_indices.empty()) {
+    // if (child_indices.empty()) {
+    if (child_count == 0) {
         return 0;
     }
 
-    float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
+    float uniform_prior = 1.0f / static_cast<float>(child_count);
     // Link children as siblings (left-child right-sibling representation)
-    for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
+    for (size_t i = 0; i + 1 < child_count; ++i) {
         p[child_indices[i]].next_sibling = child_indices[i + 1];
         p[child_indices[i]].stats.prior = uniform_prior; 
     }
-    p[child_indices.back()].next_sibling = NULL_NODE;
-    p[child_indices.back()].stats.prior = uniform_prior; 
+    p[child_indices[child_count-1]].next_sibling = NULL_NODE;
+    p[child_indices[child_count-1]].stats.prior = uniform_prior; 
 
     // Set first child and mark as expanded
-    first_child = child_indices.front();
+    first_child = child_indices[0];
     set_expanded();
 
-    return child_indices.size();
+    return child_count;
 }
 
 uint32_t StateNode::find_or_create_child(Move move) noexcept {

@@ -10,7 +10,7 @@
 #include <sstream>
 
 namespace qbot {
-
+constexpr bool batch_requests = false;
 
 // ============================================================================
 // SelfPlayEngine Implementation
@@ -662,7 +662,7 @@ void SelfPlayEngine::run_multi_game_worker(
             }
 
             // Also do deferred prune/delete work
-            do_deferred_work();
+            // do_deferred_work();
 
             // Now get results and apply priors
             for (auto& pe : pending_root_expansions) {
@@ -805,31 +805,33 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
 
                 if constexpr (is_inference_server_v<Inference>) {
-                    // auto future = inference.submit(&leaf);
-                    // pending_expansions.push_back({gi, leaf_idx, std::move(future), false});
-                    //fill the future field when submit as batch
-                    pending_expansions.push_back({gi, leaf_idx, {}, false});
+                    if constexpr (batch_requests) {
+                        //fill the future field when submit as batch
+                        pending_expansions.push_back({gi, leaf_idx, {}, false});
+                    } else {
+                        auto future = inference.submit(&leaf);
+                        pending_expansions.push_back({gi, leaf_idx, std::move(future), false});
+                    }
                 }
             }
 
             // Process batch
-            // if (pending_expansions.size() >= BATCH_TARGET ||
-            //     pending_expansions.size() >= static_cast<size_t>(active_games)) {
-            if (pending_expansions.size() > 0) {
+            if (pending_expansions.size() >= BATCH_TARGET ||
+                pending_expansions.size() >= static_cast<size_t>(active_games)) {
+            // if (pending_expansions.size() > 0) {
             //consider other possible submit triggers
-            
-            //comment this out to remove batch submission
-                //get list of node references from pending expansions. bit annoying
-                std::vector<const StateNode*> batch_nodes(pending_expansions.size());
-                std::transform(pending_expansions.begin(), pending_expansions.end(), batch_nodes.begin(),
-                   [&](const auto& pe) { return &pool[pe.leaf_idx]; });
+                if (batch_requests) {
+                    //get list of node references from pending expansions. bit annoying
+                    std::vector<const StateNode*> batch_nodes(pending_expansions.size());
+                    std::transform(pending_expansions.begin(), pending_expansions.end(), batch_nodes.begin(),
+                       [&](const auto& pe) { return &pool[pe.leaf_idx]; });
 
-                //submit for inference, pass futures back, should be same order
-                auto futures = inference.submit_batch(batch_nodes);
-                for (size_t i = 0; i < futures.size(); ++i) {
-                    pending_expansions[i].future = std::move(futures[i]);
+                    //submit for inference, pass futures back, should be same order
+                    auto futures = inference.submit_batch(batch_nodes);
+                    for (size_t i = 0; i < futures.size(); ++i) {
+                        pending_expansions[i].future = std::move(futures[i]);
+                    }
                 }
-            //to here
 
                 // generate children while GPU computes
                 // overlaps expensive CPU work with GPU inference
@@ -842,7 +844,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
 
                 // Also do deferred cleanup work
-                do_deferred_work();
+                // do_deferred_work();
 
                 // Now collect results - GPU should be done or nearly done
                 for (auto& pe : pending_expansions) {
@@ -931,6 +933,8 @@ void SelfPlayEngine::run_multi_game_worker(
             g.num_moves++;
             g.mcts_iterations_done = 0;
         }
+        //test out doing it immediately
+        do_deferred_work();
     }
 
     // Final cleanup
