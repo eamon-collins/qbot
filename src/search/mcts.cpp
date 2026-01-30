@@ -59,20 +59,20 @@ void SelfPlayEngine::run_mcts_iterations(NodePool& pool, uint32_t root_idx,
             expand_with_nn_priors(pool, leaf_idx, inference);
 
             // If expansion set a value (it should have), backpropagate it
-            if (leaf.stats.has_nn_value()) {
+            // if (leaf.stats.has_nn_value()) {
                 backpropagate(pool, path, leaf.stats.get_nn_value());
-            } else if (leaf.has_children()) {
-                std::cerr << "Error, leaf has children but inference failed to produce value?" << std::endl;
-            } else {
-                std::cerr << "Error, leaf has no children but is not terminal and failed to gen valid children" << std::endl;
-            }
+            // } else if (leaf.has_children()) {
+            //     std::cerr << "Error, leaf has children but inference failed to produce value?" << std::endl;
+            // } else {
+            //     std::cerr << "Error, leaf has no children but is not terminal and failed to gen valid children" << std::endl;
+            // }
         } else {
             // We hit an expanded node that has no children (stalemate/blocked)
             // or we somehow re-selected a leaf that was just expanded but not advanced?
             // Just backprop its value again.
-            if (leaf.stats.has_nn_value()) {
+            // if (leaf.stats.has_nn_value()) {
                 backpropagate(pool, path, leaf.stats.get_nn_value());
-            }
+            // }
         }
     }
 }
@@ -132,7 +132,7 @@ void SelfPlayEngine::backpropagate_game_outcome(NodePool& pool, const std::vecto
             ? static_cast<float>(winner) 
             : static_cast<float>(-winner);
 
-        node.stats.record_game_outcome(relative_value);
+        // node.stats.record_game_outcome(relative_value);
     }
 }
 
@@ -216,7 +216,7 @@ void SelfPlayEngine::run_multi_game(
     int pool_reset_count = 0;
 
     //220000 is approx constant for # bytes per game per simulationpermove.
-    size_t soft_limit_bytes = bounds.max_bytes - (10000ULL * num_workers * games_per_worker * config_.simulations_per_move);
+    size_t soft_limit_bytes = bounds.max_bytes - (1000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
               << num_workers << " workers\n";
     std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
@@ -797,10 +797,10 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
 
                 if (leaf.is_expanded()) {
-                    if (leaf.stats.has_nn_value()) {
+                    // if (leaf.stats.has_nn_value()) {
                         backpropagate(pool, path, leaf.stats.get_nn_value());
                         g.mcts_iterations_done++;
-                    }
+                    // }
                     continue;
                 }
 
@@ -1103,7 +1103,7 @@ SelfPlayResult SelfPlayEngine::arena_game(
         search_node.p1 = game_state.p1;
         search_node.p2 = game_state.p2;
         search_node.fences = game_state.fences;
-        search_node.ply = game_state.ply;
+        // search_node.ply = game_state.ply;
         search_node.flags = game_state.flags & StateNode::FLAG_P1_TO_MOVE;  // Only preserve turn
         search_node.first_child = NULL_NODE;
         search_node.next_sibling = NULL_NODE;
@@ -1346,15 +1346,15 @@ void CompEngine::run_iterations(NodePool& pool, uint32_t root_idx,
         if (!leaf_node.is_expanded()) {
             expand_with_nn_priors(pool, leaf, inference);
             // After expansion, we have the node's value (from NN). Backpropagate it immediately.
-            if (leaf_node.stats.has_nn_value()) {
+            // if (leaf_node.stats.has_nn_value()) {
                 backpropagate(pool, path, leaf_node.stats.get_nn_value());
-            }
+            // }
         } else {
             // Node was already expanded (but had no children or re-hit?)
             // If it has a value, backprop it.
-            if (leaf_node.stats.has_nn_value()) {
+            // if (leaf_node.stats.has_nn_value()) {
                 backpropagate(pool, path, leaf_node.stats.get_nn_value());
-            }
+            // }
         }
     }
 }
