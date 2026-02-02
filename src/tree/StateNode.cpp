@@ -326,6 +326,8 @@ size_t StateNode::generate_valid_children() noexcept {
         return 0;
     }
 
+    auto& timers = get_timers();
+    ScopedTimer timer_whole(timers.setup_gen);
     std::vector<Move> moves = generate_valid_moves();
     if (moves.empty()) {
         return 0;
@@ -338,10 +340,12 @@ size_t StateNode::generate_valid_children() noexcept {
     child_indices.reserve(moves.size());
 
     //get both paths up front, then only do pathfinding on child paths if the potential fence intersects the path.
+    ScopedTimer* timer_p = new ScopedTimer(timers.pathfinding);
     Pathfinder& pf = get_pathfinder();
     std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
     std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
-    auto& timers = get_timers();
+    delete timer_p;
+
 
     for (const Move& m : moves) {
         // For fence moves, validate that it doesn't block either player
@@ -359,36 +363,42 @@ size_t StateNode::generate_valid_children() noexcept {
             //if we made it here, move does not block
         }
 
-        uint32_t child_idx = p.allocate();
-        if (child_idx == NULL_NODE) {
-            // Allocation failed - rollback all allocated children
-            for (uint32_t idx : child_indices) {
-                p.deallocate(idx);
+        {
+            ScopedTimer timer(timers.allocation);
+            uint32_t child_idx = p.allocate();
+            if (child_idx == NULL_NODE) {
+                // Allocation failed - rollback all allocated children
+                for (uint32_t idx : child_indices) {
+                    p.deallocate(idx);
+                }
+                return 0;
             }
-            return 0;
-        }
 
-        // Initialize child from this parent's state with move applied
-        p[child_idx].init_from_parent(*this, m, self_index);
-        child_indices.push_back(child_idx);
+            // Initialize child from this parent's state with move applied
+            p[child_idx].init_from_parent(*this, m, self_index);
+            child_indices.push_back(child_idx);
+        }
     }
 
     if (child_indices.empty()) {
         return 0;
     }
 
-    float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
-    // Link children as siblings (left-child right-sibling representation)
-    for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
-        p[child_indices[i]].next_sibling = child_indices[i + 1];
-        p[child_indices[i]].stats.prior = uniform_prior; 
-    }
-    p[child_indices.back()].next_sibling = NULL_NODE;
-    p[child_indices.back()].stats.prior = uniform_prior; 
+    {
+        ScopedTimer timer(timers.linking);
+        float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
+        // Link children as siblings (left-child right-sibling representation)
+        for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
+            p[child_indices[i]].next_sibling = child_indices[i + 1];
+            p[child_indices[i]].stats.prior = uniform_prior; 
+        }
+        p[child_indices.back()].next_sibling = NULL_NODE;
+        p[child_indices.back()].stats.prior = uniform_prior; 
 
-    // Set first child and mark as expanded
-    first_child = child_indices.front();
-    set_expanded();
+        // Set first child and mark as expanded
+        first_child = child_indices.front();
+        set_expanded();
+    }
 
     return child_indices.size();
 }

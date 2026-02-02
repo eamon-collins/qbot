@@ -65,11 +65,17 @@ struct SelfPlayTimers {
     TimerAccumulator nn_inference;     // Total NN inference time (including batching, GPU transfers, etc.)
     TimerAccumulator mcts_core;        // MCTS core logic (selection, expansion, backprop) excluding NN
     TimerAccumulator pathfinding;      // Pathfinding for wall validation
+    TimerAccumulator setup_gen;      // gen valid moves and some setup
+    TimerAccumulator allocation;      // allocating and initializing nodes
+    TimerAccumulator linking;      // linking child nodes
 
     void reset() noexcept {
         nn_inference.reset();
         mcts_core.reset();
         pathfinding.reset();
+        setup_gen.reset();
+        allocation.reset();
+        linking.reset();
     }
 
     void print() const {
@@ -85,6 +91,9 @@ struct SelfPlayTimers {
         print_line("NN Inference", nn_inference);
         print_line("MCTS Core", mcts_core);
         print_line("Pathfinding", pathfinding);
+        print_line("setup_gen", setup_gen);
+        print_line("allocation", allocation);
+        print_line("linking", linking);
         std::cout << "==================================\n\n";
     }
 };

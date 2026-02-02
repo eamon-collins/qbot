@@ -807,7 +807,7 @@ void SelfPlayEngine::run_multi_game_worker(
                     // inference.flush();
                 }
 
-                // KEY OPTIMIZATION: Generate children while GPU computes
+                // Generate children while GPU computes
                 // This overlaps expensive CPU work with GPU inference
                 for (auto& pe : pending_expansions) {
                     StateNode& leaf = pool[pe.leaf_idx];

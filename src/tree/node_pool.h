@@ -55,6 +55,8 @@ public:
         if (initial_chunks == 0) initial_chunks = 1;
 
         // Allocate all initial chunks
+        // reserve enough so we never have to reallocate this to avoid a mutex on node_at
+        chunks_.reserve(256);
         for (size_t i = 0; i < initial_chunks; ++i) {
             chunks_.push_back(std::make_unique<StateNode[]>(chunk_size_));
         }
