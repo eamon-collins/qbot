@@ -6,6 +6,7 @@
 #include "inference/inference.h"
 #include "search/mcts.h"
 #include "tree/node_pool.h"
+#include "util/pathfinding.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -355,5 +356,152 @@ TEST_F(InferenceBenchmark, SelfPlayThroughput) {
     std::cout << "║    Iterations:  " << std::left << std::setw(33) << actual_iterations << " ║\n";
     std::cout << "║    Speed:       " << std::left << std::setw(30) << std::to_string((int)ips) + " iter/sec" << " ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
+}
+
+// ============================================================================
+// Pathfinding Benchmarks
+// ============================================================================
+
+
+class PathfindingBenchmark : public ::testing::Test {
+protected:
+    struct Scenario {
+        FenceGrid fences;
+        Player player;
+        uint8_t goal_row;
+    };
+
+    std::vector<Scenario> scenarios_;
+
+    void SetUp() override {
+        // Pre-generate complex scenarios to avoid measuring RNG time
+        scenarios_.reserve(10000);
+        std::mt19937 rng(12345);
+
+        // Create 10,000 random board states
+        for (int i = 0; i < 10000; ++i) {
+            Scenario s;
+            s.player.row = std::uniform_int_distribution<int>(0, 8)(rng);
+            s.player.col = std::uniform_int_distribution<int>(0, 8)(rng);
+            s.goal_row = (s.player.row < 4) ? 8 : 0; // Go to opposite side
+
+            // Add 5-15 random fences to create obstacles
+            int num_fences = std::uniform_int_distribution<int>(5, 15)(rng);
+            for (int f = 0; f < num_fences; ++f) {
+                int r = std::uniform_int_distribution<int>(0, 7)(rng);
+                int c = std::uniform_int_distribution<int>(0, 7)(rng);
+                bool h = std::uniform_int_distribution<int>(0, 1)(rng);
+
+                if (h) {
+                    if (!s.fences.h_fence_blocked(r, c)) s.fences.place_h_fence(r, c);
+                } else {
+                    if (!s.fences.v_fence_blocked(r, c)) s.fences.place_v_fence(r, c);
+                }
+            }
+            scenarios_.push_back(s);
+        }
+    }
+
+    // Helper to print table row
+    void print_row(const std::string& name, double duration_ms, size_t ops) {
+        double us_per_op = (duration_ms * 1000.0) / ops;
+        double ops_per_sec = (ops * 1000.0) / duration_ms;
+
+        std::cout << "║ " << std::left << std::setw(28) << name << " ║ "
+                  << std::right << std::setw(10) << std::fixed << std::setprecision(1) << duration_ms << " ║ "
+                  << std::right << std::setw(11) << std::fixed << std::setprecision(3) << us_per_op << " ║ "
+                  << std::right << std::setw(13) << std::fixed << std::setprecision(0) << ops_per_sec << " ║\n";
+    }
+};
+
+TEST_F(PathfindingBenchmark, CompareAlgorithms) {
+    Pathfinder& pf = get_pathfinder();
+
+    // Pre-calculate paths for the blocker benchmark so we don't measure A* time there
+    std::vector<std::vector<Coord>> sample_paths;
+    sample_paths.reserve(scenarios_.size());
+    for (const auto& s : scenarios_) {
+        sample_paths.push_back(pf.find_path(s.fences, s.player, s.goal_row));
+    }
+
+    std::cout << "\n";
+    std::cout << "╔═════════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                      Pathfinding Algorithms                             ║\n";
+    std::cout << "║                (10,000 Scenarios on 9x9 Board)                          ║\n";
+    std::cout << "╠══════════════════════════════╦════════════╦═════════════╦═══════════════╣\n";
+    std::cout << "║ Algorithm                    ║ Total (ms) ║ Time/Op(us) ║       Ops/Sec ║\n";
+    std::cout << "╠══════════════════════════════╬════════════╬═════════════╬═══════════════╣\n";
+
+    // 1. Full Path (A* -> vector)
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        size_t ops = 0;
+        int iterations = 100;
+        for (int i = 0; i < iterations; ++i) {
+            for (const auto& s : scenarios_) {
+                auto path = pf.find_path(s.fences, s.player, s.goal_row);
+                ops++;
+                if (!path.empty() && path[0].row > 99) ops++; // prevent dead code elim
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        print_row("find_path (A*)", ms, ops);
+    }
+
+    // 2. Can Reach (Class-based A*)
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        size_t ops = 0;
+        int iterations = 100;
+        for (int i = 0; i < iterations; ++i) {
+            for (const auto& s : scenarios_) {
+                bool reach = pf.can_reach(s.fences, s.player, s.goal_row);
+                ops++;
+                if (reach && ops == 0) ops++;
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        print_row("can_reach (A* Class)", ms, ops);
+    }
+
+    // 3. Fast Reachability (Optimized Thread-Local A*)
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        size_t ops = 0;
+        int iterations = 100;
+        for (int i = 0; i < iterations; ++i) {
+            for (const auto& s : scenarios_) {
+                bool reach = check_reachability_fast(s.fences, s.player, s.goal_row);
+                ops++;
+                if (reach && ops == 0) ops++;
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        print_row("check_reachability_fast", ms, ops);
+    }
+
+    // 4. Compute Path Blockers (Bitmask Gen)
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        size_t ops = 0;
+        int iterations = 100;
+        for (int i = 0; i < iterations; ++i) {
+            for (const auto& path : sample_paths) {
+                if (path.empty()) continue;
+                auto [h, v] = compute_path_blockers(path);
+                ops++;
+                if (h > 0 && ops == 0) ops++; 
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        print_row("compute_path_blockers", ms, ops);
+    }
+
+    std::cout << "╚══════════════════════════════╩════════════╩═════════════╩═══════════════╝\n";
+    std::cout << "\n";
 }
 

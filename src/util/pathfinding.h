@@ -128,4 +128,7 @@ Pathfinder& get_pathfinder() noexcept;
     const std::vector<Coord>& p2_path,
     bool p1_moves_first) noexcept;
 
+[[nodiscard]] bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept;
+
+std::pair<uint64_t, uint64_t> compute_path_blockers(const std::vector<Coord>& path);
 } // namespace qbot

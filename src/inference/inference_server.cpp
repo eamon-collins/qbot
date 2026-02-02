@@ -27,9 +27,6 @@ void InferenceServer::start() {
 
     stop_requested_.store(false, std::memory_order_release);
     inference_thread_ = std::thread([this] { inference_loop(); });
-
-    std::cout << "[InferenceServer] Started with batch_size=" << config_.batch_size
-              << ", max_wait=" << config_.max_wait_ms << "ms\n";
 }
 
 void InferenceServer::stop() {

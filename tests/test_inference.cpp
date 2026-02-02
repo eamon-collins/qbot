@@ -166,10 +166,6 @@ TEST_F(InferenceTest, EvaluateRandomLeafNode) {
     try {
         ModelInference inference(model_path, 16, true);
 
-        if (verbose) {
-            std::cout << "\n--- Model Diagnostics ---" << std::endl;
-            ModelInference::print_diagnostics();
-        }
 
         ASSERT_TRUE(inference.is_ready()) << "Model should be loaded";
 
