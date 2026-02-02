@@ -340,31 +340,28 @@ size_t StateNode::generate_valid_children() noexcept {
     child_indices.reserve(moves.size());
 
     //get both paths up front, then only do pathfinding on child paths if the potential fence intersects the path.
-    ScopedTimer* timer_p = new ScopedTimer(timers.pathfinding);
-    Pathfinder& pf = get_pathfinder();
-    std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
-    std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
-    delete timer_p;
+    {
+        ScopedTimer timer(timers.pathfinding);
+        Pathfinder& pf = get_pathfinder();
+        std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
+        std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
 
 
-    for (const Move& m : moves) {
-        // For fence moves, validate that it doesn't block either player
-        if (m.is_fence()) {
-            ScopedTimer timer(timers.pathfinding);
-            bool p1_safe = !path_intersects_fence(p1_path, m);
-            bool p2_safe = !path_intersects_fence(p2_path, m);
-            if (!p1_safe && !p2_safe && !pf.check_paths_with_fence(*this, m)) {
-                continue; //actually, no joke blocked
-            } else if (!p1_safe && !pf.check_player_path_with_fence(*this, m, true)) {
-                continue;
-            } else if (!p2_safe && !pf.check_player_path_with_fence(*this, m, false)) {
-                continue;
+        for (const Move& m : moves) {
+            // For fence moves, validate that it doesn't block either player
+            if (m.is_fence()) {
+                bool p1_safe = !path_intersects_fence(p1_path, m);
+                bool p2_safe = !path_intersects_fence(p2_path, m);
+                if (!p1_safe && !p2_safe && !pf.check_paths_with_fence(*this, m)) {
+                    continue; //actually, no joke blocked
+                } else if (!p1_safe && !pf.check_player_path_with_fence(*this, m, true)) {
+                    continue;
+                } else if (!p2_safe && !pf.check_player_path_with_fence(*this, m, false)) {
+                    continue;
+                }
+                //if we made it here, move does not block
             }
-            //if we made it here, move does not block
-        }
 
-        {
-            ScopedTimer timer(timers.allocation);
             uint32_t child_idx = p.allocate();
             if (child_idx == NULL_NODE) {
                 // Allocation failed - rollback all allocated children
@@ -384,21 +381,18 @@ size_t StateNode::generate_valid_children() noexcept {
         return 0;
     }
 
-    {
-        ScopedTimer timer(timers.linking);
-        float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
-        // Link children as siblings (left-child right-sibling representation)
-        for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
-            p[child_indices[i]].next_sibling = child_indices[i + 1];
-            p[child_indices[i]].stats.prior = uniform_prior; 
-        }
-        p[child_indices.back()].next_sibling = NULL_NODE;
-        p[child_indices.back()].stats.prior = uniform_prior; 
-
-        // Set first child and mark as expanded
-        first_child = child_indices.front();
-        set_expanded();
+    float uniform_prior = 1.0f / static_cast<float>(child_indices.size());
+    // Link children as siblings (left-child right-sibling representation)
+    for (size_t i = 0; i + 1 < child_indices.size(); ++i) {
+        p[child_indices[i]].next_sibling = child_indices[i + 1];
+        p[child_indices[i]].stats.prior = uniform_prior; 
     }
+    p[child_indices.back()].next_sibling = NULL_NODE;
+    p[child_indices.back()].stats.prior = uniform_prior; 
+
+    // Set first child and mark as expanded
+    first_child = child_indices.front();
+    set_expanded();
 
     return child_indices.size();
 }

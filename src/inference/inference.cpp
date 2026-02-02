@@ -240,7 +240,6 @@ void ModelInference::ensure_buffer_capacity(int size) {
 }
 
 std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const StateNode*>& nodes) {
-    auto& timers = get_timers();
     std::vector<EvalResult> results;
     if (nodes.empty()) return results;
 

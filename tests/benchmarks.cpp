@@ -3,10 +3,9 @@
 
 #include "core/Game.h"
 #include "tree/StateNode.h"
-
-#ifdef QBOT_ENABLE_INFERENCE
 #include "inference/inference.h"
-#endif
+#include "search/mcts.h"
+#include "tree/node_pool.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -104,15 +103,15 @@ TEST_F(GameBenchmark, BuildTree) {
     EXPECT_EQ(counted, created + 1) << "Tree count should match";
 }
 
+
 // ============================================================================
-// Inference Benchmarks (requires QBOT_ENABLE_INFERENCE)
+// Inference Benchmarks
 // ============================================================================
 
-#ifdef QBOT_ENABLE_INFERENCE
 
 namespace {
 
-const char* DEFAULT_MODEL_PATH = "/home/eamon/repos/qbot/model/tree.pt";
+const char* DEFAULT_MODEL_PATH = "/home/eamon/repos/qbot/model/test_model.pt";
 const char* TEST_MODEL_PATH = "/tmp/test_model.pt";
 
 bool create_test_model() {
@@ -155,7 +154,7 @@ bool is_model_compatible(const std::string& path) {
 
 std::string get_model_path() {
     std::ifstream default_model(DEFAULT_MODEL_PATH);
-    if (default_model.good() && is_model_compatible(DEFAULT_MODEL_PATH)) {
+    if (default_model.good() ) { //&& is_model_compatible(DEFAULT_MODEL_PATH)) {
         return DEFAULT_MODEL_PATH;
     }
     if (create_test_model()) {
@@ -255,4 +254,106 @@ TEST_F(InferenceBenchmark, BatchSizes) {
     }
 }
 
-#endif  // QBOT_ENABLE_INFERENCE
+TEST_F(InferenceBenchmark, SelfPlayThroughput) {
+    std::string model_path = get_model_path();
+    if (model_path.empty()) {
+        GTEST_SKIP() << "No model available";
+        return;
+    }
+
+    // --- CONFIGURATION ---
+    const int num_workers = 1;        // Keep to 1 to analyze serialization first
+    const int batch_size = 256;       // Match your InferenceServer config
+    // We want enough games to fill the batch, but since we are 
+    // simulating "infinite" search, we just need enough to keep the pipe full.
+    const int games_per_worker = 100;
+
+    // High simulations per move reduces the overhead of "Game Setup/Teardown"
+    // and focuses the benchmark on the MCTS/Inference loop.
+    const int simulations_per_move = 800;
+    const int num_moves_to_measure = 10;
+
+    // Total MCTS iterations = workers * games_per_worker * moves * sims
+    const size_t total_expected_iterations =
+        static_cast<size_t>(num_workers) * games_per_worker * num_moves_to_measure * simulations_per_move;
+
+    // --- SETUP ---
+    InferenceServerConfig server_config;
+    server_config.batch_size = batch_size;
+    server_config.max_wait_ms = 1.0;
+
+    InferenceServer server(model_path, server_config);
+    server.start();
+
+    SelfPlayConfig sp_config;
+    sp_config.simulations_per_move = simulations_per_move;
+    // CRITICAL: Limit game to 1 move. This effectively resets the board 
+    // after every move, ensuring we benchmark the SAME state complexity repeatedly.
+    sp_config.max_moves_per_game = num_moves_to_measure; 
+    sp_config.max_draw_reward = 0.0f;
+
+    SelfPlayEngine engine(sp_config);
+
+    // Use a large pool to avoid allocations affecting the bench
+    NodePool::Config config;
+    config.initial_capacity = 20'000'000;
+    NodePool pool(config);
+    StateNode::set_pool(&pool);
+
+    // Create a dummy root
+    uint32_t root_idx = pool.allocate();
+    pool[root_idx].init_root(true);
+
+    MultiGameStats stats;
+    TreeBoundsConfig bounds;
+    TrainingSampleCollector collector; // Dummy collector
+
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════════╗\n";
+    std::cout << "║            Self-Play Throughput Benchmark                 ║\n";
+    std::cout << "╠═══════════════════════════════════════════════════════════╣\n";
+    std::cout << "║  Workers:       " << std::left << std::setw(33) << num_workers << " ║\n";
+    std::cout << "║  Games/Worker:  " << std::left << std::setw(33) << games_per_worker << " ║\n";
+    std::cout << "║  Sims/Move:     " << std::left << std::setw(33) << simulations_per_move << " ║\n";
+    std::cout << "║  Total Target:  " << std::left << std::setw(33) << total_expected_iterations << " ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
+
+    // --- BENCHMARK RUN ---
+    auto start = std::chrono::high_resolution_clock::now();
+
+    int total_games_to_play = num_workers * games_per_worker;
+
+    engine.run_multi_game(
+        pool, root_idx, server, 
+        total_games_to_play, 
+        num_workers, 
+        games_per_worker, 
+        stats, 
+        bounds, 
+        &collector, 
+        "" // No file output
+    );
+
+    auto end = std::chrono::high_resolution_clock::now();
+    server.stop();
+
+    // --- RESULTS ---
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    double seconds = duration_ms / 1000.0;
+
+    // We can calculate actual iterations from stats if needed, or estimate
+    size_t actual_moves = stats.total_moves.load();
+    size_t actual_iterations = actual_moves * simulations_per_move;
+
+    double ips = actual_iterations / seconds;
+
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════════╗\n";
+    std::cout << "║  Results:                                                 ║\n";
+    std::cout << "║    Time:        " << std::left << std::setw(33) << std::to_string(seconds) + " s" << " ║\n";
+    std::cout << "║    Moves:       " << std::left << std::setw(33) << actual_moves << " ║\n";
+    std::cout << "║    Iterations:  " << std::left << std::setw(33) << actual_iterations << " ║\n";
+    std::cout << "║    Speed:       " << std::left << std::setw(30) << std::to_string((int)ips) + " iter/sec" << " ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
+}
+

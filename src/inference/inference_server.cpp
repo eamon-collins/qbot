@@ -10,7 +10,10 @@ InferenceServer::InferenceServer(const std::string& model_path,
                                  InferenceServerConfig config)
     : model_(model_path, config.batch_size, true)
     , config_(config)
-{}
+{
+    // torch::set_num_threads(1);
+    // torch::set_num_interop_threads(1);
+}
 
 InferenceServer::~InferenceServer() {
     stop();
