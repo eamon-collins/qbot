@@ -674,9 +674,6 @@ private:
     template<InferenceProvider Inference>
     void expand_with_nn_priors(NodePool& pool, uint32_t node_idx, Inference& inference);
 
-    /// Refresh priors on an already-expanded node's children using the given server
-    void refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server);
-
     /// Backpropagate value up a path
     void backpropagate(NodePool& pool, const std::vector<uint32_t>& path, float value);
 

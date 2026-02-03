@@ -114,49 +114,6 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
     }
 }
 
-void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
-    StateNode& node = pool[node_idx];
-
-    if (!node.has_children()) return;
-
-    // Evaluate the node to get fresh policy logits
-    auto future = server.submit(&node);
-    EvalResult eval = future.get();
-
-    // Collect policy logits for valid moves and apply softmax
-    std::vector<std::pair<uint32_t, int>> child_actions;
-    float max_logit = -std::numeric_limits<float>::infinity();
-    bool flip_policy = !node.is_p1_to_move(); 
-
-    uint32_t child = node.first_child;
-    while (child != NULL_NODE) {
-        int action_idx = move_to_action_index(pool[child].move);
-        action_idx = flip_policy ? flip_action_index(action_idx) : action_idx;
-        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
-            child_actions.emplace_back(child, action_idx);
-            max_logit = std::max(max_logit, eval.policy[action_idx]);
-        }
-        child = pool[child].next_sibling;
-    }
-
-    if (child_actions.empty()) return;
-
-    // Compute softmax over valid moves only
-    float sum_exp = 0.0f;
-    std::vector<float> exp_logits(child_actions.size());
-    for (size_t i = 0; i < child_actions.size(); ++i) {
-        int action_idx = child_actions[i].second;
-        exp_logits[i] = std::exp(eval.policy[action_idx] - max_logit);
-        sum_exp += exp_logits[i];
-    }
-
-    // Update priors on children
-    for (size_t i = 0; i < child_actions.size(); ++i) {
-        uint32_t child_idx = child_actions[i].first;
-        pool[child_idx].stats.prior = exp_logits[i] / sum_exp;
-    }
-}
-
 void SelfPlayEngine::run_multi_game(
     InferenceServer& server,
     int num_games,

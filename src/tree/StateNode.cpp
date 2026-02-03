@@ -398,9 +398,7 @@ size_t StateNode::generate_valid_children() noexcept {
     {
         ScopedTimer timer(timers.allocation); 
 
-        // Optional: If NodePool supports batch_allocate(count), usage here would be 
-        // HUGE performance win (1 atomic op instead of N).
-        // For now, we just loop:
+        //maybe should batch allocate
         for (int i = 0; i < valid_count; ++i) {
             uint32_t child_idx = p.allocate();
             if (child_idx == NULL_NODE) break; // Handle OOM
