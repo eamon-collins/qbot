@@ -224,17 +224,12 @@ static_assert(sizeof(FenceGrid) == 16, "FenceGrid should be 16 bytes");
 ///   - wins/losses: Actual game outcomes from games that passed through this node
 ///                  These are the training targets for the value head
 struct EdgeStats {
-    std::atomic<uint32_t> visits{0};       // N(s,a): visit count (for MCTS search)
     std::atomic<float> total_value{0.0f};  // W(s,a): sum of values from backpropagation (for Q)
-    std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
     float prior{0.0f};                     // P(s,a): policy prior (set once, read-only after)
     float nn_value{0.0f};                  // Cached NN value (avoids re-evaluation)
+    std::atomic<uint16_t> visits{0};       // N(s,a): visit count (for MCTS search)
     std::atomic<bool> nn_evaluated{false}; // True if nn_value is valid (atomic for thread safety)
-
-    // Actual game outcome counters (for training targets)
-    // These track real wins/losses from games that traversed this edge
-    std::atomic<uint32_t> wins{0};         // Games won from current player's perspective
-    std::atomic<uint32_t> losses{0};       // Games lost from current player's perspective
+    // std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
 
     EdgeStats() = default;
 
@@ -246,12 +241,10 @@ struct EdgeStats {
     EdgeStats(EdgeStats&& other) noexcept
         : visits(other.visits.load(std::memory_order_relaxed))
         , total_value(other.total_value.load(std::memory_order_relaxed))
-        , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
+        // , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
         , prior(other.prior)
         , nn_value(other.nn_value)
-        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed))
-        , wins(other.wins.load(std::memory_order_relaxed))
-        , losses(other.losses.load(std::memory_order_relaxed)) {}
+        , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed)) {}
 
     /// Set cached NN value (thread-safe, only first setter wins)
     void set_nn_value(float value) noexcept {
@@ -264,12 +257,10 @@ struct EdgeStats {
     void reset() noexcept {
         total_value.store(0.0f, std::memory_order_relaxed);
         visits.store(0, std::memory_order_relaxed);
-        virtual_loss.store(0, std::memory_order_relaxed);
+        // virtual_loss.store(0, std::memory_order_relaxed);
         nn_evaluated.store(false, std::memory_order_relaxed);
         prior = 0.0f;
         nn_value = 0.0f;
-        wins.store(0, std::memory_order_relaxed);
-        losses.store(0, std::memory_order_relaxed);
     }
 
     /// Check if we have a cached NN value
@@ -292,20 +283,20 @@ struct EdgeStats {
 
     /// Get N(s,a) including virtual loss
     [[nodiscard]] uint32_t N_with_virtual() const noexcept {
-        return visits.load(std::memory_order_relaxed)
-             + static_cast<uint32_t>(virtual_loss.load(std::memory_order_relaxed));
+        return visits.load(std::memory_order_relaxed);
+             // + static_cast<uint32_t>(virtual_loss.load(std::memory_order_relaxed));
     }
 
     /// Apply virtual loss (called during selection)
-    void add_virtual_loss(int32_t amount = 1) noexcept {
-        virtual_loss.fetch_add(amount, std::memory_order_relaxed);
-    }
-
-    /// Remove virtual loss (called after backpropagation)
-    void remove_virtual_loss(int32_t amount = 1) noexcept {
-        virtual_loss.fetch_sub(amount, std::memory_order_relaxed);
-    }
-
+    // void add_virtual_loss(int32_t amount = 1) noexcept {
+    //     virtual_loss.fetch_add(amount, std::memory_order_relaxed);
+    // }
+    //
+    // /// Remove virtual loss (called after backpropagation)
+    // void remove_virtual_loss(int32_t amount = 1) noexcept {
+    //     virtual_loss.fetch_sub(amount, std::memory_order_relaxed);
+    // }
+    //
     /// Update statistics during backpropagation (atomic)
     /// Used for MCTS Q values during search
     void update(float value) noexcept {
@@ -317,32 +308,6 @@ struct EdgeStats {
             std::memory_order_relaxed, std::memory_order_relaxed)) {
             // expected is updated on failure
         }
-    }
-
-    /// Record an actual game outcome (called when game finishes)
-    /// value: +1.0 = current player won, -1.0 = current player lost
-    void record_game_outcome(float value) noexcept {
-        if (value >= 0.0f) {
-            wins.fetch_add(1, std::memory_order_relaxed);
-        } else if (value < 0.0f) {
-            losses.fetch_add(1, std::memory_order_relaxed);
-        }
-        // draws (value == 0) don't increment either counter
-    }
-
-    /// Get the empirical value from actual game outcomes
-    /// Returns value in [-1, +1] from current player's perspective
-    [[nodiscard]] float game_outcome_value() const noexcept {
-        uint32_t w = wins.load(std::memory_order_relaxed);
-        uint32_t l = losses.load(std::memory_order_relaxed);
-        uint32_t total = w + l;
-        if (total == 0) return 0.0f;
-        return (static_cast<float>(w) - static_cast<float>(l)) / static_cast<float>(total);
-    }
-
-    /// Get total games that passed through this node
-    [[nodiscard]] uint32_t total_games() const noexcept {
-        return wins.load(std::memory_order_relaxed) + losses.load(std::memory_order_relaxed);
     }
 };
 
@@ -373,29 +338,24 @@ struct StateNode {
     Player p2;           // Player 2 state (starts at row 8, goal row 0)
     FenceGrid fences;    // All placed fences
 
-    // The move that led to this node (edge from parent)
-    Move move;
 
     // Edge statistics for this node (represents edge from parent)
     EdgeStats stats;
+    // The move that led to this node (edge from parent)
 
     static constexpr int NUM_ACTIONS = 209;  // 81 pawn + 128 fence
 
-    std::atomic<bool> inserting_child{false};       // Spinlock for thread-safe child list insertion
 
+    // Terminal value (only valid if FLAG_TERMINAL is set)
+    // Stored in relative perspective: +1 = current player wins, -1 = current player loses
+    float terminal_value{0.0f};
+    Move move;
     // State flags
     uint8_t flags{0};
     static constexpr uint8_t FLAG_EXPANDED     = 0x01;  // Children have been generated
     static constexpr uint8_t FLAG_TERMINAL     = 0x02;  // Game over at this node
     static constexpr uint8_t FLAG_P1_TO_MOVE   = 0x04;  // Player 1's turn (else P2)
     static constexpr uint8_t FLAG_ON_GAME_PATH = 0x08;  // Node was visited in actual game
-
-    // Terminal value (only valid if FLAG_TERMINAL is set)
-    // Stored in relative perspective: +1 = current player wins, -1 = current player loses
-    float terminal_value{0.0f};
-
-    // Ply counter (number of moves made to reach this state)
-    uint16_t ply{0};
 
     StateNode() = default;
 
@@ -413,17 +373,13 @@ struct StateNode {
 
         flags = p1_starts ? FLAG_P1_TO_MOVE : 0;
         terminal_value = 0.0f;
-        ply = 0;
 
         // Reset stats
         stats.visits.store(1, std::memory_order_relaxed);  // Init to 1 to avoid div by 0
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        stats.virtual_loss.store(0, std::memory_order_relaxed);
+        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
-        stats.wins.store(0, std::memory_order_relaxed);
-        stats.losses.store(0, std::memory_order_relaxed);
 
-        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     /// Initialize as child node from parent state with the given move applied
@@ -437,7 +393,6 @@ struct StateNode {
         p1 = parent_node.p1;
         p2 = parent_node.p2;
         fences = parent_node.fences;
-        ply = parent_node.ply + 1;
 
         // Apply move
         bool was_p1_turn = parent_node.is_p1_to_move();
@@ -475,12 +430,8 @@ struct StateNode {
         // Reset stats
         stats.visits.store(0, std::memory_order_relaxed);
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        stats.virtual_loss.store(0, std::memory_order_relaxed);
+        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
-        stats.wins.store(0, std::memory_order_relaxed);
-        stats.losses.store(0, std::memory_order_relaxed);
-
-        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     // Legacy init for backward compatibility with node pool
@@ -491,15 +442,11 @@ struct StateNode {
         move = m;
         flags = p1_to_move ? FLAG_P1_TO_MOVE : 0;
         terminal_value = 0.0f;
-        ply = 0;
         // Reset stats
         stats.visits.store(0, std::memory_order_relaxed);
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        stats.virtual_loss.store(0, std::memory_order_relaxed);
+        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
-        stats.wins.store(0, std::memory_order_relaxed);
-        stats.losses.store(0, std::memory_order_relaxed);
-        inserting_child.store(false, std::memory_order_relaxed);
     }
 
     [[nodiscard]] bool is_expanded() const noexcept { return flags & FLAG_EXPANDED; }
@@ -576,7 +523,7 @@ struct StateNode {
 
 // Note: With full game state, size is larger than 64 bytes
 // This is acceptable for training speed - we trade memory for avoiding tree traversal
-static_assert(sizeof(StateNode) >= 64, "StateNode includes full game state");
+static_assert(sizeof(StateNode) == 64, "StateNode includes full game state");
 
 /// PUCT selection formula from AlphaGo Zero
 /// U(s,a) = c_puct * P(s,a) * sqrt(sum_b N(s,b)) / (1 + N(s,a))
@@ -592,13 +539,13 @@ static_assert(sizeof(StateNode) >= 64, "StateNode includes full game state");
     float u = c_puct * edge.prior * std::sqrt(static_cast<float>(parent_visits))
             / (1.0f + static_cast<float>(n));
 
-    // Account for virtual loss in Q calculation
-    int32_t vl = edge.virtual_loss.load(std::memory_order_relaxed);
-    if (vl > 0 && n > 0) {
-        // Virtual loss reduces Q value
-        q = (edge.total_value.load(std::memory_order_relaxed) - static_cast<float>(vl))
-          / static_cast<float>(n);
-    }
+    //// Account for virtual loss in Q calculation
+    // int32_t vl = edge.virtual_loss.load(std::memory_order_relaxed);
+    // if (vl > 0 && n > 0) {
+    //     // Virtual loss reduces Q value
+    //     q = (edge.total_value.load(std::memory_order_relaxed) - static_cast<float>(vl))
+    //       / static_cast<float>(n);
+    // }
 
     return -q + u;
 }

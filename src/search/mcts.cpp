@@ -114,28 +114,6 @@ void SelfPlayEngine::backpropagate(NodePool& pool, const std::vector<uint32_t>& 
     }
 }
 
-/// @param game_path Path from root to terminal state (actual game played)
-/// @param winner Absolute winner: +1 = P1 wins, -1 = P2 wins, 0 = draw
-void SelfPlayEngine::backpropagate_game_outcome(NodePool& pool, const std::vector<uint32_t>& game_path, int winner) {
-    if (winner == 0) {
-        // Draw - don't record wins or losses
-        return;
-    }
-
-    for (uint32_t idx : game_path) {
-        StateNode& node = pool[idx];
-        // Convert absolute winner to relative (from current player's perspective)
-        // winner = +1 means P1 won, winner = -1 means P2 won
-        // If it's P1's turn at this node, P1 winning means +1 (win)
-        // If it's P2's turn at this node, P1 winning means -1 (loss)
-        float relative_value = node.is_p1_to_move() 
-            ? static_cast<float>(winner) 
-            : static_cast<float>(-winner);
-
-        node.stats.record_game_outcome(relative_value);
-    }
-}
-
 void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, InferenceServer& server) {
     StateNode& node = pool[node_idx];
 
@@ -1030,7 +1008,6 @@ SelfPlayResult SelfPlayEngine::arena_game(
         search_node.p1 = game_state.p1;
         search_node.p2 = game_state.p2;
         search_node.fences = game_state.fences;
-        search_node.ply = game_state.ply;
         search_node.flags = game_state.flags & StateNode::FLAG_P1_TO_MOVE;  // Only preserve turn
         search_node.first_child = NULL_NODE;
         search_node.next_sibling = NULL_NODE;
@@ -1166,7 +1143,15 @@ void SelfPlayEngine::run_multi_arena(
     for (int i = 0; i < num_workers; ++i) {
         workers.emplace_back([this, &pool, root_idx, &server_p1, &server_p2,
                               &games_remaining, &game_counter, &stats, i](std::stop_token st) {
-            arena_worker_loop(st, i, pool, root_idx, server_p1, server_p2,
+            NodePool::Config pool_config;
+            pool_config.initial_capacity = 1'000'000;
+            pool_config.chunk_size = 100'000;
+            pool_config.batch_size = 8192;
+            NodePool my_pool(pool_config);
+            my_pool.bind_to_thread();  // Bind to thread-local StateNode::pool_
+            uint32_t root_idx = pool.allocate(Move{}, NULL_NODE, true);
+            my_pool[root_idx].init_root(true);  // P1 starts
+            arena_worker_loop(st, i, my_pool, root_idx, server_p1, server_p2,
                               games_remaining, game_counter, stats);
         });
     }

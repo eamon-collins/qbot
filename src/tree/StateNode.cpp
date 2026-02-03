@@ -29,7 +29,7 @@ void StateNode::print_node() const noexcept {
     // Print stats
     uint32_t v = stats.visits.load(std::memory_order_relaxed);
     float q = stats.Q();
-    ss << "Visits: " << v << "  Q: " << q << "  Ply: " << ply
+    ss << "Visits: " << v << "  Q: " << q
        << "  Turn: P" << (is_p1_to_move() ? "1" : "2") << "\n";
 
     // Print P1/P2 info

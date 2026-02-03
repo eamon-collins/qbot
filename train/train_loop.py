@@ -521,17 +521,17 @@ def main():
         # Phase 2: Train candidate model
         logging.info(f"[Phase 2] Training candidate neural network...")
 
-        # Reload current best weights if needed
-        if iteration == 0:
-            if current_best_weights_link.exists():
-                model.load_state_dict(torch.load(current_best_weights_link))
-                if torch.cuda.is_available():
-                    model.cuda()
-        else:
-            if candidate_weights_link.exists():
-                model.load_state_dict(torch.load(candidate_weights_link))
-                if torch.cuda.is_available():
-                    model.cuda()
+        # Reload current best weights every time for now
+        # if iteration == 0:
+        if current_best_weights_link.exists():
+            model.load_state_dict(torch.load(current_best_weights_link))
+            if torch.cuda.is_available():
+                model.cuda()
+        # else:
+        #     if candidate_weights_link.exists():
+        #         model.load_state_dict(torch.load(candidate_weights_link))
+        #         if torch.cuda.is_available():
+        #             model.cuda()
 
         # Train
         training_files = [str(p) for p in matching_samples]

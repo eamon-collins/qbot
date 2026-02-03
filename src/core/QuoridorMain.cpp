@@ -810,11 +810,13 @@ int run_arena(const Config& config) {
     std::cout << "  Temperature: " << config.temperature << " (drops at ply " << config.temperature_drop_ply << ")\n";
     std::cout << "  Promote significance: " << (config.promote_alpha * 100) << "%\n\n";
 
-    // Create shared tree for all arena games
-    NodePool pool;
+    // Create shared tree for (legacy, can be deleted but no harm passing it through for now)
+    NodePool::Config pool_config;
+    pool_config.initial_capacity = 100;
+    NodePool pool(pool_config);
     pool.bind_to_thread();
-    uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
-    pool[root].init_root(true);  // P1 starts
+    uint32_t root = 0; //pool.allocate(Move{}, NULL_NODE, true);
+    // pool[root].init_root(true);  // P1 starts
 
     // Configure self-play engine for arena play (uses temperature from command line)
     SelfPlayConfig sp_config;
@@ -992,7 +994,7 @@ int run_selfplay(const Config& config,
 
     // Configure per-thread pool settings
     NodePool::Config pool_config;
-    pool_config.initial_capacity = 4'000'000;
+    pool_config.initial_capacity = 25'000'000;
     pool_config.chunk_size = 1'000'000;
     pool_config.batch_size = 8192;
 

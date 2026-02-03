@@ -32,7 +32,7 @@ public:
         size_t initial_capacity = 180'000'000;
         size_t chunk_size = 20'000'000;
         size_t batch_size = 8192;
-        size_t local_cache_limit = 1'000'000;
+        size_t local_cache_limit = 10'000'000;
     };
 
     NodePool() : NodePool(Config{}) {}
@@ -258,8 +258,8 @@ private:
         size_t new_cap = (current_chunks + 1) * chunk_size_;
         total_capacity_ = new_cap;
 
-        std::cout << "[NodePool] Grew to " << current_chunks + 1 << " chunks ("
-                  << new_cap << " nodes)" << std::endl;
+        // std::cout << "[NodePool] Grew to " << current_chunks + 1 << " chunks ("
+        //           << new_cap << " nodes)" << std::endl;
     }
 
     Config config_;
