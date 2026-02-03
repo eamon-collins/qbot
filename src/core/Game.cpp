@@ -15,13 +15,17 @@ Game::Game(Config config)
     : config_(config)
     , pool_(std::make_unique<NodePool>(NodePool::Config{.initial_capacity = config.pool_capacity}))
     , root_(NULL_NODE)
-{}
+{
+    pool_->bind_to_thread();  // Bind pool to this thread
+}
 
 Game::Game(std::unique_ptr<NodePool> pool, uint32_t root)
     : config_()
     , pool_(std::move(pool))
     , root_(root)
-{}
+{
+    pool_->bind_to_thread();  // Bind pool to this thread
+}
 
 Game::~Game() {
     disconnect_gui();

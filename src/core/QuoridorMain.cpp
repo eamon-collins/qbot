@@ -235,6 +235,7 @@ initialize_tree(const Config& config) {
 
         if (result.has_value()) {
             auto& loaded = *result;
+            loaded.pool->bind_to_thread();  // Bind loaded pool to main thread
             std::cout << "  Loaded " << loaded.pool->allocated() << " nodes in " << sec << " s\n";
             return {std::move(loaded.pool), loaded.root};
         } else {
@@ -247,9 +248,11 @@ initialize_tree(const Config& config) {
     // Create new tree with root node
     auto pool_config = NodePool::Config{};
     if (config.mode == RunMode::SelfPlay) {
-        pool_config.initial_capacity = 180'000'000;
+        // In SelfPlay mode, workers create their own pools - main thread doesn't need one
+        pool_config.initial_capacity = 100;  // Minimal allocation
     }
     auto pool = std::make_unique<NodePool>(pool_config);
+    pool->bind_to_thread();  // Bind pool to main thread
     bool p1_starts = (config.player == 1);
     uint32_t root = pool->allocate(Move{}, NULL_NODE, p1_starts);
 
@@ -643,6 +646,7 @@ int run_interactive(const Config& config,
 int play_arena_game(ModelInference& model_p1, ModelInference& model_p2, int simulations) {
     // Create fresh tree for this game
     NodePool pool;
+    pool.bind_to_thread();
     uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
     pool[root].init_root(true);  // P1 starts
 
@@ -808,6 +812,7 @@ int run_arena(const Config& config) {
 
     // Create shared tree for all arena games
     NodePool pool;
+    pool.bind_to_thread();
     uint32_t root = pool.allocate(Move{}, NULL_NODE, true);
     pool[root].init_root(true);  // P1 starts
 
@@ -940,11 +945,8 @@ int run_selfplay(const Config& config,
         return 1;
     }
 
-    // Initialize the root node only if it's a fresh tree
-    StateNode& root_node = (*pool)[root];
-    if (!root_node.is_expanded() && !root_node.has_children()) {
-        root_node.init_root(true);  // P1 starts
-    }
+    // Note: pool and root are unused with per-thread pools
+    // Each worker thread creates its own pool
 
     // Configure self-play engine
     SelfPlayConfig sp_config;
@@ -978,11 +980,9 @@ int run_selfplay(const Config& config,
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
-    std::cout << "  Max memory:  " << config.max_memory_gb << " GB (resets at 80%)\n";
-    std::cout << "  Tree file:   " << config.save_file << "\n";
     std::cout << "  Samples:     " << samples_file << "\n\n";
 
-    // ONly multithreaded path
+    // Only multithreaded path
     // Create inference server for batched GPU access
     InferenceServerConfig server_config;
     server_config.batch_size = config.batch_size;
@@ -990,12 +990,13 @@ int run_selfplay(const Config& config,
     InferenceServer server(config.model_file, server_config);
     server.start();
 
-    // Configure memory bounds for pool reset
-    TreeBoundsConfig bounds;
-    bounds.max_bytes = config.max_memory_gb * 1024ULL * 1024 * 1024;
-    bounds.soft_limit_ratio = 0.80f;  // Reset at 80%
+    // Configure per-thread pool settings
+    NodePool::Config pool_config;
+    pool_config.initial_capacity = 4'000'000;
+    pool_config.chunk_size = 1'000'000;
+    pool_config.batch_size = 8192;
 
-    auto checkpoint_callback = [&config, &server](const MultiGameStats& stats, const NodePool& p) {
+    auto checkpoint_callback = [&config, &server](const MultiGameStats& stats) {
         int completed = stats.games_completed.load(std::memory_order_relaxed);
         int p1 = stats.p1_wins.load(std::memory_order_relaxed);
         int p2 = stats.p2_wins.load(std::memory_order_relaxed);
@@ -1011,11 +1012,12 @@ int run_selfplay(const Config& config,
 
     MultiGameStats stats;
     engine.run_multi_game(
-        *pool, root, server,
+        server,
         config.num_games, config.num_threads, config.games_per_thread,
-        stats, bounds, &collector,
+        stats, &collector,
         samples_file.empty() ? std::filesystem::path{} : std::filesystem::path{samples_file},
-        checkpoint_callback, config.num_threads*config.games_per_thread);
+        checkpoint_callback, config.num_threads*config.games_per_thread,
+        pool_config);
 
     // Capture server stats before stopping
     size_t total_requests = server.total_requests();
@@ -1024,24 +1026,6 @@ int run_selfplay(const Config& config,
         ? static_cast<double>(total_requests) / total_batches : 0.0;
 
     server.stop();
-
-    // Final save (pruned to only game-path nodes from current tree)
-    if (!config.save_file.empty()) {
-        save_tree_pruned(*pool, root, config.save_file);
-    }
-
-    // Extract final training samples from the last tree (if any remain)
-    //
-    // auto tree_samples = extract_samples_from_tree(*pool, root);
-    // for (auto& sample : tree_samples) {
-    //     collector.add_sample_direct(std::move(sample));
-    // }
-    if (!samples_file.empty() && collector.size() > 0) {
-        auto result = TrainingSampleStorage::save(samples_file, collector.samples());
-        if (!result) {
-            std::cerr << "[SelfPlayEngine] Warning: Failed to save qsamples\n";
-        }
-    }
 
     int p1_wins = stats.p1_wins.load(std::memory_order_relaxed);
     int p2_wins = stats.p2_wins.load(std::memory_order_relaxed);

@@ -357,8 +357,8 @@ class NodePool;
 /// from any node without tree traversal.
 // struct alignas(64) StateNode {
 struct StateNode {
-    // === Static pool reference (single pool instance) ===
-    static NodePool* pool_;
+    // === Thread-local pool reference (per-thread pool) ===
+    static thread_local NodePool* pool_;
     static void set_pool(NodePool* pool) noexcept { pool_ = pool; }
     [[nodiscard]] static NodePool& pool() noexcept { return *pool_; }
 

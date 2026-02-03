@@ -540,33 +540,29 @@ public:
         : config_(std::move(config)) {}
 
 
-    /// Run multiple self-play games in parallel
-    /// Supports memory-bounded operation: when pool reaches 80% of memory limit,
-    /// workers pause, samples are extracted, pool is reset, and games continue.
-    /// @param pool Node pool (shared across all games)
-    /// @param root_idx Root node index (will be updated on pool reset)
+    /// Run multiple self-play games in parallel with per-thread node pools
+    /// Each worker thread creates its own NodePool, eliminating contention.
     /// @param server Inference server for batched GPU evaluation
     /// @param num_games Total games to play
     /// @param num_workers Number of worker threads
+    /// @param games_per_worker Number of games each worker runs concurrently
     /// @param stats Output statistics (must be pre-allocated)
-    /// @param bounds Memory bounds configuration (triggers reset at soft_limit_ratio)
-    /// @param collector Training sample collector to accumulate samples across pool resets
+    /// @param collector Training sample collector to accumulate samples
     /// @param samples_file Path for intermediate qsamples saves (empty to disable)
     /// @param checkpoint_callback Called periodically with stats (optional)
     /// @param checkpoint_interval_games Games between checkpoint callbacks
+    /// @param pool_config_per_thread Node pool configuration for each thread
     void run_multi_game(
-        NodePool& pool,
-        uint32_t& root_idx,
         InferenceServer& server,
         int num_games,
         int num_workers,
         int games_per_worker,
         MultiGameStats& stats,
-        const TreeBoundsConfig& bounds,
         TrainingSampleCollector* collector,
         const std::filesystem::path& samples_file,
-        std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback = nullptr,
-        int checkpoint_interval_games = 10);
+        std::function<void(const MultiGameStats&)> checkpoint_callback = nullptr,
+        int checkpoint_interval_games = 10,
+        NodePool::Config pool_config_per_thread = NodePool::Config{});
 
     // struct GameContext {
     //     uint32_t current_node;

@@ -8,8 +8,8 @@
 
 namespace qbot {
 
-// Static pool pointer definition
-NodePool* StateNode::pool_ = nullptr;
+// Thread-local pool pointer definition
+thread_local NodePool* StateNode::pool_ = nullptr;
 
 void StateNode::print_node() const noexcept {
     std::ostringstream ss;

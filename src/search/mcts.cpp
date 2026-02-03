@@ -180,153 +180,75 @@ void SelfPlayEngine::refresh_priors(NodePool& pool, uint32_t node_idx, Inference
 }
 
 void SelfPlayEngine::run_multi_game(
-    NodePool& pool,
-    uint32_t& root_idx,
     InferenceServer& server,
     int num_games,
     int num_workers,
     int games_per_worker,
     MultiGameStats& stats,
-    const TreeBoundsConfig& bounds,
     TrainingSampleCollector* collector,
     const std::filesystem::path& samples_file,
-    std::function<void(const MultiGameStats&, const NodePool&)> checkpoint_callback,
-    int checkpoint_interval_games)
+    std::function<void(const MultiGameStats&)> checkpoint_callback,
+    int checkpoint_interval_games,
+    NodePool::Config pool_config_per_thread)
 {
     stats.reset();
     std::atomic<int> games_remaining{num_games};
 
-    // Synchronization for memory-bounded pool reset
-    std::atomic<bool> pause_requested{false};
-    std::atomic<bool> draining{false};
-    std::atomic<int> workers_paused{0};
+    // Simplified synchronization - no pool resets needed with per-thread pools
     std::atomic<int> total_active_games{0};
     std::mutex pause_mutex;
     std::condition_variable pause_cv;
     std::condition_variable resume_cv;
-    std::atomic<bool> paused{false};
-    // Shared root index that workers can read (updated on pool reset)
-    std::atomic<uint32_t> current_root{root_idx};
+    std::atomic<bool> pause_requested{false};
+    std::atomic<bool> draining{false};
+    std::atomic<int> workers_paused{0};
+    std::atomic<uint32_t> current_root{NULL_NODE};  // Unused with per-thread pools
 
     MultiGameWorkerSync sync{
-        pause_requested, draining, workers_paused, total_active_games, 
+        pause_requested, draining, workers_paused, total_active_games,
         current_root, pause_mutex, pause_cv, resume_cv
     };
 
-    int pool_reset_count = 0;
-
-    //220000 is approx constant for # bytes per game per simulationpermove.
-    size_t soft_limit_bytes = bounds.max_bytes - (10000ULL * num_workers * games_per_worker * config_.simulations_per_move);
     std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
-              << num_workers << " workers\n";
-    std::cout << "[SelfPlayEngine] Memory limit: " << (bounds.max_bytes / (1024*1024*1024)) << " GB, "
-              << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB" << std::endl;
+              << num_workers << " workers (per-thread pools)\n";
 
     auto start_time = std::chrono::steady_clock::now();
     std::mutex timer_mutex;
     SelfPlayTimers global_timers;
 
-    // LAUNCH WORKER THREADS
+    // LAUNCH WORKER THREADS - each creates its own pool
     std::vector<std::jthread> workers;
     workers.reserve(num_workers);
 
     for (int i = 0; i < num_workers; ++i) {
-        workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
+        workers.emplace_back([this, &server, &games_remaining, &stats,
                               &sync, collector, games_per_worker,
-                              &timer_mutex, &global_timers](std::stop_token st) {
-            run_multi_game_worker(st, pool, server, games_per_worker,
+                              &timer_mutex, &global_timers, pool_config_per_thread](std::stop_token st) {
+            // Create this thread's own NodePool
+            NodePool my_pool(pool_config_per_thread);
+            my_pool.bind_to_thread();  // Bind to thread-local StateNode::pool_
+
+            run_multi_game_worker(st, my_pool, server, games_per_worker,
                                   games_remaining, stats, sync, collector);
             std::lock_guard<std::mutex> lock(timer_mutex);
             global_timers.merge(get_timers());
         });
     }
 
-    // Monitor progress, call checkpoints, and handle memory-bounded resets
+    // Monitor progress and call checkpoints
     int last_checkpoint = 0;
     while (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // Check memory usage
-        size_t current_bytes = pool.memory_usage_bytes();
-
-        if (current_bytes >= soft_limit_bytes && collector != nullptr) {
-            std::cout << "\n[SelfPlayEngine] Memory at " << std::fixed << std::setprecision(1)
-                      << (current_bytes / 1073741824) << " GB - initiating pool reset..." << std::endl;
-
-            // request workers to pause
-            draining.store(true, std::memory_order_release);
-
-            // wait for all active games to finish
-            auto drain_start = std::chrono::steady_clock::now();
-            while (total_active_games.load(std::memory_order_relaxed) > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-                auto elapsed = std::chrono::steady_clock::now() - drain_start;
-                if (elapsed > std::chrono::seconds(2400)) {
-                    std::cerr << "[SelfPlayEngine] Drain timeout after 40 minutes, forcing reset\n";
-                    break;
-                }
-            }
-
-            //they should be paused already basically from above
-            {
-                std::unique_lock lock(pause_mutex);
-                pause_cv.wait_for(lock, std::chrono::seconds(10), [&]() {
-                    return workers_paused.load(std::memory_order_relaxed) >= num_workers;
-                });
-            }
-
-            int paused_count = workers_paused.load(std::memory_order_relaxed);
-            std::cout << "[SelfPlayEngine] " << paused_count << "/" << num_workers << " workers paused" << std::endl;
-
-            // Extract training samples from current tree
-            uint32_t old_root = current_root.load(std::memory_order_relaxed);
-            auto tree_samples = extract_samples_from_tree(pool, old_root);
-
-            for (auto& sample : tree_samples) {
-                collector->add_sample_direct(std::move(sample));
-            }
-
-            // Save intermediate qsamples file
-            if (!samples_file.empty() && collector->size() > 0) {
-                auto result = TrainingSampleStorage::save(samples_file, collector->samples());
-                if (!result) {
-                    std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
-                }
-            }
-
-            if (stats.games_completed.load(std::memory_order_relaxed) < num_games) {
-                //if we have more to go, clear tree, if we're done, leave it so it can be saved
-                pool.clear();
-
-                // Reinitialize root node
-                uint32_t new_root = pool.allocate();
-                pool[new_root].init_root(true);
-                current_root.store(new_root, std::memory_order_release);
-                root_idx = new_root;
-
-                ++pool_reset_count;
-                std::cout << "[SelfPlayEngine] Pool reset #" << pool_reset_count
-                          << " complete" << std::endl;
-            }
-
-            // Resume workers
-            {
-                std::lock_guard lock(pause_mutex);
-                draining.store(false, std::memory_order_release);
-            }
-            resume_cv.notify_all();
-        }
 
         // Regular checkpoint callback
         int completed = stats.games_completed.load(std::memory_order_relaxed);
         if (checkpoint_callback &&
             completed - last_checkpoint >= checkpoint_interval_games) {
-            checkpoint_callback(stats, pool);
+            checkpoint_callback(stats);
             last_checkpoint = completed;
 
-            //save at checkpoints, overwrites each time with no double samples
-            if (!samples_file.empty() && collector->size() > 0) {
+            // Save samples at checkpoints (overwrites each time)
+            if (!samples_file.empty() && collector && collector->size() > 0) {
                 auto result = TrainingSampleStorage::save(samples_file, collector->samples());
                 if (!result) {
                     std::cerr << "[SelfPlayEngine] Warning: Failed to save intermediate samples\n";
@@ -350,11 +272,7 @@ void SelfPlayEngine::run_multi_game(
 
     std::cout << "[SelfPlayEngine] Completed " << completed << " games in "
               << elapsed << "s (" << std::fixed << std::setprecision(1)
-              << games_per_sec << " games/s)";
-    if (pool_reset_count > 0) {
-        std::cout << " with " << pool_reset_count << " pool resets";
-    }
-    std::cout << "\n";
+              << games_per_sec << " games/s)\n";
     //merge in inference server timers and print all
     global_timers.merge(server.get_inference_timers());
     global_timers.print();
@@ -490,8 +408,8 @@ void SelfPlayEngine::run_multi_game_worker(
                 auto& pending = g.pending_samples[i];
 
                 bool was_p1_turn = (pending.state.flags & StateNode::FLAG_P1_TO_MOVE) != 0;
-                float outcome = was_p1_turn 
-                    ? static_cast<float>(result.winner) 
+                float outcome = was_p1_turn
+                    ? static_cast<float>(result.winner)
                     : static_cast<float>(-result.winner);
 
                 TrainingSample sample;
@@ -520,6 +438,9 @@ void SelfPlayEngine::run_multi_game_worker(
         g.reset();
         active_games--;
         sync.total_active_games.fetch_sub(1, std::memory_order_relaxed);
+
+        // Free the finished game's tree immediately instead of waiting
+        do_deferred_work();
     };
 
     MCTSConfig mcts_config;
