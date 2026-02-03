@@ -221,7 +221,7 @@ struct SelfPlayConfig {
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
-    int max_moves_per_game = 120;           // After this many moves, declare a draw and assign partial points to closer player
+    int max_moves_per_game = 60;           // After this many moves, declare a draw and assign partial points to closer player
     float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player 
 };
 

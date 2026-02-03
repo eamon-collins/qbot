@@ -117,7 +117,6 @@ std::vector<std::future<EvalResult>> InferenceServer::submit_batch(
 }
 
 void InferenceServer::inference_loop() {
-    auto& timers = get_timers();
     while (!stop_requested_.load(std::memory_order_acquire)) {
         // Wait for requests or timeout
         {
@@ -158,7 +157,6 @@ void InferenceServer::process_pending() {
         local_requests.swap(eval_queue_);
     }
 
-    auto& timers = get_timers();
     std::vector<const StateNode*> nodes;
     nodes.reserve(local_requests.size());
 
@@ -169,7 +167,7 @@ void InferenceServer::process_pending() {
     //run inference
     std::vector<EvalResult> results;
     {
-        ScopedTimer t(timers.nn_inference);
+        ScopedTimer t(server_timers_.nn_inference);
         // Process the entire accumulated batch at once
         results = model_.evaluate_batch(nodes);
     }

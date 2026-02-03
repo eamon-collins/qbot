@@ -430,7 +430,7 @@ std::expected<LoadedTree, StorageError> TreeStorage::load(
     NodePool::Config config;
     config.initial_capacity = header->node_count + 10'000'000;  // 10M headroom
     config.chunk_size = 10'000'000;  // 10M growth chunks
-    config.enable_lru = false;
+    // config.enable_lru = false;
 
     LoadedTree result{
         .pool = std::make_unique<NodePool>(config),

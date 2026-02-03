@@ -78,6 +78,19 @@ struct SelfPlayTimers {
         linking.reset();
     }
 
+    void merge(const SelfPlayTimers& other) {
+        auto merge_acc = [](TimerAccumulator& dest, const TimerAccumulator& src) {
+            dest.total_ns.fetch_add(src.total_ns.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            dest.count.fetch_add(src.count.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        };
+        merge_acc(nn_inference, other.nn_inference);
+        merge_acc(pathfinding, other.pathfinding);
+        merge_acc(setup_gen, other.setup_gen);
+        merge_acc(linking, other.linking);
+        merge_acc(mcts_core, other.mcts_core);
+        merge_acc(allocation, other.allocation);
+    }
+
     void print() const {
         auto print_line = [](const char* name, const TimerAccumulator& t) {
             std::cout << "  " << std::left << std::setw(20) << name
@@ -92,7 +105,7 @@ struct SelfPlayTimers {
         // print_line("MCTS Core", mcts_core);
         print_line("total gen_children", setup_gen);
         print_line("Pathfinding", pathfinding);
-        // print_line("allocation", allocation);
+        print_line("allocation", allocation);
         print_line("pruning", linking);
         std::cout << "==================================\n\n";
     }
@@ -100,7 +113,7 @@ struct SelfPlayTimers {
 
 /// Global timers instance (thread-safe due to atomics)
 inline SelfPlayTimers& get_timers() {
-    static SelfPlayTimers timers;
+    thread_local SelfPlayTimers timers;
     return timers;
 }
 

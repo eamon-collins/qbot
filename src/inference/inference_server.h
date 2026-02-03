@@ -93,6 +93,9 @@ public:
         std::lock_guard lock(queue_mutex_);
         return eval_queue_.size();
     }
+    const SelfPlayTimers& get_inference_timers() const {
+        return server_timers_;
+    }
 
 private:
     /// Main loop for inference thread
@@ -115,6 +118,7 @@ private:
     std::deque<EvalRequest> eval_queue_;  // For policy + value requests
 
     // Statistics
+    SelfPlayTimers server_timers_;
     void print_stats();
     std::atomic<size_t> total_requests_{0}; //actually counts total nodes requested
     std::atomic<size_t> batch_requests_{0}; //counts each submit_batch as 1

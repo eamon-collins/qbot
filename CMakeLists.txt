@@ -135,7 +135,7 @@ target_include_directories(qbot_lib_fast PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
     ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/json/single_include)
-target_compile_options(qbot_lib_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto)
+target_compile_options(qbot_lib_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto=auto -fno-strict-aliasing)
 # Use standalone ASIO for websocketpp
 target_compile_definitions(qbot_lib_fast PUBLIC ASIO_STANDALONE)
 # websocketpp uses syntax deprecated in C++20, compile gui_client with C++17
@@ -162,8 +162,8 @@ add_custom_target(leopard DEPENDS leopard_exe)
 
 add_executable(qbot_exe_fast ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_fast PRIVATE qbot_lib_fast Boost::program_options)
-target_compile_options(qbot_exe_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto)
-target_link_options(qbot_exe_fast PRIVATE -flto)
+target_compile_options(qbot_exe_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto=auto -fno-strict-aliasing)
+target_link_options(qbot_exe_fast PRIVATE -flto=auto-fno-strict-aliasing)
 set_target_properties(qbot_exe_fast PROPERTIES
     OUTPUT_NAME qbot_fast_tmp
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}

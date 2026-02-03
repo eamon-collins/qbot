@@ -223,6 +223,8 @@ void SelfPlayEngine::run_multi_game(
               << "soft limit: " << (soft_limit_bytes / static_cast<double>(1024*1024*1024)) << " GB" << std::endl;
 
     auto start_time = std::chrono::steady_clock::now();
+    std::mutex timer_mutex;
+    SelfPlayTimers global_timers;
 
     // LAUNCH WORKER THREADS
     std::vector<std::jthread> workers;
@@ -230,9 +232,12 @@ void SelfPlayEngine::run_multi_game(
 
     for (int i = 0; i < num_workers; ++i) {
         workers.emplace_back([this, &pool, &server, &games_remaining, &stats,
-                              &sync, collector, games_per_worker](std::stop_token st) {
+                              &sync, collector, games_per_worker,
+                              &timer_mutex, &global_timers](std::stop_token st) {
             run_multi_game_worker(st, pool, server, games_per_worker,
                                   games_remaining, stats, sync, collector);
+            std::lock_guard<std::mutex> lock(timer_mutex);
+            global_timers.merge(get_timers());
         });
     }
 
@@ -350,6 +355,9 @@ void SelfPlayEngine::run_multi_game(
         std::cout << " with " << pool_reset_count << " pool resets";
     }
     std::cout << "\n";
+    //merge in inference server timers and print all
+    global_timers.merge(server.get_inference_timers());
+    global_timers.print();
 }
 
 template<InferenceProvider Inference>
@@ -363,8 +371,6 @@ void SelfPlayEngine::run_multi_game_worker(
     MultiGameWorkerSync& sync,
     TrainingSampleCollector* collector)
 {
-    auto& timers = get_timers();
-
     std::vector<PerGameContext> games(games_per_worker);
     int active_games = 0;
 

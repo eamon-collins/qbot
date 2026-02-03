@@ -1075,9 +1075,6 @@ int run_selfplay(const Config& config,
         }
     }
 
-    // Print timing breakdown
-    get_timers().print();
-
     return 0;
 }
 #endif // QBOT_ENABLE_INFERENCE

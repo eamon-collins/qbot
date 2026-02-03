@@ -323,39 +323,37 @@ std::vector<Move> StateNode::generate_valid_moves(size_t* out_fence_count) const
 
 
 size_t StateNode::generate_valid_children() noexcept {
-    if (is_terminal() || is_expanded()) {
-        return 0;
-    }
+    if (is_terminal() || is_expanded()) return 0;
 
     auto& timers = get_timers();
     ScopedTimer timer_whole(timers.setup_gen);
+
     std::vector<Move> moves = generate_valid_moves();
-    if (moves.empty()) {
-        return 0;
-    }
+    if (moves.empty()) return 0;
 
     NodePool& p = pool();
-    size_t child_count = 0;
-    // Using a local buffer for indices is faster than vector push_back
-    uint32_t child_indices[256];
 
+    // 1. Temporary buffer for moves that pass the pathfinding check
+    Move valid_moves[256]; 
+    int valid_count = 0;
+
+    // 2. PHASE 1: PURE PATHFINDING (Thread-Local, scales perfectly)
     {
         ScopedTimer timer(timers.pathfinding);
         Pathfinder& pf = get_pathfinder();
 
         std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
         std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
-
-        //precompute which fence locations block these specific paths
         auto [p1_h_block, p1_v_block] = compute_path_blockers(p1_path);
         auto [p2_h_block, p2_v_block] = compute_path_blockers(p2_path);
 
         for (const Move& m : moves) {
+            bool is_valid = true;
 
             if (m.is_fence()) {
                 uint8_t fr = m.row();
                 uint8_t fc = m.col();
-                uint8_t f_idx = fr * 8 + fc; // Map (0..7, 0..7) to 0..63
+                uint8_t f_idx = fr * 8 + fc;
                 uint64_t mask = (1ULL << f_idx);
 
                 bool cuts_p1 = false;
@@ -369,54 +367,160 @@ size_t StateNode::generate_valid_children() noexcept {
                     if (p2_v_block & mask) cuts_p2 = true;
                 }
 
-                // If path is cut, we must verify if ANY path still exists.
-                // use bfs
                 if (cuts_p1 || cuts_p2) {
-                    // Create a temporary fence grid on stack (copy is 16 bytes, very cheap)
                     FenceGrid tmp_fences = fences;
                     if (m.is_horizontal()) tmp_fences.place_h_fence(fr, fc);
                     else tmp_fences.place_v_fence(fr, fc);
 
-                    //re-check the player whose path was actually cut
                     if (cuts_p1 && cuts_p2 &&
                             (!check_reachability_fast(tmp_fences, p1, 8) ||
                             !check_reachability_fast(tmp_fences, p2, 0))) {
-                        continue; 
+                        is_valid = false;
                     } else if (cuts_p1 && !check_reachability_fast(tmp_fences, p1, 8)) {
-                        continue;
+                        is_valid = false;
                     } else if (cuts_p2 && !check_reachability_fast(tmp_fences, p2, 0)) {
-                        continue;
+                        is_valid = false;
                     }
                 }
             }
 
-            uint32_t child_idx = p.allocate();
-            if (child_idx == NULL_NODE) {
-                // Handle allocation failure (cleanup previous allocations)
-                for (size_t k = 0; k < child_count; ++k) p.deallocate(child_indices[k]);
-                return 0;
+            if (is_valid) {
+                valid_moves[valid_count++] = m;
             }
-            p[child_idx].init_from_parent(*this, m, self_index);
+        }
+    }
+
+    // 3. PHASE 2: ALLOCATION (Shared Resource, Contention point)
+    // Now we record this under 'allocation' instead of 'pathfinding'
+    size_t child_count = 0;
+    uint32_t child_indices[256];
+
+    {
+        ScopedTimer timer(timers.allocation); 
+
+        // Optional: If NodePool supports batch_allocate(count), usage here would be 
+        // HUGE performance win (1 atomic op instead of N).
+        // For now, we just loop:
+        for (int i = 0; i < valid_count; ++i) {
+            uint32_t child_idx = p.allocate();
+            if (child_idx == NULL_NODE) break; // Handle OOM
+
+            p[child_idx].init_from_parent(*this, valid_moves[i], self_index);
             child_indices[child_count++] = child_idx;
         }
     }
 
     if (child_count == 0) return 0;
 
-    // Link children (same as before)
     float uniform_prior = 1.0f / static_cast<float>(child_count);
     for (size_t i = 0; i + 1 < child_count; ++i) {
         p[child_indices[i]].next_sibling = child_indices[i + 1];
-        p[child_indices[i]].stats.prior = uniform_prior; 
+        p[child_indices[i]].stats.prior = uniform_prior;
     }
-    p[child_indices[child_count-1]].next_sibling = NULL_NODE;
-    p[child_indices[child_count-1]].stats.prior = uniform_prior; 
+    p[child_indices[child_count - 1]].next_sibling = NULL_NODE;
+    p[child_indices[child_count - 1]].stats.prior = uniform_prior;
 
     first_child = child_indices[0];
     set_expanded();
 
     return child_count;
 }
+
+// size_t StateNode::generate_valid_children() noexcept {
+//     if (is_terminal() || is_expanded()) {
+//         return 0;
+//     }
+//
+//     auto& timers = get_timers();
+//     ScopedTimer timer_whole(timers.setup_gen);
+//     std::vector<Move> moves = generate_valid_moves();
+//     if (moves.empty()) {
+//         return 0;
+//     }
+//
+//     NodePool& p = pool();
+//     size_t child_count = 0;
+//     // Using a local buffer for indices is faster than vector push_back
+//     uint32_t child_indices[256];
+//
+//     {
+//         ScopedTimer timer(timers.pathfinding);
+//         Pathfinder& pf = get_pathfinder();
+//
+//         std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
+//         std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
+//
+//         //precompute which fence locations block these specific paths
+//         auto [p1_h_block, p1_v_block] = compute_path_blockers(p1_path);
+//         auto [p2_h_block, p2_v_block] = compute_path_blockers(p2_path);
+//
+//         for (const Move& m : moves) {
+//
+//             if (m.is_fence()) {
+//                 uint8_t fr = m.row();
+//                 uint8_t fc = m.col();
+//                 uint8_t f_idx = fr * 8 + fc; // Map (0..7, 0..7) to 0..63
+//                 uint64_t mask = (1ULL << f_idx);
+//
+//                 bool cuts_p1 = false;
+//                 bool cuts_p2 = false;
+//
+//                 if (m.is_horizontal()) {
+//                     if (p1_h_block & mask) cuts_p1 = true;
+//                     if (p2_h_block & mask) cuts_p2 = true;
+//                 } else {
+//                     if (p1_v_block & mask) cuts_p1 = true;
+//                     if (p2_v_block & mask) cuts_p2 = true;
+//                 }
+//
+//                 // If path is cut, we must verify if ANY path still exists.
+//                 // use bfs
+//                 if (cuts_p1 || cuts_p2) {
+//                     // Create a temporary fence grid on stack (copy is 16 bytes, very cheap)
+//                     FenceGrid tmp_fences = fences;
+//                     if (m.is_horizontal()) tmp_fences.place_h_fence(fr, fc);
+//                     else tmp_fences.place_v_fence(fr, fc);
+//
+//                     //re-check the player whose path was actually cut
+//                     if (cuts_p1 && cuts_p2 &&
+//                             (!check_reachability_fast(tmp_fences, p1, 8) ||
+//                             !check_reachability_fast(tmp_fences, p2, 0))) {
+//                         continue; 
+//                     } else if (cuts_p1 && !check_reachability_fast(tmp_fences, p1, 8)) {
+//                         continue;
+//                     } else if (cuts_p2 && !check_reachability_fast(tmp_fences, p2, 0)) {
+//                         continue;
+//                     }
+//                 }
+//             }
+//
+//             uint32_t child_idx = p.allocate();
+//             if (child_idx == NULL_NODE) {
+//                 // Handle allocation failure (cleanup previous allocations)
+//                 for (size_t k = 0; k < child_count; ++k) p.deallocate(child_indices[k]);
+//                 return 0;
+//             }
+//             p[child_idx].init_from_parent(*this, m, self_index);
+//             child_indices[child_count++] = child_idx;
+//         }
+//     }
+//
+//     if (child_count == 0) return 0;
+//
+//     // Link children (same as before)
+//     float uniform_prior = 1.0f / static_cast<float>(child_count);
+//     for (size_t i = 0; i + 1 < child_count; ++i) {
+//         p[child_indices[i]].next_sibling = child_indices[i + 1];
+//         p[child_indices[i]].stats.prior = uniform_prior; 
+//     }
+//     p[child_indices[child_count-1]].next_sibling = NULL_NODE;
+//     p[child_indices[child_count-1]].stats.prior = uniform_prior; 
+//
+//     first_child = child_indices[0];
+//     set_expanded();
+//
+//     return child_count;
+// }
 
 // size_t StateNode::generate_valid_children() noexcept {
 //     if (is_terminal() || is_expanded()) {
