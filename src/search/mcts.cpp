@@ -871,13 +871,14 @@ inline void apply_policy_to_children(
 {
     bool flip_policy = !node.is_p1_to_move();
 
-    constexpr int MAX_MOVES = 256;
+    constexpr int MAX_MOVES = 144;
     uint32_t child_indices[MAX_MOVES];
-    float child_logits[MAX_MOVES]; 
+    float child_logits[MAX_MOVES];
     int count = 0;
 
     float max_logit = -std::numeric_limits<float>::infinity();
 
+    //find max logit
     uint32_t child = node.first_child;
     while (child != NULL_NODE) {
         int action_idx = move_to_action_index(pool[child].move);
@@ -885,28 +886,23 @@ inline void apply_policy_to_children(
             action_idx = flip_action_index(action_idx);
         }
 
-        if (action_idx >= 0 && action_idx < NUM_ACTIONS) {
+        if (action_idx >= 0 && action_idx < NUM_ACTIONS) [[likely]] {
             float val = policy_logits[action_idx];
-            if (count < MAX_MOVES) {
-                child_indices[count] = child;
-                child_logits[count] = val;
-                count++;
-            }
-
+            child_indices[count] = child;
+            child_logits[count] = val;
             max_logit = std::max(max_logit, val);
+            count++;
         }
         child = pool[child].next_sibling;
     }
 
-    if (count == 0) return;
+    if (count == 0) [[unlikely]] return;
 
+    // compute exp, sum, and assign priors in one loop
     float sum_exp = 0.0f;
-
-    // Reuse child_logits array to store the exponentiated values
-    // to avoid a third array or second pass re-calculation.
     for (int i = 0; i < count; ++i) {
         float e = std::exp(child_logits[i] - max_logit);
-        child_logits[i] = e; // Store exp value back in place
+        child_logits[i] = e;
         sum_exp += e;
     }
 
@@ -915,6 +911,7 @@ inline void apply_policy_to_children(
         pool[child_indices[i]].stats.prior = child_logits[i] * scale;
     }
 }
+
 // ============================================================================
 // Arena Implementation (two models playing against each other)
 // ============================================================================

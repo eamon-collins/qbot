@@ -195,7 +195,6 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
     """Export model to TorchScript for C++ inference."""
     logging.info(f"Exporting model to {export_path}")
 
-    # Ensure output directory exists
     export_dir = Path(export_path).parent
     export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -203,7 +202,7 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
         model.eval()
         model.cpu()
 
-        # New 6-channel input format: (batch, 6, 9, 9)
+        #eval() makes inference optimized, half() makes fp16 weights
         export_model = copy.deepcopy(model)
         export_model.eval()
         export_model.half()

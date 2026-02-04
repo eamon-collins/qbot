@@ -210,7 +210,6 @@ void InferenceServer::print_stats() {
                   << "Nodes/s_b(): " << nodes_per_submit << " | "
                   << "submit_batch(): " << client_submissions << " | "
                   << "GPU Batches: " << batches << " | "
-                  << "Time trig: " << time_trig << "% | "
                   << "Avg Batch: " << avg_batch_size << " | "
                   << "Tput: " << std::setprecision(0) << nodes_per_sec << " nodes/s | "
                   << "GPU: " << std::setprecision(1) << gpu_batches_per_sec << " batches/s" 
