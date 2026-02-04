@@ -1106,7 +1106,7 @@ void SelfPlayEngine::run_multi_arena(
             pool_config.batch_size = 8192;
             NodePool my_pool(pool_config);
             my_pool.bind_to_thread();  // Bind to thread-local StateNode::pool_
-            uint32_t root_idx = pool.allocate(Move{}, NULL_NODE, true);
+            uint32_t root_idx = my_pool.allocate(Move{}, NULL_NODE, true);
             my_pool[root_idx].init_root(true);  // P1 starts
             arena_worker_loop(st, i, my_pool, root_idx, server_p1, server_p2,
                               games_remaining, game_counter, stats);
