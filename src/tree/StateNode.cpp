@@ -333,11 +333,9 @@ size_t StateNode::generate_valid_children() noexcept {
 
     NodePool& p = pool();
 
-    // 1. Temporary buffer for moves that pass the pathfinding check
     Move valid_moves[256]; 
     int valid_count = 0;
 
-    // 2. PHASE 1: PURE PATHFINDING (Thread-Local, scales perfectly)
     {
         ScopedTimer timer(timers.pathfinding);
         Pathfinder& pf = get_pathfinder();
@@ -390,18 +388,15 @@ size_t StateNode::generate_valid_children() noexcept {
         }
     }
 
-    // 3. PHASE 2: ALLOCATION (Shared Resource, Contention point)
-    // Now we record this under 'allocation' instead of 'pathfinding'
     size_t child_count = 0;
     uint32_t child_indices[256];
-
     {
-        ScopedTimer timer(timers.allocation); 
+        // ScopedTimer timer(timers.allocation); 
 
         //maybe should batch allocate
         for (int i = 0; i < valid_count; ++i) {
             uint32_t child_idx = p.allocate();
-            if (child_idx == NULL_NODE) break; // Handle OOM
+            if (child_idx == NULL_NODE) break;
 
             p[child_idx].init_from_parent(*this, valid_moves[i], self_index);
             child_indices[child_count++] = child_idx;
@@ -423,182 +418,6 @@ size_t StateNode::generate_valid_children() noexcept {
 
     return child_count;
 }
-
-// size_t StateNode::generate_valid_children() noexcept {
-//     if (is_terminal() || is_expanded()) {
-//         return 0;
-//     }
-//
-//     auto& timers = get_timers();
-//     ScopedTimer timer_whole(timers.setup_gen);
-//     std::vector<Move> moves = generate_valid_moves();
-//     if (moves.empty()) {
-//         return 0;
-//     }
-//
-//     NodePool& p = pool();
-//     size_t child_count = 0;
-//     // Using a local buffer for indices is faster than vector push_back
-//     uint32_t child_indices[256];
-//
-//     {
-//         ScopedTimer timer(timers.pathfinding);
-//         Pathfinder& pf = get_pathfinder();
-//
-//         std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
-//         std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
-//
-//         //precompute which fence locations block these specific paths
-//         auto [p1_h_block, p1_v_block] = compute_path_blockers(p1_path);
-//         auto [p2_h_block, p2_v_block] = compute_path_blockers(p2_path);
-//
-//         for (const Move& m : moves) {
-//
-//             if (m.is_fence()) {
-//                 uint8_t fr = m.row();
-//                 uint8_t fc = m.col();
-//                 uint8_t f_idx = fr * 8 + fc; // Map (0..7, 0..7) to 0..63
-//                 uint64_t mask = (1ULL << f_idx);
-//
-//                 bool cuts_p1 = false;
-//                 bool cuts_p2 = false;
-//
-//                 if (m.is_horizontal()) {
-//                     if (p1_h_block & mask) cuts_p1 = true;
-//                     if (p2_h_block & mask) cuts_p2 = true;
-//                 } else {
-//                     if (p1_v_block & mask) cuts_p1 = true;
-//                     if (p2_v_block & mask) cuts_p2 = true;
-//                 }
-//
-//                 // If path is cut, we must verify if ANY path still exists.
-//                 // use bfs
-//                 if (cuts_p1 || cuts_p2) {
-//                     // Create a temporary fence grid on stack (copy is 16 bytes, very cheap)
-//                     FenceGrid tmp_fences = fences;
-//                     if (m.is_horizontal()) tmp_fences.place_h_fence(fr, fc);
-//                     else tmp_fences.place_v_fence(fr, fc);
-//
-//                     //re-check the player whose path was actually cut
-//                     if (cuts_p1 && cuts_p2 &&
-//                             (!check_reachability_fast(tmp_fences, p1, 8) ||
-//                             !check_reachability_fast(tmp_fences, p2, 0))) {
-//                         continue; 
-//                     } else if (cuts_p1 && !check_reachability_fast(tmp_fences, p1, 8)) {
-//                         continue;
-//                     } else if (cuts_p2 && !check_reachability_fast(tmp_fences, p2, 0)) {
-//                         continue;
-//                     }
-//                 }
-//             }
-//
-//             uint32_t child_idx = p.allocate();
-//             if (child_idx == NULL_NODE) {
-//                 // Handle allocation failure (cleanup previous allocations)
-//                 for (size_t k = 0; k < child_count; ++k) p.deallocate(child_indices[k]);
-//                 return 0;
-//             }
-//             p[child_idx].init_from_parent(*this, m, self_index);
-//             child_indices[child_count++] = child_idx;
-//         }
-//     }
-//
-//     if (child_count == 0) return 0;
-//
-//     // Link children (same as before)
-//     float uniform_prior = 1.0f / static_cast<float>(child_count);
-//     for (size_t i = 0; i + 1 < child_count; ++i) {
-//         p[child_indices[i]].next_sibling = child_indices[i + 1];
-//         p[child_indices[i]].stats.prior = uniform_prior; 
-//     }
-//     p[child_indices[child_count-1]].next_sibling = NULL_NODE;
-//     p[child_indices[child_count-1]].stats.prior = uniform_prior; 
-//
-//     first_child = child_indices[0];
-//     set_expanded();
-//
-//     return child_count;
-// }
-
-// size_t StateNode::generate_valid_children() noexcept {
-//     if (is_terminal() || is_expanded()) {
-//         return 0;
-//     }
-//
-//     auto& timers = get_timers();
-//     ScopedTimer timer_whole(timers.setup_gen);
-//     std::vector<Move> moves = generate_valid_moves();
-//     if (moves.empty()) {
-//         return 0;
-//     }
-//
-//     NodePool& p = pool();
-//
-//     // Track children indices for linking
-//     // keeping child_indices on stack even though I suspect it doesn't matter at all.
-//     size_t child_count = 0;
-//     uint32_t child_indices[140];
-//     // std::vector<uint32_t> child_indices;
-//     // child_indices.reserve(moves.size());
-//
-//     //get both paths up front, then only do pathfinding on child paths if the potential fence intersects the path.
-//     {
-//         ScopedTimer timer(timers.pathfinding);
-//         Pathfinder& pf = get_pathfinder();
-//         std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
-//         std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
-//
-//
-//         for (const Move& m : moves) {
-//             // For fence moves, validate that it doesn't block either player
-//             if (m.is_fence()) {
-//                 bool p1_safe = !path_intersects_fence(p1_path, m);
-//                 bool p2_safe = !path_intersects_fence(p2_path, m);
-//                 if (!p1_safe && !p2_safe && !pf.check_paths_with_fence(*this, m)) {
-//                     continue; //actually, no joke blocked
-//                 } else if (!p1_safe && !pf.check_player_path_with_fence(*this, m, true)) {
-//                     continue;
-//                 } else if (!p2_safe && !pf.check_player_path_with_fence(*this, m, false)) {
-//                     continue;
-//                 }
-//             }
-//                 //if we made it here, move does not block
-//             uint32_t child_idx = p.allocate();
-//             if (child_idx == NULL_NODE) {
-//                 // Allocation failed - rollback all allocated children
-//                 for (uint32_t idx : child_indices) {
-//                     p.deallocate(idx);
-//                 }
-//                 return 0;
-//             }
-//
-//             // Initialize child from this parent's state with move applied
-//             p[child_idx].init_from_parent(*this, m, self_index);
-//             // child_indices.push_back(child_idx);
-//             child_indices[child_count++] = child_idx;
-//         }
-//     }
-//
-//     // if (child_indices.empty()) {
-//     if (child_count == 0) {
-//         return 0;
-//     }
-//
-//     float uniform_prior = 1.0f / static_cast<float>(child_count);
-//     // Link children as siblings (left-child right-sibling representation)
-//     for (size_t i = 0; i + 1 < child_count; ++i) {
-//         p[child_indices[i]].next_sibling = child_indices[i + 1];
-//         p[child_indices[i]].stats.prior = uniform_prior; 
-//     }
-//     p[child_indices[child_count-1]].next_sibling = NULL_NODE;
-//     p[child_indices[child_count-1]].stats.prior = uniform_prior; 
-//
-//     // Set first child and mark as expanded
-//     first_child = child_indices[0];
-//     set_expanded();
-//
-//     return child_count;
-// }
 
 uint32_t StateNode::find_or_create_child(Move move) noexcept {
     NodePool& p = pool();

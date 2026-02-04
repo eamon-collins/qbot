@@ -10,7 +10,7 @@
 #include <sstream>
 
 namespace qbot {
-constexpr bool batch_requests = false;
+constexpr bool batch_requests = true;
 
 // ============================================================================
 // SelfPlayEngine Implementation

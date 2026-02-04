@@ -325,12 +325,11 @@ TEST_F(InferenceBenchmark, SelfPlayThroughput) {
     int total_games_to_play = num_workers * games_per_worker;
 
     engine.run_multi_game(
-        pool, root_idx, server, 
+        server, 
         total_games_to_play, 
         num_workers, 
         games_per_worker, 
         stats, 
-        bounds, 
         &collector, 
         "" // No file output
     );

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <cstring>
 
 namespace qbot {
 
@@ -406,90 +407,77 @@ struct FastContext {
     uint32_t current_id = 0;
 };
 
-bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
-    static thread_local FastContext ctx;
+// 9x9 = 81 bits. We use unsigned __int128 for single-op efficiency on 64-bit modern CPUs.
+// If __int128 is not available, a struct of two uint64_t works but is slightly slower.
+using Bitboard = unsigned __int128;
 
-    // Increment search generation. If 0 (overflow), reset strictly (rare).
-    ctx.current_id++;
-    if (ctx.current_id == 0) {
-        ctx.nodes.fill(FastNode{});
-        ctx.current_id = 1;
-    }
+static constexpr Bitboard ROW_0_MASK = 0x1FF; // First 9 bits
+static constexpr Bitboard ROW_8_MASK = ROW_0_MASK << (8 * 9);
+static constexpr Bitboard COL_0_MASK = [](){
+    Bitboard b = 0;
+    for(int r=0; r<9; ++r) b |= ((Bitboard)1 << (r*9));
+    return b;
+}();
+static constexpr Bitboard COL_8_MASK = COL_0_MASK << 8;
 
-    const uint32_t search_id = ctx.current_id;
-    uint8_t open_count = 0;
+// Precompute connectivity masks for a FenceGrid
+// Returns {blocked_down_mask, blocked_right_mask}
+// Bit 'i' set in blocked_down means tile 'i' cannot move down to 'i+9'
+static std::pair<Bitboard, Bitboard> build_wall_masks(const FenceGrid& fences) {
+    Bitboard down = 0;
+    Bitboard right = 0;
 
-    // Helper to add to open set
-    auto add_open = [&](uint8_t idx, uint8_t g, uint8_t h) {
-        FastNode& n = ctx.nodes[idx];
-        n.g_cost = g;
-        n.f_cost = g + h;
-        n.last_seen_id = search_id;
-        n.in_open = true;
-        n.in_closed = false;
-        ctx.open_set[open_count++] = idx;
-    };
+    for (int r = 0; r < 8; ++r) {
+        for (int c = 0; c < 9; ++c) {
+            // Check Down (r,c) -> (r+1,c)
+            // Blocked if H-fence at (r, c) or (r, c-1)
+            bool h_blocked = false;
+            if (c < 8 && fences.has_h_fence(r, c)) h_blocked = true;
+            if (c > 0 && fences.has_h_fence(r, c - 1)) h_blocked = true;
+            if (h_blocked) down |= ((Bitboard)1 << (r * 9 + c));
 
-    // Initialize start
-    uint8_t start_idx = player.row * 9 + player.col;
-    uint8_t start_h = (player.row > goal_row) ? (player.row - goal_row) : (goal_row - player.row);
-    add_open(start_idx, 0, start_h);
-
-    while (open_count > 0) {
-        // Linear scan for lowest f_cost (faster than heap for N < 20)
-        int best_pos = 0;
-        uint8_t best_f = ctx.nodes[ctx.open_set[0]].f_cost;
-
-        for (int i = 1; i < open_count; ++i) {
-            uint8_t f = ctx.nodes[ctx.open_set[i]].f_cost;
-            if (f < best_f) {
-                best_f = f;
-                best_pos = i;
+            // Check Right (r,c) -> (r,c+1) (only valid for c < 8)
+            if (c < 8) {
+                bool v_blocked = false;
+                // Blocked if V-fence at (r, c) or (r-1, c)
+                if (fences.has_v_fence(r, c)) v_blocked = true;
+                if (r > 0 && fences.has_v_fence(r - 1, c)) v_blocked = true;
+                if (v_blocked) right |= ((Bitboard)1 << (r * 9 + c));
             }
         }
+    }
+    return {down, right};
+}
 
-        uint8_t curr_idx = ctx.open_set[best_pos];
+bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
+    auto [b_down, b_right] = build_wall_masks(fences);
 
-        // Remove from open (unordered remove: swap with last)
-        ctx.nodes[curr_idx].in_open = false;
-        ctx.nodes[curr_idx].in_closed = true;
-        open_count--;
-        ctx.open_set[best_pos] = ctx.open_set[open_count];
+    Bitboard reach = (Bitboard)1 << (player.row * 9 + player.col);
+    Bitboard visited = 0;
+    Bitboard goal_mask = (goal_row == 0) ? ROW_0_MASK : ROW_8_MASK;
 
-        // Check Goal
-        uint8_t r = curr_idx / 9;
-        if (r == goal_row) return true;
+    // Flood fill
+    while (reach) {
+        if (reach & goal_mask) return true;
 
-        uint8_t c = curr_idx % 9;
-        uint8_t next_g = ctx.nodes[curr_idx].g_cost + 1;
+        visited |= reach;
+        Bitboard next = 0;
 
-        // Process neighbors
-        auto check = [&](uint8_t n_idx, uint8_t n_r) {
-            FastNode& n = ctx.nodes[n_idx];
+        // Move Right: shift left 1, mask out col 0 wrap-around and right-walls
+        // Note: moving FROM i to i+1 requires checking b_right at i
+        next |= (reach << 1) & ~COL_0_MASK & ~(b_right << 1); 
 
-            // If strictly new node
-            if (n.last_seen_id != search_id) {
-                uint8_t h = (n_r > goal_row) ? (n_r - goal_row) : (goal_row - n_r);
-                add_open(n_idx, next_g, h);
-                return;
-            }
+        // Move Left: shift right 1, mask out col 8 wrap-around and right-walls of prev
+        // Moving to i from i+1 requires checking b_right at i
+        next |= (reach >> 1) & ~COL_8_MASK & ~b_right;
 
-            // If already visited (Manhattan is consistent, so closed nodes are optimal)
-            if (n.in_closed) return;
+        // Move Down: shift left 9, mask out down-walls
+        next |= (reach << 9) & ~(b_down << 9);
 
-            // If in open but we found a better path (rare in unit grids, but possible)
-            if (n.in_open && next_g < n.g_cost) {
-                n.g_cost = next_g;
-                uint8_t h = (n_r > goal_row) ? (n_r - goal_row) : (goal_row - n_r);
-                n.f_cost = next_g + h;
-                // Already in open_set array, just updated cost
-            }
-        };
+        // Move Up: shift right 9, mask out down-walls of prev
+        next |= (reach >> 9) & ~b_down;
 
-        if (r > 0 && !fences.blocked_up(r, c))    check(curr_idx - 9, r - 1);
-        if (r < 8 && !fences.blocked_down(r, c))  check(curr_idx + 9, r + 1);
-        if (c > 0 && !fences.blocked_left(r, c))  check(curr_idx - 1, r);
-        if (c < 8 && !fences.blocked_right(r, c)) check(curr_idx + 1, r);
+        reach = next & ~visited;
     }
 
     return false;
