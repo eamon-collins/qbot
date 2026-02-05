@@ -499,6 +499,11 @@ void SelfPlayEngine::run_multi_game_worker(
             } else {
                 g.mcts_iterations_done = 0;
 
+                // Reset visits from opponent's search - keeps NN values
+                // value should still be valid, but if we randomly select a node suddenly we have 1 visit and accumulated value from many visits.
+                //maybe set value to value / visits? to give some info but scaled to avg val?
+                reset_subtree_visits(pool, g.root_idx);
+
                 // Override with uniform priors during opening phase for diverse exploration
                 if (g.num_moves < config_.uniform_prior_ply && node.has_children()) {
                     set_uniform_priors(pool, node.self_index);

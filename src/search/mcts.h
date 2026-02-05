@@ -251,6 +251,38 @@ inline void set_uniform_priors(NodePool& pool, uint32_t node_idx) {
     }
 }
 
+/// Reset visit counts in entire subtree, keeping NN values
+/// This allows tree reuse while ensuring MCTS explores fresh each turn
+/// may want to keep value too? but safer to discard and discover with priors
+inline void reset_subtree_visits(NodePool& pool, uint32_t root_idx) {
+    if (root_idx == NULL_NODE) return;
+
+    // BFS traversal
+    std::vector<uint32_t> queue;
+    queue.reserve(1024);
+    queue.push_back(root_idx);
+
+    size_t idx = 0;
+    while (idx < queue.size()) {
+        StateNode& node = pool[queue[idx]];
+
+        if (idx == root_idx) {
+            node.stats.visits.store(1, std::memory_order_relaxed);
+        } else {
+            node.stats.visits.store(0, std::memory_order_relaxed);
+        }
+        node.stats.total_value.store(0.0f, std::memory_order_relaxed);
+
+        // Queue children
+        uint32_t child = node.first_child;
+        while (child != NULL_NODE) {
+            queue.push_back(child);
+            child = pool[child].next_sibling;
+        }
+        idx++;
+    }
+}
+
 /// Compute policy distribution from child Q-values
 /// Ï€_i = exp(Q_i / Ï„) / Î£ exp(Q_j / Ï„)  (softmax)
 /// @param pool Node pool

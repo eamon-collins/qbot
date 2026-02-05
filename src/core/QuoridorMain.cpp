@@ -687,7 +687,7 @@ int run_selfplay(const Config& config,
     if (config.uniform_prior_ply > 0) {
         std::cout << "  Uniform prior: first " << config.uniform_prior_ply << " plies\n";
     }
-    std::cout << "  Samples:     " << samples_file << "\n\n";
+    std::cout << "  Samples:     " << samples_file << "\n" << std::endl;
 
     // Only multithreaded path
     // Create inference server for batched GPU access
