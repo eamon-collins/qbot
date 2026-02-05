@@ -448,6 +448,22 @@ TEST_F(PathfindingBenchmark, CompareAlgorithms) {
         print_row("find_path (A*)", ms, ops);
     }
 
+    {
+        auto start = std::chrono::high_resolution_clock::now();
+        size_t ops = 0;
+        int iterations = 100;
+        for (int i = 0; i < iterations; ++i) {
+            for (const auto& s : scenarios_) {
+                auto path = find_path_bitboard(s.fences, s.player, s.goal_row);
+                ops++;
+                if (!path.empty() && path[0].row > 99) ops++; // prevent dead code elim
+            }
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        print_row("find_path_bitboard", ms, ops);
+    }
+
     // 2. Can Reach (Class-based A*)
     {
         auto start = std::chrono::high_resolution_clock::now();

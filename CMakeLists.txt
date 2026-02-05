@@ -176,7 +176,7 @@ add_custom_target(validate_samples DEPENDS validate_samples_exe)
 add_executable(qbot_exe_fast ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_fast PRIVATE qbot_lib_fast Boost::program_options)
 target_compile_options(qbot_exe_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto=auto -fno-strict-aliasing)
-target_link_options(qbot_exe_fast PRIVATE -flto=auto-fno-strict-aliasing)
+target_link_options(qbot_exe_fast PRIVATE -flto=auto -fno-strict-aliasing)
 set_target_properties(qbot_exe_fast PROPERTIES
     OUTPUT_NAME qbot_fast_tmp
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}

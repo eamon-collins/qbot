@@ -396,7 +396,7 @@ std::pair<uint64_t, uint64_t> compute_path_blockers(const std::vector<Coord>& pa
 using Bitboard = unsigned __int128;
 
 static constexpr Bitboard ROW_0_MASK = 0x1FF; // First 9 bits
-static constexpr Bitboard ROW_8_MASK = ROW_0_MASK << (8 * 9);
+static constexpr Bitboard ROW_8_MASK = ROW_0_MASK << (8 * 9); // Bits 72-80
 static constexpr Bitboard COL_0_MASK = [](){
     Bitboard b = 0;
     for(int r=0; r<9; ++r) b |= ((Bitboard)1 << (r*9));
@@ -404,78 +404,196 @@ static constexpr Bitboard COL_0_MASK = [](){
 }();
 static constexpr Bitboard COL_8_MASK = COL_0_MASK << 8;
 
-// Full board mask: all 81 valid positions (bits 0-80)
-static constexpr Bitboard BOARD_MASK = [](){
-    Bitboard b = 0;
-    for(int i=0; i<81; ++i) b |= ((Bitboard)1 << i);
-    return b;
-}();
+// Helper to find the index of the first set bit (Least Significant Bit)
+// Needed to pick a specific tile when backtracking.
+static inline int get_lsb_index(Bitboard bb) {
+    uint64_t lo = static_cast<uint64_t>(bb);
+    if (lo) return __builtin_ctzll(lo);
+    return 64 + __builtin_ctzll(static_cast<uint64_t>(bb >> 64));
+}
 
-// Precompute connectivity masks for a FenceGrid
-// Returns {blocked_down_mask, blocked_right_mask}
-static std::pair<Bitboard, Bitboard> build_wall_masks(const FenceGrid& fences) {
-    Bitboard down = 0;
-    Bitboard right = 0;
+static std::pair<Bitboard, Bitboard> build_wall_masks_fast(const FenceGrid& fences) {
+    Bitboard b_down = 0;
+    Bitboard b_right = 0;
 
-    // FIX: Iterate through ALL rows (0 to 8), not just to 7.
-    // Row 8 needs to be checked for horizontal (Right) blocks.
+    uint64_t h = fences.horizontal;
+    uint64_t v = fences.vertical;
+
     for (int r = 0; r < 9; ++r) {
-        for (int c = 0; c < 9; ++c) {
-            int idx = r * 9 + c;
+        int shift = r * 9;
 
-            // Check Down: (r,c) -> (r+1,c)
-            // Only possible if we are not in the last row (r < 8)
-            // Use fences.blocked_down() for consistency with Pathfinder
-            if (r < 8 && fences.blocked_down(r, c)) {
-                down |= ((Bitboard)1 << idx);
-            }
+        // --- Build Right Blockers ---
+        // Blocked if V-fence at (r,c) OR (r-1,c)
+        // Note: v-fence at row 8 (index 7) doesn't exist (v is 8x8), 
+        // but row 8 board checks row 7 v-fences via v_prev.
+        uint8_t v_curr = (r < 8) ? ((v >> (r * 8)) & 0xFF) : 0;
+        uint8_t v_prev = (r > 0) ? ((v >> ((r - 1) * 8)) & 0xFF) : 0;
 
-            // Check Right: (r,c) -> (r,c+1)
-            // Only possible if we are not in the last column (c < 8)
-            // Use fences.blocked_right() for consistency with Pathfinder
-            if (c < 8 && fences.blocked_right(r, c)) {
-                right |= ((Bitboard)1 << idx);
-            }
+        b_right |= ((Bitboard)(v_curr | v_prev) << shift);
+
+        // --- Build Down Blockers ---
+        if (r < 8) {
+            // Standard rows 0-7: Blocked by H-fence at (r,c) or (r,c-1)
+            uint8_t h_row = (h >> (r * 8)) & 0xFF;
+            // (h_row << 1) aligns "left" fence to current col
+            // Cast to Bitboard needed before shift to avoid overflow if h_row | ... exceeds 64 bits (unlikely here but good practice)
+            // or simply to match types. 
+            // Note: (h_row | (h_row << 1)) produces a 9-bit pattern (cols 0-8).
+            b_down |= ((Bitboard)(h_row | (h_row << 1)) << shift);
+        } else {
+            // FIX: Row 8 (Bottom Edge)
+            // Must explicitly block going down from the last row to prevent 
+            // the bitboard from shifting into "ghost" rows and tunneling.
+            b_down |= ((Bitboard)0x1FF << shift);
         }
     }
-    return {down, right};
+
+    return {b_down, b_right};
+}
+
+std::vector<Coord> find_path_bitboard(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
+    // 1. Setup
+    auto [b_down, b_right] = build_wall_masks_fast(fences);
+
+    // Max path length is 81. Use stack array for speed.
+    // history[i] stores the "frontier" (newly reached nodes) at step i.
+    std::array<Bitboard, 82> history;
+
+    int start_idx = player.row * 9 + player.col;
+    Bitboard current_frontier = (Bitboard)1 << start_idx;
+    Bitboard visited = current_frontier;
+    Bitboard goal_mask = (goal_row == 0) ? ROW_0_MASK : (ROW_0_MASK << (8 * 9));
+
+    history[0] = current_frontier;
+    int depth = 0;
+    bool found = false;
+
+    // 2. Forward Search (BFS)
+    // We limit loop to 81 because no shortest path can be longer than the number of squares.
+    for (depth = 0; depth < 81; ++depth) {
+        if (current_frontier & goal_mask) {
+            found = true;
+            break;
+        }
+
+        Bitboard next = 0;
+
+        // Move Right (i -> i+1): Blocked by b_right at i
+        next |= (current_frontier << 1) & ~COL_0_MASK & ~(b_right << 1); 
+
+        // Move Left (i -> i-1): Blocked by b_right at i-1
+        next |= (current_frontier >> 1) & ~COL_8_MASK & ~b_right;
+
+        // Move Down (i -> i+9): Blocked by b_down at i
+        next |= (current_frontier << 9) & ~(b_down << 9);
+
+        // Move Up (i -> i-9): Blocked by b_down at i-9
+        next |= (current_frontier >> 9) & ~b_down;
+
+        // Only keep strictly NEW nodes
+        current_frontier = next & ~visited;
+
+        if (current_frontier == 0) return {}; // No path found
+
+        visited |= current_frontier;
+        history[depth + 1] = current_frontier;
+    }
+
+    if (!found) return {};
+
+    // 3. Backtrack to reconstruct path
+    // Pick specific goal node (first bit set in the intersection)
+    int curr_idx = get_lsb_index(current_frontier & goal_mask);
+
+    std::vector<Coord> path;
+    path.reserve(depth + 1);
+
+    // Add goal
+    path.push_back({static_cast<uint8_t>(curr_idx / 9), static_cast<uint8_t>(curr_idx % 9)});
+
+    // Walk back from depth-1 to 0
+    for (int d = depth - 1; d >= 0; --d) {
+        Bitboard prev_frontier = history[d];
+
+        // We need to find a neighbor 'prev' in 'prev_frontier' that can reach 'curr_idx'
+        // We check all 4 potential predecessors.
+
+        // Potential Prev: UP (curr - 9) -> Moved Down to get here
+        if (curr_idx >= 9) {
+            int prev = curr_idx - 9;
+            // Check if prev was in the frontier AND move Down was valid (not blocked by b_down at prev)
+            if ((prev_frontier & ((Bitboard)1 << prev)) && !((b_down >> prev) & 1)) {
+                curr_idx = prev;
+                goto push_node;
+            }
+        }
+
+        // Potential Prev: DOWN (curr + 9) -> Moved Up to get here
+        if (curr_idx < 72) {
+            int prev = curr_idx + 9;
+            // Check if prev was in frontier AND move Up was valid (not blocked by b_down at curr)
+            if ((prev_frontier & ((Bitboard)1 << prev)) && !((b_down >> curr_idx) & 1)) {
+                curr_idx = prev;
+                goto push_node;
+            }
+        }
+
+        // Potential Prev: LEFT (curr - 1) -> Moved Right to get here
+        if ((curr_idx % 9) > 0) {
+            int prev = curr_idx - 1;
+            // Check if prev was in frontier AND move Right was valid (not blocked by b_right at prev)
+            if ((prev_frontier & ((Bitboard)1 << prev)) && !((b_right >> prev) & 1)) {
+                curr_idx = prev;
+                goto push_node;
+            }
+        }
+
+        // Potential Prev: RIGHT (curr + 1) -> Moved Left to get here
+        if ((curr_idx % 9) < 8) {
+            int prev = curr_idx + 1;
+            // Check if prev was in frontier AND move Left was valid (not blocked by b_right at curr)
+            if ((prev_frontier & ((Bitboard)1 << prev)) && !((b_right >> curr_idx) & 1)) {
+                curr_idx = prev;
+                goto push_node;
+            }
+        }
+
+        push_node:
+        path.push_back({static_cast<uint8_t>(curr_idx / 9), static_cast<uint8_t>(curr_idx % 9)});
+    }
+
+    // Path is currently Goal -> Start. Reverse it.
+    std::reverse(path.begin(), path.end());
+    return path;
 }
 
 bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
-    // 1. Build masks
-    auto [b_down, b_right] = build_wall_masks(fences);
+    auto [b_down, b_right] = build_wall_masks_fast(fences);
 
-    // 2. Setup Bitboard BFS
     Bitboard reach = (Bitboard)1 << (player.row * 9 + player.col);
     Bitboard visited = 0;
     Bitboard goal_mask = (goal_row == 0) ? ROW_0_MASK : ROW_8_MASK;
 
-    // 3. Flood fill
     while (reach) {
-        // If any reaching bit hits the goal row, we are done
         if (reach & goal_mask) return true;
 
         visited |= reach;
         Bitboard next = 0;
 
-        // Move Right: Shift Left 1
-        // blocked by COL_0 wrap-around AND b_right at current position (i)
+        // Move Right: shift left 1, mask out col 0 wrap-around and right-walls
         next |= (reach << 1) & ~COL_0_MASK & ~(b_right << 1); 
 
-        // Move Left: Shift Right 1
-        // blocked by COL_8 wrap-around AND b_right at target position (i-1)
+        // Move Left: shift right 1, mask out col 8 wrap-around and right-walls (at dest)
         next |= (reach >> 1) & ~COL_8_MASK & ~b_right;
 
-        // Move Down: Shift Left 9
-        // blocked by b_down at current position (i)
+        // Move Down: shift left 9, mask out down-walls
+        // The fix in build_wall_masks_fast ensures b_down prevents shifting off-board here
         next |= (reach << 9) & ~(b_down << 9);
 
-        // Move Up: Shift Right 9
-        // blocked by b_down at target position (i-9)
+        // Move Up: shift right 9, mask out down-walls (at dest)
         next |= (reach >> 9) & ~b_down;
 
-        // Only keep valid board positions (prevents row overflow) and unvisited squares
-        reach = next & BOARD_MASK & ~visited;
+        reach = next & ~visited;
     }
 
     return false;

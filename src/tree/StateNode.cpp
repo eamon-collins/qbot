@@ -338,10 +338,12 @@ size_t StateNode::generate_valid_children() noexcept {
 
     {
         ScopedTimer timer(timers.pathfinding);
-        Pathfinder& pf = get_pathfinder();
+        // Pathfinder& pf = get_pathfinder();
 
-        std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
-        std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
+        // std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);
+        // std::vector<Coord> p2_path = pf.find_path(fences, p2, 0);
+        std::vector<Coord> p1_path = find_path_bitboard(fences, p1, 8);
+        std::vector<Coord> p2_path = find_path_bitboard(fences, p2, 0);
         auto [p1_h_block, p1_v_block] = compute_path_blockers(p1_path);
         auto [p2_h_block, p2_v_block] = compute_path_blockers(p2_path);
 

@@ -128,6 +128,8 @@ Pathfinder& get_pathfinder() noexcept;
     const std::vector<Coord>& p2_path,
     bool p1_moves_first) noexcept;
 
+// static inline int get_lsb_index(Bitboard bb);
+std::vector<Coord> find_path_bitboard(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept;
 [[nodiscard]] bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept;
 
 std::pair<uint64_t, uint64_t> compute_path_blockers(const std::vector<Coord>& path);
