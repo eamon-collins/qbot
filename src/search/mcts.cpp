@@ -144,9 +144,6 @@ void SelfPlayEngine::run_multi_game(
         current_root, pause_mutex, pause_cv, resume_cv
     };
 
-    std::cout << "[SelfPlayEngine] Starting " << num_games << " games with "
-              << num_workers << " workers (per-thread pools)\n";
-
     auto start_time = std::chrono::steady_clock::now();
     std::mutex timer_mutex;
     SelfPlayTimers global_timers;
@@ -501,6 +498,12 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
             } else {
                 g.mcts_iterations_done = 0;
+
+                // Override with uniform priors during opening phase for diverse exploration
+                if (g.num_moves < config_.uniform_prior_ply && node.has_children()) {
+                    set_uniform_priors(pool, node.self_index);
+                }
+
                 //only apply to root of search, and only when this player has fences left
                 if (node.is_p1_to_move() ? node.p1.fences > 0 : node.p2.fences > 0) {
                     add_dirichlet_noise(pool, node.self_index, 0.08f, 0.25f);
@@ -541,6 +544,11 @@ void SelfPlayEngine::run_multi_game_worker(
 
                 if (node.has_children()) {
                     apply_policy_to_children(pool, pe.leaf_idx, node, eval.policy);
+
+                    // Override with uniform priors during opening phase for diverse exploration
+                    if (g.num_moves < config_.uniform_prior_ply) {
+                        set_uniform_priors(pool, pe.leaf_idx);
+                    }
                 }
                 //only apply to root of search, and only when this player has fences left
                 if (node.is_p1_to_move() ? node.p1.fences > 0 : node.p2.fences > 0) {
@@ -706,7 +714,7 @@ void SelfPlayEngine::run_multi_game_worker(
                 }
 
                 // Also do deferred cleanup work
-                // do_deferred_work();
+                do_deferred_work();
 
                 // Now collect results - GPU should be done or nearly done
                 for (auto& pe : pending_expansions) {
@@ -723,6 +731,12 @@ void SelfPlayEngine::run_multi_game_worker(
 
                     if (leaf.has_children()) {
                         apply_policy_to_children(pool, pe.leaf_idx, leaf, eval.policy);
+
+                        // Override with uniform priors during opening phase for diverse exploration
+                        // This affects the entire search tree, not just the root
+                        if (g.num_moves < config_.uniform_prior_ply) {
+                            set_uniform_priors(pool, pe.leaf_idx);
+                        }
                     }
 
                     backpropagate(pool, path_pool[pe.game_idx], eval.value);
@@ -796,7 +810,7 @@ void SelfPlayEngine::run_multi_game_worker(
             g.mcts_iterations_done = 0;
         }
         //test out doing it immediately
-        do_deferred_work();
+        // do_deferred_work();
     }
 
     // Final cleanup

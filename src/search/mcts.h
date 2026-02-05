@@ -216,17 +216,43 @@ struct TrainingStats {
 struct SelfPlayConfig {
     int simulations_per_move = 800;       // MCTS iterations per move
     float temperature = 1.0f;              // Softmax temperature for move selection
-    int temperature_drop_ply = 30;         // After this ply, use temperature → 0
+    int temperature_drop_ply = 30;         // After this ply, use temperature â†’ 0
     bool stochastic = true;                // True = sample from policy, False = argmax
     bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
     int max_moves_per_game = 100;           // After this many moves, declare a draw and assign partial points to closer player
-    float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player 
+    float max_draw_reward = 0.0;           // On a draw, this is maximum reward we give the closest player
+    int uniform_prior_ply = 0;             // Before this ply, use uniform priors (naive opening exploration)
 };
 
+/// Set uniform priors on all children of a node
+/// Used for naive opening exploration to diversify games
+inline void set_uniform_priors(NodePool& pool, uint32_t node_idx) {
+    StateNode& node = pool[node_idx];
+    if (!node.has_children()) return;
+
+    // Count children
+    int num_children = 0;
+    uint32_t child = node.first_child;
+    while (child != NULL_NODE) {
+        num_children++;
+        child = pool[child].next_sibling;
+    }
+
+    if (num_children == 0) return;
+
+    // Set uniform prior
+    float uniform = 1.0f / static_cast<float>(num_children);
+    child = node.first_child;
+    while (child != NULL_NODE) {
+        pool[child].stats.prior = uniform;
+        child = pool[child].next_sibling;
+    }
+}
+
 /// Compute policy distribution from child Q-values
-/// π_i = exp(Q_i / τ) / Σ exp(Q_j / τ)  (softmax)
+/// Ï€_i = exp(Q_i / Ï„) / Î£ exp(Q_j / Ï„)  (softmax)
 /// @param pool Node pool
 /// @param parent_idx Parent node index
 /// @param temperature Softmax temperature (higher = more uniform)
@@ -377,7 +403,7 @@ static void add_dirichlet_noise(NodePool& pool, uint32_t node_idx, float alpha, 
         return policy;
     }
 
-    // π(a) ∝ N(a)^(1/τ)
+    // Ï€(a) âˆ N(a)^(1/Ï„)
     float inv_temp = 1.0f / temperature;
     float sum = 0.0f;
     for (auto& [move, visits] : policy) {

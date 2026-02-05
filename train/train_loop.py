@@ -101,6 +101,7 @@ def get_next_iteration(samples_dir: str) -> int:
 def run_selfplay(tree_path: str, model_path: str, num_games: int,
                  simulations: int, num_threads: int, games_per_thread: int,
                  temperature: float = 1.0, temp_drop_ply: int = 30,
+                 uniform_prior_ply: int = 0,
                  max_memory: int = 30, batch_size: int = 256, max_wait: float = 1.0, model_id: str = "") -> bool:
     """Run self-play games using NN-only MCTS evaluation."""
     qbot_path = get_project_root() / "build" / "qbot"
@@ -131,6 +132,7 @@ def run_selfplay(tree_path: str, model_path: str, num_games: int,
         "--max-wait", str(max_wait),
         "--temperature", str(temperature),
         "--temp-drop", str(temp_drop_ply),
+        "--uniform-prior-ply", str(uniform_prior_ply),
         "--max-memory", str(max_memory),
         "--games-per-thread", str(games_per_thread),
     ]
@@ -195,6 +197,7 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
     """Export model to TorchScript for C++ inference."""
     logging.info(f"Exporting model to {export_path}")
 
+    # Ensure output directory exists
     export_dir = Path(export_path).parent
     export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,7 +205,7 @@ def export_model(model: QuoridorNet, export_path: str) -> bool:
         model.eval()
         model.cpu()
 
-        #eval() makes inference optimized, half() makes fp16 weights
+        # New 6-channel input format: (batch, 6, 9, 9)
         export_model = copy.deepcopy(model)
         export_model.eval()
         export_model.half()
@@ -344,6 +347,8 @@ def main():
                         help='Temperature for move selection')
     parser.add_argument('--temp-drop', type=int, default=30, dest='temp_drop',
                         help='Ply at which to drop temperature to 0')
+    parser.add_argument('--uniform-prior-ply', type=int, default=0, dest='uniform_prior_ply',
+                        help='Before this ply, use uniform priors for naive opening exploration (0 = disabled)')
     parser.add_argument('--max-memory', type=int, default=35, dest='max_memory',
                         help='max memory in GB, resets pool at 80%')
 
@@ -494,8 +499,8 @@ def main():
             # Pass the symlink path; run_selfplay resolves it
             if not run_selfplay(str(tree_path), str(current_best_pt_link), args.games,
                                 args.simulations, args.threads, args.games_per_thread,
-                                args.temperature, args.temp_drop, args.max_memory,
-                                args.inference_batch_size, args.max_wait, model_hash):
+                                args.temperature, args.temp_drop, args.uniform_prior_ply,
+                                args.max_memory, args.inference_batch_size, args.max_wait, model_hash):
                 logging.error("Self-play failed, retrying iteration...")
                 continue
 

@@ -337,7 +337,7 @@ size_t StateNode::generate_valid_children() noexcept {
     int valid_count = 0;
 
     {
-        ScopedTimer timer(timers.pathfinding);
+        // ScopedTimer timer(timers.pathfinding);
         // Pathfinder& pf = get_pathfinder();
 
         // std::vector<Coord> p1_path = pf.find_path(fences, p1, 8);

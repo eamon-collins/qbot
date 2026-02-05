@@ -67,6 +67,7 @@ struct Config {
     int batch_size = 256;                        // Inference batch size for GPU
     float temperature = 1.0f;                    // Softmax temperature
     int temperature_drop_ply = 30;               // Ply to drop temperature to 0
+    int uniform_prior_ply = 0;                   // Before this ply, use uniform priors (naive opening)
     bool progressive = false;                    // Progressive expansion mode
     size_t max_memory_gb = 40;                   // Max memory for node pool in GB
 
@@ -135,6 +136,8 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Softmax temperature for move selection")
         ("temp-drop", po::value<int>(&config.temperature_drop_ply)->default_value(30),
             "Ply to drop temperature to 0")
+        ("uniform-prior-ply", po::value<int>(&config.uniform_prior_ply)->default_value(0),
+            "Before this ply, use uniform priors for naive opening exploration (0 = disabled)")
         ("progressive", po::bool_switch(&config.progressive),
             "Use progressive expansion (on-demand child creation)")
         ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
@@ -207,6 +210,9 @@ void Config::print(std::ostream& os) const {
         os << "  Sims/move:      " << simulations_per_move << "\n";
         os << "  Temperature:    " << temperature << "\n";
         os << "  Temp drop ply:  " << temperature_drop_ply << "\n";
+        if (uniform_prior_ply > 0) {
+            os << "  Uniform prior:  first " << uniform_prior_ply << " plies\n";
+        }
     }
     if (mode == RunMode::Arena) {
         os << "  Current model:  " << model_file << "\n";
@@ -517,6 +523,7 @@ int run_arena(const Config& config) {
     sp_config.simulations_per_move = config.simulations_per_move;
     sp_config.temperature = config.temperature;
     sp_config.temperature_drop_ply = config.temperature_drop_ply;
+    sp_config.uniform_prior_ply = config.uniform_prior_ply;
     sp_config.stochastic = true;  // Use stochastic selection when temperature > 0
 
     SelfPlayEngine engine(sp_config);
@@ -649,6 +656,7 @@ int run_selfplay(const Config& config,
     sp_config.simulations_per_move = config.simulations_per_move;
     sp_config.temperature = config.temperature;
     sp_config.temperature_drop_ply = config.temperature_drop_ply;
+    sp_config.uniform_prior_ply = config.uniform_prior_ply;
     sp_config.stochastic = true;
     sp_config.progressive_expansion = config.progressive;
 
@@ -676,6 +684,9 @@ int run_selfplay(const Config& config,
     std::cout << "  Sims/move:   " << config.simulations_per_move << "\n";
     std::cout << "  Temperature: " << config.temperature << " (drops to 0 at ply "
               << config.temperature_drop_ply << ")\n";
+    if (config.uniform_prior_ply > 0) {
+        std::cout << "  Uniform prior: first " << config.uniform_prior_ply << " plies\n";
+    }
     std::cout << "  Samples:     " << samples_file << "\n\n";
 
     // Only multithreaded path
