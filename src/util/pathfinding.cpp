@@ -393,22 +393,6 @@ std::pair<uint64_t, uint64_t> compute_path_blockers(const std::vector<Coord>& pa
     return {h_blockers, v_blockers};
 }
 
-struct FastNode {
-    uint32_t last_seen_id = 0;
-    uint8_t g_cost;
-    uint8_t f_cost;
-    bool in_open;
-    bool in_closed;
-};
-
-struct FastContext {
-    std::array<FastNode, 81> nodes;
-    std::array<uint8_t, 81> open_set; // Stores indices 0-80
-    uint32_t current_id = 0;
-};
-
-// 9x9 = 81 bits. We use unsigned __int128 for single-op efficiency on 64-bit modern CPUs.
-// If __int128 is not available, a struct of two uint64_t works but is slightly slower.
 using Bitboard = unsigned __int128;
 
 static constexpr Bitboard ROW_0_MASK = 0x1FF; // First 9 bits
@@ -420,29 +404,37 @@ static constexpr Bitboard COL_0_MASK = [](){
 }();
 static constexpr Bitboard COL_8_MASK = COL_0_MASK << 8;
 
+// Full board mask: all 81 valid positions (bits 0-80)
+static constexpr Bitboard BOARD_MASK = [](){
+    Bitboard b = 0;
+    for(int i=0; i<81; ++i) b |= ((Bitboard)1 << i);
+    return b;
+}();
+
 // Precompute connectivity masks for a FenceGrid
 // Returns {blocked_down_mask, blocked_right_mask}
-// Bit 'i' set in blocked_down means tile 'i' cannot move down to 'i+9'
 static std::pair<Bitboard, Bitboard> build_wall_masks(const FenceGrid& fences) {
     Bitboard down = 0;
     Bitboard right = 0;
 
-    for (int r = 0; r < 8; ++r) {
+    // FIX: Iterate through ALL rows (0 to 8), not just to 7.
+    // Row 8 needs to be checked for horizontal (Right) blocks.
+    for (int r = 0; r < 9; ++r) {
         for (int c = 0; c < 9; ++c) {
-            // Check Down (r,c) -> (r+1,c)
-            // Blocked if H-fence at (r, c) or (r, c-1)
-            bool h_blocked = false;
-            if (c < 8 && fences.has_h_fence(r, c)) h_blocked = true;
-            if (c > 0 && fences.has_h_fence(r, c - 1)) h_blocked = true;
-            if (h_blocked) down |= ((Bitboard)1 << (r * 9 + c));
+            int idx = r * 9 + c;
 
-            // Check Right (r,c) -> (r,c+1) (only valid for c < 8)
-            if (c < 8) {
-                bool v_blocked = false;
-                // Blocked if V-fence at (r, c) or (r-1, c)
-                if (fences.has_v_fence(r, c)) v_blocked = true;
-                if (r > 0 && fences.has_v_fence(r - 1, c)) v_blocked = true;
-                if (v_blocked) right |= ((Bitboard)1 << (r * 9 + c));
+            // Check Down: (r,c) -> (r+1,c)
+            // Only possible if we are not in the last row (r < 8)
+            // Use fences.blocked_down() for consistency with Pathfinder
+            if (r < 8 && fences.blocked_down(r, c)) {
+                down |= ((Bitboard)1 << idx);
+            }
+
+            // Check Right: (r,c) -> (r,c+1)
+            // Only possible if we are not in the last column (c < 8)
+            // Use fences.blocked_right() for consistency with Pathfinder
+            if (c < 8 && fences.blocked_right(r, c)) {
+                right |= ((Bitboard)1 << idx);
             }
         }
     }
@@ -450,37 +442,42 @@ static std::pair<Bitboard, Bitboard> build_wall_masks(const FenceGrid& fences) {
 }
 
 bool check_reachability_fast(const FenceGrid& fences, const Player& player, uint8_t goal_row) noexcept {
+    // 1. Build masks
     auto [b_down, b_right] = build_wall_masks(fences);
 
+    // 2. Setup Bitboard BFS
     Bitboard reach = (Bitboard)1 << (player.row * 9 + player.col);
     Bitboard visited = 0;
     Bitboard goal_mask = (goal_row == 0) ? ROW_0_MASK : ROW_8_MASK;
 
-    // Flood fill
+    // 3. Flood fill
     while (reach) {
+        // If any reaching bit hits the goal row, we are done
         if (reach & goal_mask) return true;
 
         visited |= reach;
         Bitboard next = 0;
 
-        // Move Right: shift left 1, mask out col 0 wrap-around and right-walls
-        // Note: moving FROM i to i+1 requires checking b_right at i
+        // Move Right: Shift Left 1
+        // blocked by COL_0 wrap-around AND b_right at current position (i)
         next |= (reach << 1) & ~COL_0_MASK & ~(b_right << 1); 
 
-        // Move Left: shift right 1, mask out col 8 wrap-around and right-walls of prev
-        // Moving to i from i+1 requires checking b_right at i
+        // Move Left: Shift Right 1
+        // blocked by COL_8 wrap-around AND b_right at target position (i-1)
         next |= (reach >> 1) & ~COL_8_MASK & ~b_right;
 
-        // Move Down: shift left 9, mask out down-walls
+        // Move Down: Shift Left 9
+        // blocked by b_down at current position (i)
         next |= (reach << 9) & ~(b_down << 9);
 
-        // Move Up: shift right 9, mask out down-walls of prev
+        // Move Up: Shift Right 9
+        // blocked by b_down at target position (i-9)
         next |= (reach >> 9) & ~b_down;
 
-        reach = next & ~visited;
+        // Only keep valid board positions (prevents row overflow) and unvisited squares
+        reach = next & BOARD_MASK & ~visited;
     }
 
     return false;
 }
-
 } // namespace qbot

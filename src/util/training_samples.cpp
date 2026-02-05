@@ -134,7 +134,6 @@ std::expected<std::vector<TrainingSample>, TrainingSampleError> TrainingSampleSt
         return std::unexpected(TrainingSampleError::IoError);
     }
 
-    std::cout << "[TrainingSampleStorage] Loaded " << samples.size() << " samples from " << path << "\n";
     return samples;
 }
 

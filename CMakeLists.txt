@@ -160,6 +160,19 @@ set_target_properties(leopard_exe PROPERTIES
 )
 add_custom_target(leopard DEPENDS leopard_exe)
 
+# =============================================================================
+# Validate Samples: Pathfinding validator for training samples
+# =============================================================================
+
+add_executable(validate_samples_exe src/util/validate_samples.cpp)
+target_link_libraries(validate_samples_exe PRIVATE qbot_lib_fast)
+target_compile_options(validate_samples_exe PRIVATE -O3 -DNDEBUG -march=native)
+set_target_properties(validate_samples_exe PROPERTIES
+    OUTPUT_NAME validate_samples
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_custom_target(validate_samples DEPENDS validate_samples_exe)
+
 add_executable(qbot_exe_fast ${QBOT_MAIN_SOURCES})
 target_link_libraries(qbot_exe_fast PRIVATE qbot_lib_fast Boost::program_options)
 target_compile_options(qbot_exe_fast PRIVATE -g -fno-omit-frame-pointer -O3 -DNDEBUG -march=native -flto=auto -fno-strict-aliasing)

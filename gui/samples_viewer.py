@@ -377,6 +377,9 @@ class SamplesViewer:
         self.current_index = 0
         self.running = True
 
+        # Pre-compute start state indices for fast navigation
+        self.start_state_indices = self._find_start_states()
+
         self.update_display()
 
     def update_display(self):
@@ -434,7 +437,8 @@ class SamplesViewer:
                 print(f"  {i}. {move_type:8s} at ({x}, {y}): {prob:.4f} ({prob*100:.2f}%)")
 
         print("=" * 80)
-        print("Navigation: Left/Right arrows (or A/D), Home/End, PgUp/PgDn, Q to quit")
+        print("Navigation: Left/Right (or A/D): prev/next sample, PgUp/PgDn: jump 10")
+        print("            Home/End: prev/next start state, Q: quit")
 
         self.coords.reset()
         for i, ps in enumerate(gs.players):
@@ -472,7 +476,33 @@ class SamplesViewer:
                                    f"Use arrow keys to navigate, Q to quit")
         else:
             self.win.update_info(f"Sample {self.current_index + 1}/{len(self.samples)} - "
-                               f"Use arrow keys to navigate, Q to quit")
+                               f"Arrow keys: prev/next, Home/End: prev/next start, Q to quit")
+
+    def _find_start_states(self) -> List[int]:
+        """Find all indices where both players are at starting positions with 10 fences."""
+        start_states = []
+        for i, sample in enumerate(self.samples):
+            is_start = (
+                sample.p1_row == 0 and sample.p1_col == 4 and sample.p1_fences == 10 and
+                sample.p2_row == 8 and sample.p2_col == 4 and sample.p2_fences == 10
+            )
+            if is_start:
+                start_states.append(i)
+        return start_states
+
+    def _find_prev_start_state(self) -> Optional[int]:
+        """Find the previous start state index before current_index."""
+        for idx in reversed(self.start_state_indices):
+            if idx < self.current_index:
+                return idx
+        return None
+
+    def _find_next_start_state(self) -> Optional[int]:
+        """Find the next start state index after current_index."""
+        for idx in self.start_state_indices:
+            if idx > self.current_index:
+                return idx
+        return None
 
     def switch_to_path(self, path_index: int):
         """Switch to a different game path."""
@@ -494,6 +524,7 @@ class SamplesViewer:
         self.samples = [node.to_sample() for node in path]
         self.tree_nodes = path
         self.current_index = 0
+        self.start_state_indices = self._find_start_states()
         self.update_display()
 
     def handle_input(self):
@@ -525,12 +556,22 @@ class SamplesViewer:
                         self.switch_to_path(self.current_path_index + 1)
 
                 elif event.key == pygame.K_HOME:
-                    self.current_index = 0
-                    self.update_display()
+                    prev_start = self._find_prev_start_state()
+                    if prev_start is not None:
+                        self.current_index = prev_start
+                        print(f"\n>>> Jumped to previous start state at index {prev_start} <<<")
+                        self.update_display()
+                    else:
+                        print("\n>>> No previous start state found <<<")
 
                 elif event.key == pygame.K_END:
-                    self.current_index = len(self.samples) - 1
-                    self.update_display()
+                    next_start = self._find_next_start_state()
+                    if next_start is not None:
+                        self.current_index = next_start
+                        print(f"\n>>> Jumped to next start state at index {next_start} <<<")
+                        self.update_display()
+                    else:
+                        print("\n>>> No next start state found <<<")
 
                 elif event.key == pygame.K_PAGEUP:
                     self.current_index = max(0, self.current_index - 10)
