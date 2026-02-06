@@ -78,6 +78,8 @@ struct Config {
     float win_threshold = 0.55f;                 // Threshold to replace best model
     float promote_alpha = 0.06f;                 // Threshold to replace best model as a p value, ie if models 50/50 this result has promote_alpha prob of happening
 
+    //pvb
+    int port = -1; //websocket port to play over
     //Inference
     float max_wait = 1.0f;
 
@@ -145,7 +147,9 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
         ("max-wait", po::value<float>(&config.max_wait)->default_value(1.0f),
             "Max wait for inference server in ms")
         ("model-id", po::value<std::string>(&config.model_id)->default_value(""),
-            "Model identifier/hash for sample file naming (tree_X_<model_id>.qsamples)");
+            "Model identifier/hash for sample file naming (tree_X_<model_id>.qsamples)")
+        ("port", po::value<int>(&config.port)->default_value(8765),
+            "port for websocket play");
 
     po::variables_map vm;
     try {
@@ -256,6 +260,8 @@ initialize_tree(const Config& config) {
     if (config.mode == RunMode::SelfPlay) {
         // In SelfPlay mode, workers create their own pools - main thread doesn't need one
         pool_config.initial_capacity = 100;  // Minimal allocation
+    } else if (config.mode == RunMode::Interactive) {
+        pool_config.initial_capacity = 10'000'000; //about 600M to start off with.
     }
     auto pool = std::make_unique<NodePool>(pool_config);
     pool->bind_to_thread();  // Bind pool to main thread
@@ -347,10 +353,11 @@ bool should_promote(int candidate_wins, int current_wins, double alpha = 0.06) {
 int run_interactive(const Config& config,
                     std::unique_ptr<NodePool> pool,
                     uint32_t root) {
+
     GUIClient gui;
     GUIClient::Config gui_config;
     gui_config.host = "localhost";
-    gui_config.port = 8765;
+    gui_config.port = config.port;
     gui_config.connect_timeout_ms = 5000;
     gui_config.read_timeout_ms = 60000;
 
@@ -386,7 +393,7 @@ int run_interactive(const Config& config,
     StateNode& root_node = (*pool)[root];
     root_node.init_root(true);  // P1 (human) starts
 
-    gui.send_start("Human", "Bot");
+    gui.send_start("Humanity", "Robot");
 
     uint32_t current_idx = root;
     bool game_over = false;
