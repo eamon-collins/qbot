@@ -81,6 +81,7 @@ private:
     torch::Tensor unified_buffer_;       // [capacity, 6, 9, 9] FP16 pinned
     torch::Tensor value_output_buffer_;  // [capacity] FP32 pinned
     torch::Tensor policy_output_buffer_; // [capacity, NUM_ACTIONS] FP32 pinned
+    torch::Tensor single_input_buffer_; //pinned, single node inference input
 };
 
 } // namespace qbot

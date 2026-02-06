@@ -76,6 +76,11 @@ ModelInference::ModelInference(const std::string& model_path, int batch_size, bo
             model_.to(torch::kFloat);
         }
 
+        // Pre-allocate a pinned memory buffer for single-node evaluation
+        auto dtype = use_fp16_ ? torch::kHalf : torch::kFloat;
+        single_input_buffer_ = torch::zeros({1, 6, 9, 9}, 
+            torch::TensorOptions().dtype(dtype).pinned_memory(device_.is_cuda()));
+
         model_loaded_ = true;
     } catch (const c10::Error& e) {
         std::cerr << "Error loading model from " << model_path << ": " << e.what() << std::endl;
@@ -193,30 +198,26 @@ void ModelInference::process_batch(const EvalCallback& callback) {
 }
 
 EvalResult ModelInference::evaluate_node(const StateNode* node) {
-    // Check use_fp16_ to determine dtype so we can deploy on eserver
-    auto dtype = use_fp16_ ? torch::kHalf : torch::kFloat;
-
-    auto batch_tensor = torch::zeros({1, 6, 9, 9}, 
-        torch::TensorOptions().dtype(dtype).pinned_memory(device_.is_cuda()));
+    single_input_buffer_.zero_(); 
 
     constexpr size_t tensor_stride = 6 * 9 * 9;
     if (use_fp16_) {
-        at::Half* tensor_ptr = batch_tensor.data_ptr<at::Half>();
-        fill_input_tensor(tensor_ptr, tensor_stride, 0, node);
+        fill_input_tensor(single_input_buffer_.data_ptr<at::Half>(), tensor_stride, 0, node);
     } else {
-        float* tensor_ptr = batch_tensor.data_ptr<float>();
-        fill_input_tensor(tensor_ptr, tensor_stride, 0, node);
+        fill_input_tensor(single_input_buffer_.data_ptr<float>(), tensor_stride, 0, node);
     }
 
-    batch_tensor = batch_tensor.to(device_, /*non_blocking=*/true);
+    auto batch_gpu = single_input_buffer_.to(device_, /*non_blocking=*/true);
 
     std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(batch_tensor);
+    inputs.push_back(batch_gpu);
 
     torch::NoGradGuard no_grad;
     auto output = model_.forward(inputs);
 
     auto output_tuple = output.toTuple();
+
+    // Avoid .to(kCPU) creating new tensors if possible, but for now just fix the input alloc.
     auto policy_output = output_tuple->elements()[0].toTensor().to(torch::kCPU, torch::kFloat32);
     auto value_output = output_tuple->elements()[1].toTensor().to(torch::kCPU, torch::kFloat32);
 
