@@ -193,12 +193,20 @@ void ModelInference::process_batch(const EvalCallback& callback) {
 }
 
 EvalResult ModelInference::evaluate_node(const StateNode* node) {
-    auto batch_tensor = torch::zeros({1, 6, 9, 9}, 
-        torch::TensorOptions().dtype(torch::kHalf).pinned_memory(device_.is_cuda()));
+    // Check use_fp16_ to determine dtype so we can deploy on eserver
+    auto dtype = use_fp16_ ? torch::kHalf : torch::kFloat;
 
-    at::Half* tensor_ptr = batch_tensor.data_ptr<at::Half>();
+    auto batch_tensor = torch::zeros({1, 6, 9, 9}, 
+        torch::TensorOptions().dtype(dtype).pinned_memory(device_.is_cuda()));
+
     constexpr size_t tensor_stride = 6 * 9 * 9;
-    fill_input_tensor(tensor_ptr, tensor_stride, 0, node);
+    if (use_fp16_) {
+        at::Half* tensor_ptr = batch_tensor.data_ptr<at::Half>();
+        fill_input_tensor(tensor_ptr, tensor_stride, 0, node);
+    } else {
+        float* tensor_ptr = batch_tensor.data_ptr<float>();
+        fill_input_tensor(tensor_ptr, tensor_stride, 0, node);
+    }
 
     batch_tensor = batch_tensor.to(device_, /*non_blocking=*/true);
 
