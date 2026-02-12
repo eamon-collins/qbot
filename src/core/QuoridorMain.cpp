@@ -96,7 +96,7 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
     po::options_description desc("Quoridor MCTS Bot - Play and train a Quoridor AI");
     desc.add_options()
         ("help,h", "Show this help message")
-        ("player,p", po::value<int>(&config.player)->default_value(1),
+        ("player,p", po::value<int>(&config.player)->default_value(2),
             "Player number (1 or 2, bot plays as this player)")
         ("threads,t", po::value<int>(&config.num_threads)->default_value(4),
             "Number of threads for MCTS")
@@ -391,9 +391,13 @@ int run_interactive(const Config& config,
     CompEngine engine(engine_config);
 
     StateNode& root_node = (*pool)[root];
-    root_node.init_root(true);  // P1 (human) starts
+    root_node.init_root(true);  // P1 always starts
 
-    gui.send_start("Humanity", "Robot");
+    // Determine player names based on who the bot is playing as
+    bool bot_is_p1 = (config.player == 1);
+    std::string p1_name = bot_is_p1 ? "Robot" : "Humanity";
+    std::string p2_name = bot_is_p1 ? "Humanity" : "Robot";
+    gui.send_start(p1_name, p2_name);
 
     uint32_t current_idx = root;
     bool game_over = false;
@@ -408,12 +412,41 @@ int run_interactive(const Config& config,
         int result = current.game_over();
         if (result != 0) {
             game_over = true;
-            std::cout << (result == 1 ? "\n*** HUMAN WINS! ***\n\n" 
-                                      : "\n*** BOT WINS! ***\n\n");
+            bool bot_won = (result == config.player);
+            std::cout << (bot_won ? "\n*** BOT WINS! ***\n\n"
+                                  : "\n*** HUMAN WINS! ***\n\n");
             break;
         }
 
-        if (current.is_p1_to_move()) {
+        // Check if it's the bot's turn
+        bool bot_turn = (current.is_p1_to_move() && bot_is_p1) ||
+                        (!current.is_p1_to_move() && !bot_is_p1);
+
+        if (bot_turn) {
+            // Bot's turn - MCTS search
+            std::cout << "Thinking (" << config.simulations_per_move << " simulations)...\n";
+            auto start = std::chrono::steady_clock::now();
+
+            Move move = engine.search(*pool, current_idx, *model);
+
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+            std::cout << "Search completed in " << ms << " ms\n";
+
+            if (!move.is_valid()) {
+                std::cerr << "Error: Bot has no valid moves\n";
+                return 1;
+            }
+
+            move.print("Bot");
+
+            uint32_t next_idx = current.find_or_create_child(move);
+            if (next_idx == NULL_NODE) {
+                std::cerr << "Error: Failed to create child node\n";
+                return 1;
+            }
+            current_idx = next_idx;
+        } else {
             // Human's turn
             bool valid_move = false;
             while (!valid_move) {
@@ -456,30 +489,6 @@ int run_interactive(const Config& config,
                 }
                 current_idx = next_idx;
             }
-        } else {
-            // Bot's turn - MCTS search
-            std::cout << "Thinking (" << config.simulations_per_move << " simulations)...\n";
-            auto start = std::chrono::steady_clock::now();
-
-            Move move = engine.search(*pool, current_idx, *model);
-
-            auto elapsed = std::chrono::steady_clock::now() - start;
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-            std::cout << "Search completed in " << ms << " ms\n";
-
-            if (!move.is_valid()) {
-                std::cerr << "Error: Bot has no valid moves\n";
-                return 1;
-            }
-
-            move.print("Bot");
-
-            uint32_t next_idx = current.find_or_create_child(move);
-            if (next_idx == NULL_NODE) {
-                std::cerr << "Error: Failed to create child node\n";
-                return 1;
-            }
-            current_idx = next_idx;
         }
     }
 

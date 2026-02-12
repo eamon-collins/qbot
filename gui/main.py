@@ -19,11 +19,17 @@ import json
 from typing import Optional
 from dataclasses import dataclass
 
+# Disable OpenGL to avoid GLX errors in environments without full GL support
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+os.environ['SDL_RENDER_DRIVER'] = 'software'
+os.environ['SDL_VIDEODRIVER'] = 'x11'
+# Disable GLX (OpenGL for X11) explicitly
+os.environ['SDL_VIDEO_X11_FORCE_EGL'] = '0'
+os.environ['SDL_FRAMEBUFFER_ACCELERATION'] = '0'
+
 import pygame
 
-import websockets
-from websockets.server import serve
+import websockets.asyncio.server
 
 from window import Window, pos_in_rect
 from player import Players, Player
@@ -253,7 +259,7 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
             if gui.state.should_quit:
                 break
 
-    except websockets.ConnectionClosed:
+    except websockets.exceptions.ConnectionClosed:
         print(f"Client disconnected (handler {my_handler_id})")
     finally:
         # Only clear connected state if we're still the active handler
@@ -267,8 +273,8 @@ async def websocket_handler(websocket, gui: QuoridorGUI):
 async def run_server(host: str, port: int, gui: QuoridorGUI):
     """Run the WebSocket server."""
     # ping_interval sends pings every 5s, ping_timeout closes connection if no pong within 10s
-    async with serve(lambda ws: websocket_handler(ws, gui), host, port,
-                     ping_interval=5, ping_timeout=10):
+    async with websockets.asyncio.server.serve(lambda ws: websocket_handler(ws, gui), host, port,
+                                                ping_interval=5, ping_timeout=10):
         print(f"WebSocket server running on ws://{host}:{port}")
         gui.win.update_info(f"Waiting for connection on port {port}...")
 

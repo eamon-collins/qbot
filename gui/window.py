@@ -22,7 +22,8 @@ class Window:
         self.bgcolor = bgcolor
         self.top_left = (20, 20)
         self.side_board = 9*self.case_side + 10*self.wall_width
-        self.win = pygame.display.set_mode((width, height))
+        # Use software rendering to avoid GLX/OpenGL issues
+        self.win = pygame.display.set_mode((width, height), pygame.DOUBLEBUF)
         pygame.display.set_caption(title)
         self.button_quit = Button("Quit", self.side_board + 60,
                                   self.side_board - 50, Colors.red)
