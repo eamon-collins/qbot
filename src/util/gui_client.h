@@ -37,6 +37,9 @@ public:
         int read_timeout_ms{30000};  // timeout for waiting on moves
     };
 
+    std::string player1_name = "Player1";
+    std::string player2_name = "Player2";
+
     GUIClient();
     ~GUIClient();
 

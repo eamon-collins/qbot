@@ -175,6 +175,9 @@ std::optional<std::string> GUIClient::receive_json() {
 void GUIClient::send_start(const std::string& player1_name, const std::string& player2_name) {
     if (!is_connected()) return;
 
+    this->player1_name = player1_name;
+    this->player2_name = player2_name;
+
     json msg = {
         {"type", "start"},
         {"player_names", {player1_name, player2_name}}
@@ -207,8 +210,8 @@ void GUIClient::send_gamestate(const StateNode& node, int current_player, float 
     json msg = {
         {"type", "gamestate"},
         {"players", {
-            {{"x", node.p1.col}, {"y", node.p1.row}, {"walls", node.p1.fences}, {"name", "Player1"}},
-            {{"x", node.p2.col}, {"y", node.p2.row}, {"walls", node.p2.fences}, {"name", "Player2"}}
+            {{"x", node.p1.col}, {"y", node.p1.row}, {"walls", node.p1.fences}, {"name", this->player1_name}},
+            {{"x", node.p2.col}, {"y", node.p2.row}, {"walls", node.p2.fences}, {"name", this->player2_name}}
         }},
         {"walls", walls},
         {"current_player", current_player},
