@@ -22,7 +22,6 @@ inline constexpr int NUM_ACTIONS = NUM_PAWN_ACTIONS + NUM_WALL_ACTIONS;
 struct Move;
 
 [[nodiscard]] int move_to_action_index(const Move& move) noexcept;
-[[nodiscard]] Move action_index_to_move(int action_index) noexcept;
 
 struct EvalResult {
     float value;
@@ -58,7 +57,6 @@ public:
 
     [[nodiscard]] EvalResult evaluate_node(const StateNode* node);
     [[nodiscard]] std::vector<EvalResult> evaluate_batch(const std::vector<const StateNode*>& nodes);
-    [[nodiscard]] std::vector<float> evaluate_batch_values(const std::vector<const StateNode*>& nodes);
 
     [[nodiscard]] size_t queue_size() const noexcept { return evaluation_queue_.size(); }
 

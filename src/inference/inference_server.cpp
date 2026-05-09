@@ -57,10 +57,6 @@ void InferenceServer::stop() {
               << ", avg batch size: " << std::fixed << std::setprecision(1) << avg_batch << std::endl;
 }
 
-void InferenceServer::flush() {
-    queue_cv_.notify_all();
-}
-
 std::future<EvalResult> InferenceServer::submit(const StateNode* node) {
     std::promise<EvalResult> promise;
     auto future = promise.get_future();
@@ -121,17 +117,6 @@ void InferenceServer::inference_loop() {
         // Wait for requests or timeout
         {
             std::unique_lock lock(queue_mutex_);
-
-            // auto deadline = std::chrono::steady_clock::now() +
-            //                std::chrono::microseconds(static_cast<long long>(config_.max_wait_ms * 1000));
-            //
-            // bool batch_trigger = queue_cv_.wait_until(lock, deadline, [this] {
-            //     return eval_queue_.size() >= config_.batch_size || 
-            //            stop_requested_.load(std::memory_order_acquire);
-            // });
-            // if (!batch_trigger) {
-            //     total_time_triggers_.fetch_add(1, std::memory_order_relaxed);
-            // }
             queue_cv_.wait(lock, [this] {
                 return !eval_queue_.empty() || stop_requested_.load(std::memory_order_acquire);
             });
@@ -204,7 +189,6 @@ void InferenceServer::print_stats() {
         double gpu_batches_per_sec = static_cast<double>(batches) / elapsed;
         double avg_batch_size = static_cast<double>(requests) / batches;
         float nodes_per_submit = client_submissions > 0 ? ((requests - single_submissions) / static_cast<float>(client_submissions) ) : 0.0f; //submit_batch() avg size
-        float time_trig = 100 * total_time_triggers_.load(std::memory_order_relaxed) / static_cast<float>(batches);
 
         std::cout << "[InferenceServer] " << std::fixed << std::setprecision(1)
                   << "Nodes/s_b(): " << nodes_per_submit << " | "

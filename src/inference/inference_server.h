@@ -68,13 +68,6 @@ public:
     /// Stop the inference thread (processes remaining requests first)
     void stop();
 
-    void flush();
-
-    /// Check if server is running
-    [[nodiscard]] bool is_running() const noexcept {
-        return running_.load(std::memory_order_acquire);
-    }
-
     /// Submit a single node for full evaluation (policy + value)
     /// Returns a future that will contain the complete EvalResult
     [[nodiscard]] std::future<EvalResult> submit(const StateNode* node);
@@ -88,10 +81,6 @@ public:
     }
     [[nodiscard]] size_t total_batches() const noexcept {
         return total_batches_.load(std::memory_order_relaxed);
-    }
-    [[nodiscard]] size_t current_queue_size() const noexcept {
-        std::lock_guard lock(queue_mutex_);
-        return eval_queue_.size();
     }
     const SelfPlayTimers& get_inference_timers() const {
         return server_timers_;
@@ -125,9 +114,6 @@ private:
     std::atomic<size_t> single_requests_{0};//counts each submit as 1
     std::atomic<size_t> total_batches_{0}; //counts actual gpu submissions
     std::atomic<size_t> total_batch_size_sum_{0};  // Sum of all batch sizes for averaging
-    std::atomic<size_t> total_flushes_{0};
-    std::atomic<size_t> total_batch_triggers_{0};
-    std::atomic<size_t> total_time_triggers_{0};
     std::chrono::steady_clock::time_point start_time_;
 
 public:

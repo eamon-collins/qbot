@@ -68,7 +68,6 @@ struct Config {
     float temperature = 1.0f;                    // Softmax temperature
     int temperature_drop_ply = 30;               // Ply to drop temperature to 0
     int uniform_prior_ply = 0;                   // Before this ply, use uniform priors (naive opening)
-    bool progressive = false;                    // Progressive expansion mode
     size_t max_memory_gb = 40;                   // Max memory for node pool in GB
 
     // Arena specific options
@@ -140,8 +139,6 @@ std::optional<Config> Config::from_args(int argc, char* argv[]) {
             "Ply to drop temperature to 0")
         ("uniform-prior-ply", po::value<int>(&config.uniform_prior_ply)->default_value(0),
             "Before this ply, use uniform priors for naive opening exploration (0 = disabled)")
-        ("progressive", po::bool_switch(&config.progressive),
-            "Use progressive expansion (on-demand child creation)")
         ("max-memory", po::value<size_t>(&config.max_memory_gb)->default_value(35),
             "Max memory for node pool in GB (resets pool at 80%)")
         ("max-wait", po::value<float>(&config.max_wait)->default_value(1.0f),
@@ -674,7 +671,6 @@ int run_selfplay(const Config& config,
     sp_config.temperature_drop_ply = config.temperature_drop_ply;
     sp_config.uniform_prior_ply = config.uniform_prior_ply;
     sp_config.stochastic = true;
-    sp_config.progressive_expansion = config.progressive;
 
     SelfPlayEngine engine(sp_config);
 

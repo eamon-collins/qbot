@@ -828,25 +828,6 @@ void SelfPlayEngine::run_multi_game_worker(
     }
 }
 
-inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx) {
-    StateNode& parent = pool[parent_idx];
-
-    uint32_t child = parent.first_child;
-    while (child != NULL_NODE) {
-        uint32_t next_sib = pool[child].next_sibling;
-
-        if (child != keep_child_idx) {
-            pool.deallocate_subtree(child);
-        }
-
-        child = next_sib;
-    }
-
-    // Update parent to only have the kept child
-    parent.first_child = keep_child_idx;
-    pool[keep_child_idx].next_sibling = NULL_NODE;
-}
-
 /// Collect nodes to free into a vector without returning to pool yet
 inline void collect_subtree_nodes(NodePool& pool, uint32_t root_idx, std::vector<uint32_t>& out) {
     if (root_idx == NULL_NODE) return;

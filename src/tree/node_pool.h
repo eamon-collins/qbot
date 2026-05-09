@@ -160,25 +160,6 @@ public:
         // Recycled nodes are still "allocated" (owned by this pool)
         return fresh_index_;
     }
-    [[nodiscard]] size_t available() const noexcept { return capacity() - allocated(); }
-    [[nodiscard]] float utilization() const noexcept {
-        size_t cap = capacity(); return cap > 0 ? (float)allocated() / cap : 0.0f;
-    }
-    [[nodiscard]] size_t num_chunks() const noexcept {
-        std::lock_guard lock(grow_mutex_);
-        return chunk_storage_.size();
-    }
-    [[nodiscard]] size_t memory_usage_bytes() const noexcept { return allocated() * sizeof(StateNode); }
-
-    void clear() noexcept {
-        std::lock_guard lock(grow_mutex_);
-        fresh_index_ = 0;
-        // Clear thread cache as well
-        ThreadCache& cache = get_thread_cache();
-        cache.recycled.clear();
-        cache.bump_next = 0;
-        cache.bump_end = 0;
-    }
 
 private:
     struct ThreadCache {

@@ -229,7 +229,6 @@ struct EdgeStats {
     float nn_value{0.0f};                  // Cached NN value (avoids re-evaluation)
     std::atomic<uint16_t> visits{0};       // N(s,a): visit count (for MCTS search)
     std::atomic<bool> nn_evaluated{false}; // True if nn_value is valid (atomic for thread safety)
-    // std::atomic<int32_t> virtual_loss{0};  // Temporary penalty for tree parallelism
 
     EdgeStats() = default;
 
@@ -241,7 +240,6 @@ struct EdgeStats {
     EdgeStats(EdgeStats&& other) noexcept
         : visits(other.visits.load(std::memory_order_relaxed))
         , total_value(other.total_value.load(std::memory_order_relaxed))
-        // , virtual_loss(other.virtual_loss.load(std::memory_order_relaxed))
         , prior(other.prior)
         , nn_value(other.nn_value)
         , nn_evaluated(other.nn_evaluated.load(std::memory_order_relaxed)) {}
@@ -257,7 +255,6 @@ struct EdgeStats {
     void reset() noexcept {
         total_value.store(0.0f, std::memory_order_relaxed);
         visits.store(0, std::memory_order_relaxed);
-        // virtual_loss.store(0, std::memory_order_relaxed);
         nn_evaluated.store(false, std::memory_order_relaxed);
         prior = 0.0f;
         nn_value = 0.0f;
@@ -284,19 +281,8 @@ struct EdgeStats {
     /// Get N(s,a) including virtual loss
     [[nodiscard]] uint32_t N_with_virtual() const noexcept {
         return visits.load(std::memory_order_relaxed);
-             // + static_cast<uint32_t>(virtual_loss.load(std::memory_order_relaxed));
     }
 
-    /// Apply virtual loss (called during selection)
-    // void add_virtual_loss(int32_t amount = 1) noexcept {
-    //     virtual_loss.fetch_add(amount, std::memory_order_relaxed);
-    // }
-    //
-    // /// Remove virtual loss (called after backpropagation)
-    // void remove_virtual_loss(int32_t amount = 1) noexcept {
-    //     virtual_loss.fetch_sub(amount, std::memory_order_relaxed);
-    // }
-    //
     /// Update statistics during backpropagation (atomic)
     /// Used for MCTS Q values during search
     void update(float value) noexcept {
@@ -377,7 +363,6 @@ struct StateNode {
         // Reset stats
         stats.visits.store(1, std::memory_order_relaxed);  // Init to 1 to avoid div by 0
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
 
     }
@@ -430,7 +415,6 @@ struct StateNode {
         // Reset stats
         stats.visits.store(0, std::memory_order_relaxed);
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
     }
 
@@ -445,7 +429,6 @@ struct StateNode {
         // Reset stats
         stats.visits.store(0, std::memory_order_relaxed);
         stats.total_value.store(0.0f, std::memory_order_relaxed);
-        // stats.virtual_loss.store(0, std::memory_order_relaxed);
         stats.prior = 0.0f;
     }
 
@@ -538,14 +521,6 @@ static_assert(sizeof(StateNode) == 64, "StateNode includes full game state");
     float q = edge.Q(fpu);
     float u = c_puct * edge.prior * std::sqrt(static_cast<float>(parent_visits))
             / (1.0f + static_cast<float>(n));
-
-    //// Account for virtual loss in Q calculation
-    // int32_t vl = edge.virtual_loss.load(std::memory_order_relaxed);
-    // if (vl > 0 && n > 0) {
-    //     // Virtual loss reduces Q value
-    //     q = (edge.total_value.load(std::memory_order_relaxed) - static_cast<float>(vl))
-    //       / static_cast<float>(n);
-    // }
 
     return -q + u;
 }

@@ -20,28 +20,6 @@ int move_to_action_index(const Move& move) noexcept {
     }
 }
 
-Move action_index_to_move(int action_index) noexcept {
-    if (action_index < 0 || action_index >= NUM_ACTIONS) {
-        return Move{};
-    }
-
-    if (action_index < NUM_PAWN_ACTIONS) {
-        uint8_t row = static_cast<uint8_t>(action_index / 9);
-        uint8_t col = static_cast<uint8_t>(action_index % 9);
-        return Move::pawn(row, col);
-    } else if (action_index < NUM_PAWN_ACTIONS + NUM_H_WALL_ACTIONS) {
-        int wall_idx = action_index - NUM_PAWN_ACTIONS;
-        uint8_t row = static_cast<uint8_t>(wall_idx / 8);
-        uint8_t col = static_cast<uint8_t>(wall_idx % 8);
-        return Move::fence(row, col, true);
-    } else {
-        int wall_idx = action_index - NUM_PAWN_ACTIONS - NUM_H_WALL_ACTIONS;
-        uint8_t row = static_cast<uint8_t>(wall_idx / 8);
-        uint8_t col = static_cast<uint8_t>(wall_idx % 8);
-        return Move::fence(row, col, false);
-    }
-}
-
 ModelInference::ModelInference(const std::string& model_path, int batch_size, bool use_cuda)
     : device_(use_cuda && torch::cuda::is_available() ? torch::kCUDA : torch::kCPU)
     , batch_size_(batch_size)
@@ -323,16 +301,6 @@ std::vector<EvalResult> ModelInference::evaluate_batch(const std::vector<const S
     }
 
     return results;
-}
-
-std::vector<float> ModelInference::evaluate_batch_values(const std::vector<const StateNode*>& nodes) {
-    auto results = evaluate_batch(nodes);
-    std::vector<float> values;
-    values.reserve(results.size());
-    for (const auto& r : results) {
-        values.push_back(r.value);
-    }
-    return values;
 }
 
 } // namespace qbot

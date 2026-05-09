@@ -3,10 +3,8 @@
 #include "../tree/node_pool.h"
 #include "../util/gui_client.h"
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
 
 namespace qbot {
@@ -37,11 +35,6 @@ public:
     /// Construct a new game with a fresh pool
     /// @param config Game configuration
     explicit Game(Config config = Config{});
-
-    /// Construct a game with an existing pool (takes ownership)
-    /// @param pool Existing node pool
-    /// @param root Root node index
-    Game(std::unique_ptr<NodePool> pool, uint32_t root);
 
     ~Game();
 
@@ -93,21 +86,6 @@ public:
     /// Check if a model is set
     [[nodiscard]] bool has_model() const noexcept { return model_ != nullptr; }
 
-    /// Select the best move from a node
-    /// If a model is set, evaluates all children and picks the best move for
-    /// the current player (max score for P1, min score for P2).
-    /// Otherwise falls back to Q-value based selection.
-    /// @param node_idx Index of the node to select from
-    /// @return Best move, or invalid Move if node has no children
-    [[nodiscard]] Move select_best_move(uint32_t node_idx);
-
-    /// Select the best move using Q-values only (static version)
-    /// Chooses randomly among moves with the highest Q-value.
-    /// @param pool Node pool containing the tree
-    /// @param node_idx Index of the node to select from
-    /// @return Best move, or invalid Move if node has no children
-    [[nodiscard]] static Move select_best_move_by_q(NodePool& pool, uint32_t node_idx);
-
     // Non-copyable, non-movable (owns resources)
     Game(const Game&) = delete;
     Game& operator=(const Game&) = delete;
@@ -124,11 +102,6 @@ private:
 
     // Optional model for position evaluation (non-owning)
     ModelInference* model_{nullptr};
-
-    // Threading synchronization
-    std::mutex tree_mutex_;
-    std::atomic<bool> stop_flag_{false};
-    std::atomic<int> active_threads_{0};
 };
 
 } // namespace qbot

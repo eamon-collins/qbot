@@ -59,76 +59,10 @@ concept InferenceProvider = std::same_as<T, ModelInference> || std::same_as<T, I
 // Configuration
 // ============================================================================
 
-/// Tree memory bounds configuration
-/// Controls when to stop expanding and use NN evaluation instead
-struct TreeBoundsConfig {
-    size_t max_bytes = 40ULL * 1024 * 1024 * 1024;  // 40GB default
-    float soft_limit_ratio = 0.80f;   // Start being selective about expansion
-    // size_t soft_limit_bytes = 30ULL * 1024 * 1024 * 1024;  // 30GB default
-    float hard_limit_ratio = 0.95f;   // Stop expanding entirely
-    uint32_t min_visits_to_expand = 8; // Min visits at soft limit to expand
-    bool enable_recycling = false;    // LRU recycling when full (future)
-};
-
-/// MCTS configuration - all parameters in one place
+/// MCTS selection parameters
 struct MCTSConfig {
-    // Selection parameters
-    float c_puct = 1.5f;                       // PUCT exploration constant
-    float fpu = 0.0f;                          // First play urgency for unvisited nodes
-    int32_t virtual_loss_amount = 3;           // Virtual loss per selection step
-
-    // Tree bounds
-    TreeBoundsConfig bounds;                   // Memory limit configuration
-
-    // Threading
-    int num_threads = 4;                       // Worker threads for parallel MCTS
-    int checkpoint_interval_seconds = 300;     // Time between checkpoints (5 min default)
-
-    // Paths
-    std::filesystem::path checkpoint_path;     // Where to save checkpoints
-    std::filesystem::path model_path;          // Optional NN model path
-};
-
-/// Result of expansion decision
-enum class ExpansionDecision {
-    Expand,          // Expand the node normally
-    UseNNEvaluation, // Skip expansion, use NN to evaluate directly
-    AlreadyExpanded, // Node was already expanded
-    Terminal         // Node is terminal, no expansion needed
-};
-
-/// Result of selection phase - path from root to leaf
-struct SelectionResult {
-    std::vector<uint32_t> path;                // Node indices from root to leaf
-    uint32_t leaf_idx{NULL_NODE};              // Final node (leaf or terminal)
-    bool reached_terminal{false};              // True if hit a terminal game state
-    ExpansionDecision expansion{ExpansionDecision::Expand}; // What to do with leaf
-};
-
-/// Training statistics - all atomic for thread safety
-struct TrainingStats {
-    std::atomic<uint64_t> total_iterations{0};  // MCTS iterations completed
-    std::atomic<uint64_t> nn_evaluations{0};    // NN evaluations performed
-    std::atomic<uint64_t> skipped_expansions{0}; // Expansions skipped due to memory limit
-    std::atomic<uint32_t> max_depth{0};         // Deepest node reached
-    std::chrono::steady_clock::time_point start_time;
-
-    void reset() noexcept {
-        total_iterations.store(0, std::memory_order_relaxed);
-        nn_evaluations.store(0, std::memory_order_relaxed);
-        skipped_expansions.store(0, std::memory_order_relaxed);
-        max_depth.store(0, std::memory_order_relaxed);
-        start_time = std::chrono::steady_clock::now();
-    }
-
-    void update_max_depth(uint32_t depth) noexcept {
-        uint32_t current = max_depth.load(std::memory_order_relaxed);
-        while (depth > current &&
-               !max_depth.compare_exchange_weak(current, depth,
-                   std::memory_order_relaxed, std::memory_order_relaxed)) {
-            // retry
-        }
-    }
+    float c_puct = 1.5f;  // PUCT exploration constant
+    float fpu = 0.0f;     // First play urgency for unvisited nodes
 };
 
 
@@ -218,7 +152,6 @@ struct SelfPlayConfig {
     float temperature = 1.0f;              // Softmax temperature for move selection
     int temperature_drop_ply = 30;         // After this ply, use temperature â†’ 0
     bool stochastic = true;                // True = sample from policy, False = argmax
-    bool progressive_expansion = false;    // True = create children on demand, False = batch expand
     float c_puct = 1.5f;                   // PUCT exploration constant (for progressive mode)
     float fpu = 0.0f;                      // First play urgency (for progressive mode)
     int max_moves_per_game = 100;           // After this many moves, declare a draw and assign partial points to closer player
@@ -281,67 +214,6 @@ inline void reset_subtree_visits(NodePool& pool, uint32_t root_idx) {
         }
         idx++;
     }
-}
-
-/// Compute policy distribution from child Q-values
-/// Ï€_i = exp(Q_i / Ï„) / Î£ exp(Q_j / Ï„)  (softmax)
-/// @param pool Node pool
-/// @param parent_idx Parent node index
-/// @param temperature Softmax temperature (higher = more uniform)
-/// @return Vector of (move, probability) pairs
-[[nodiscard]] inline std::vector<std::pair<Move, float>> compute_policy_from_q(
-    NodePool& pool,
-    uint32_t parent_idx,
-    float temperature) noexcept
-{
-    std::vector<std::pair<Move, float>> policy;
-    if (!pool[parent_idx].has_children()) return policy;
-
-    // First pass: collect Q-values and find max for numerical stability
-    float max_q = -std::numeric_limits<float>::infinity();
-    uint32_t child = pool[parent_idx].first_child;
-    while (child != NULL_NODE) {
-        float q = pool[child].stats.Q();
-        max_q = std::max(max_q, q);
-        policy.push_back({pool[child].move, q});
-        child = pool[child].next_sibling;
-    }
-
-    if (policy.empty()) return policy;
-
-    // Handle temperature = 0 (deterministic)
-    if (temperature <= 0.0f) {
-        // Find argmax
-        size_t best_idx = 0;
-        float best_q = policy[0].second;
-        for (size_t i = 1; i < policy.size(); ++i) {
-            if (policy[i].second > best_q) {
-                best_q = policy[i].second;
-                best_idx = i;
-            }
-        }
-        // Set probability 1.0 for best, 0.0 for others
-        for (size_t i = 0; i < policy.size(); ++i) {
-            policy[i].second = (i == best_idx) ? 1.0f : 0.0f;
-        }
-        return policy;
-    }
-
-    // Second pass: softmax with temperature
-    float sum = 0.0f;
-    for (auto& [move, q] : policy) {
-        q = std::exp((q - max_q) / temperature);  // Subtract max for stability
-        sum += q;
-    }
-
-    // Normalize
-    if (sum > 0.0f) {
-        for (auto& [move, prob] : policy) {
-            prob /= sum;
-        }
-    }
-
-    return policy;
 }
 
 //adds dirichlet noise as in AGZ
@@ -489,36 +361,6 @@ static void add_dirichlet_noise(NodePool& pool, uint32_t node_idx, float alpha, 
     return policy.back().first;
 }
 
-/// Advance the root to a child after a move is played (tree reuse)
-/// @param pool Node pool
-/// @param current_root Current root node index
-/// @param played_move The move that was played
-/// @return New root index, or NULL_NODE if move not found
-[[nodiscard]] inline uint32_t advance_root(
-    NodePool& pool,
-    uint32_t current_root,
-    Move played_move) noexcept
-{
-    if (current_root == NULL_NODE) return NULL_NODE;
-
-    StateNode& root = pool[current_root];
-
-    // Find child corresponding to played move
-    uint32_t child = root.first_child;
-    while (child != NULL_NODE) {
-        if (pool[child].move == played_move) {
-            // Found it - detach from parent
-            pool[child].parent = NULL_NODE;
-            return child;
-        }
-        child = pool[child].next_sibling;
-    }
-
-    // Move not found in tree
-    return NULL_NODE;
-}
-
-inline void prune_siblings(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx);
 inline void prune_siblings_collect(NodePool& pool, uint32_t parent_idx, uint32_t keep_child_idx, std::vector<uint32_t>& freed_nodes);
 inline void collect_subtree_nodes(NodePool& pool, uint32_t root_idx, std::vector<uint32_t>& out);
 inline void apply_policy_to_children(
